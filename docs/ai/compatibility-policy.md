@@ -11,7 +11,7 @@ layouts, enum discriminants, and metadata envelopes are wire:
 - existing tag meanings frozen;
 - new fields/variants: append-only or explicit new tags;
 - never trust source enum order for on-disk discriminants;
-- format changes need old-fixture decode + round-trip tests.
+- format changes need old-fixture decode + round-trip tests. A `#[serde(default)]` field alone does not establish postcard compatibility.
 
 ## Supported architectures
 

@@ -735,7 +735,7 @@ metadata written by v17 and rejects it with an error.
   not persist format/allocator/lifecycle migrations or VSDB repair metadata;
   datasets that require such maintenance should be opened writable on a
   backup or staging copy before taking the immutable reader snapshot.
-- Added a complete [read-only deployment guide](strata/docs/read-only.md) covering
+- Added a complete [read-only deployment guide](docs/read-only.md) covering
   handle preparation, operation behavior, namespace scope, Unix locking,
   filesystem snapshots, permissions, WAL recovery, and upgrade constraints.
 

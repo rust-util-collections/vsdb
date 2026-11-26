@@ -11,7 +11,7 @@ this file. Read invocation arguments from the user prompt.
 Clear actionable `docs/audit.md` Open → self-review → local commits. Never push.
 No autonomous major. User-invoked only. New commits only.
 
-Apply [pragmatic-engineering.md](../../../docs/ai/pragmatic-engineering.md) §Maintenance scope. Verify each
+Follow the [maintenance scope](../../../docs/ai/workflow-policy.md#maintenance-scope). Verify each
 recorded defect against the current Rust implementation before changing code.
 
 ## Input

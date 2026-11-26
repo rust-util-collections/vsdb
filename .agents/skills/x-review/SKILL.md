@@ -9,7 +9,7 @@ Resolve repository paths from the Git root; Markdown links are relative to
 this file. Read invocation arguments from the user prompt.
 
 Evidence-based review of the local Rust workspace and its documented contracts.
-Apply [pragmatic-engineering.md](../../../docs/ai/pragmatic-engineering.md) §Maintenance scope.
+Follow the [maintenance scope](../../../docs/ai/workflow-policy.md#maintenance-scope).
 Code read-only unless `--fix`. `docs/audit.md` is the registry
 exception: updating it is not a code write. Merge it; do not revert unrelated edits.
 Never commit or push. User-invoked only.

@@ -1,8 +1,9 @@
 # VSDB Design Anti-Patterns
 
-Design lens for reviews. Language/protocol bugs: `technical-patterns.md`,
-`patterns/*`. Report only with a concrete failure; apply `false-positive-guide.md`
-first. Public/on-disk: also `compatibility-policy.md`.
+Use the [subsystem map](review-core.md#subsystem-map) for operation-specific
+invariants. Before reporting a design issue, check the concrete failure
+against the [false positive guide](false-positive-guide.md). Public API and
+on-disk changes also follow the [compatibility policy](compatibility-policy.md).
 
 | Prefix | Question |
 |--------|----------|

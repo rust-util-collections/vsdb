@@ -18,7 +18,7 @@ visible together.
 | `commit_sync()` | A nonempty batch synchronizes the shard WAL before publication. An empty ordinary batch checks writability and performs no write or fence. |
 | `MapxRawBatch::commit_no_slowdown()`, `commit_sync_no_slowdown()` | A full immutable queue or L0 pressure can yield `StorageErrorKind::Busy` before a WAL record or sequence is allocated for these edits. Rebuild the consumed batch to retry. |
 | `try_sync_wal()` on a map | Synchronizes preceding WAL-backed writes on its shard, including across rotation. It adds no data row or sequence. An untouched map has no assigned shard to fence. |
-| `Namespace::try_sync_wal()` | Visits each shard in the namespace. Each shard has its own durability boundary. Read-only fences perform no writes. |
+| `Namespace::try_sync_wal()` | Visits each shard in the namespace. Each shard has its own durability boundary. A failure can leave earlier shards synchronized. Read-only fences perform no writes. |
 
 An I/O error after WAL append begins can leave an ambiguous recovery
 outcome. Establish the outcome before retrying an operation with
@@ -56,7 +56,15 @@ The default namespace has 16 shards and a 2 GiB sizing input. A nonzero
 namespace defaults to 4 shards and 512 MiB. Its creation options persist
 in the registry. MB inputs use binary MiB. Default-engine zero means
 unset, while a named engine's effective input is floored at 8 MiB.
-[Configuration](../core/docs/api.md#engine-memory)
+The default engine uses a positive representable budget as given. VSDB
+uses the configured sizes independently of detected host RAM or cgroup limits.
+For an 8 GiB default namespace, configure the process before first use.
+
+```rust,no_run
+use vsdb_core::{VsdbOptions, vsdb_configure};
+
+vsdb_configure(VsdbOptions::new("/data/vsdb").with_mem_budget_mb(8192)).unwrap();
+```
 
 For a namespace budget `B` bytes and `S` shards, integer division applies:
 
@@ -74,6 +82,10 @@ includes the shared evictable entries and that shard's pins. Sum per-shard
 hit/miss counts when computing a namespace-wide hit ratio. Additional
 namespaces, retired views, caller-held pins, worker allocations and
 application data contribute to process RSS. [Adapter](../core/src/common/engine/mmdb.rs) · [Namespace telemetry](../core/src/common/namespace.rs)
+
+For example, `ns.shard_properties("stats.block_cache_hits")` and
+`ns.shard_properties("stats.block_cache_misses")` return one count per shard.
+On small budgets the 64 KiB write-buffer minimum can dominate sizing.
 
 At 2 GiB with 16 shards, the selected write buffer is **16 MiB**. The
 6 MiB alternative had 27.60% lower hot-shard saturation throughput.

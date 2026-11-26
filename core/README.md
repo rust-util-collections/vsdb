@@ -37,8 +37,8 @@ co-located inserts can publish rows under two map prefixes in one batch.
 
 ## Guides
 
-- [Raw maps and namespaces](docs/api.md) covers configuration, handle restoration, atomic writes, snapshot reads and namespace placement.
-- [Read-only mode](docs/read-only.md) covers immutable snapshots, process locking and recovery.
+- [Raw map examples](docs/api.md) cover configuration, handle restoration, batch writes and snapshot reads. See [namespace administration](../docs/namespaces.md) for placement and relocation.
+- [Read-only mode](../docs/read-only.md) covers immutable snapshots, process locking and recovery.
 - [v17 to v18 migration](../migration/README.md) covers offline conversion of an existing universe and its handles.
 
 ## License

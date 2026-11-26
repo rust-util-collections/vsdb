@@ -12,7 +12,7 @@ Review owned worktree changes → fix confirmed defects → validate → local c
 Never push. No autonomous major. User-invoked only. New commits only
 (no amend/rebase/force-push).
 
-Apply [pragmatic-engineering.md](../../../docs/ai/pragmatic-engineering.md) §Maintenance scope. The requested
+Follow the [maintenance scope](../../../docs/ai/workflow-policy.md#maintenance-scope). The requested
 work is the owned local diff plus the callers and tests needed to validate it.
 
 ## Input

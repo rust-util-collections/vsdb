@@ -37,19 +37,19 @@ data in the owning namespace as well as the metadata.
 
 | When you need | Use |
 |---|---|
-| Exact key lookups | `Mapx<K, V>` |
-| Sorted iteration and range queries | `MapxOrd<K, V>`, or `MapxOrdRawKey<V>` for byte keys |
-| One persistent value | `Orphan<T>` |
-| Branches, commits, snapshots and three-way merges | `VerMap<K, V>` |
-| Merkle commitments and membership or absence proofs | In-memory `MptCalc` or `SmtCalc`, or `VerMapWithProof<K, V, T>` for versioned state |
-| Offset-based pagination and counts over ordered slots | `SlotDex<S, K>` |
-| Parent overlays with local overrides, deletions and pruning | `DagMap<K, V>`, `DagMapRawKey<V>` or `DagMapRaw` |
-| Approximate nearest-neighbor search | `VecDex<K, D, S>`, or `VecDexDyn<K, S>` for runtime metric selection |
+| Exact key lookups | [`Mapx<K, V>`](docs/api.md#mapx) |
+| Sorted iteration and range queries | [`MapxOrd<K, V>`](docs/api.md#mapxord), or `MapxOrdRawKey<V>` for byte keys |
+| One persistent value | [`Orphan<T>`](docs/api.md#single-values-and-byte-keys) |
+| Branches, commits, snapshots and three-way merges | [`VerMap<K, V>`](docs/versioned.md) |
+| Merkle commitments and membership or absence proofs | In-memory [`MptCalc` or `SmtCalc`](docs/api.md#mptcalc--smtcalc-merkle-trie), or `VerMapWithProof<K, V, T>` for versioned state |
+| Offset-based pagination and counts over ordered slots | [`SlotDex<S, K>`](docs/api.md#slotdex) |
+| Parent overlays with local overrides, deletions and pruning | [`DagMap<K, V>`](docs/api.md#dagmap), `DagMapRawKey<V>` or `DagMapRaw` |
+| Approximate nearest-neighbor search | [`VecDex<K, D, S>`](docs/vecdex.md), or `VecDexDyn<K, S>` for runtime metric selection |
 
 ## Guides
 
-- [Collection examples](docs/api.md) cover common operations, namespace placement, reader handles and WAL durability.
-- [Read-only mode](docs/read-only.md) explains how to restore and query typed collections in a read-only process.
+- [Collection examples](docs/api.md) cover common operations, reader handles and WAL durability. See [namespace placement](../docs/namespaces.md) to select a storage root.
+- [Read-only mode](../docs/read-only.md) explains how to restore and query typed collections in a read-only process.
 - [Versioned storage](docs/versioned.md) describes branch operations, merge rules, the v18 B+ tree layout and recovery.
 - [Vector search](docs/vecdex.md) covers HNSW configuration, filtering and persisted graph state.
 - [Migration from v17](../migration/README.md) covers upgrading the universe, configuring v18 and converting collection handles before resuming application traffic.

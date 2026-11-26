@@ -10,8 +10,7 @@ the selected repository scope.
 
 ## 1. Context
 
-Start with the [maintenance scope](pragmatic-engineering.md), [worktree
-policy](workflow-policy.md), [cross-cutting checks](technical-patterns.md) and
+Start with the [workflow policy and maintenance scope](workflow-policy.md#maintenance-scope) and
 [false positive guide](false-positive-guide.md). For each in-scope change, read
 the full diff, surrounding code, callers, tests and the mapped guide. Use the
 [design checks](design-patterns.md) for multi-subsystem changes, design changes
@@ -28,14 +27,14 @@ Assess platform correctness against the [supported architectures](compatibility-
 | MMDB v5 shard adapter | [Admission, fences, snapshots, lending reads and cache ownership](../../core/src/common/engine/mmdb.rs), [shard geometry preflight](../../core/src/common/engine/mmdb/geometry.rs), [prefix-bound callers](../../core/src/common/engine/mod.rs) | [Engine](patterns/engine.md) · [Adapter contract tests](../../core/tests/v5_adapter_test.rs) |
 | Universe and prefix allocation | [Lifecycle records and locks](../../core/src/common/universe.rs), [allocation and ceiling recovery](../../core/src/common/engine/mmdb.rs), [shared shard format options](../../core/src/common/mod.rs) | [Engine](patterns/engine.md) · [Migration](patterns/migration.md) |
 | Namespace lifecycle | [Registry, routing and teardown](../../core/src/common/namespace.rs) | [Engine](patterns/engine.md) · [Compatibility](compatibility-policy.md) |
-| Raw and typed collections | [MapxRaw](../../core/src/basic/mapx_raw), [Mapx](../../strata/src/basic/mapx), [MapxOrd](../../strata/src/basic/mapx_ord), [raw-key maps](../../strata/src/basic/mapx_ord_rawkey), [Orphan](../../strata/src/basic/orphan) | [Engine](patterns/engine.md) · [Encoding and guards](technical-patterns.md) |
+| Raw and typed collections | [MapxRaw](../../core/src/basic/mapx_raw), [Mapx](../../strata/src/basic/mapx), [MapxOrd](../../strata/src/basic/mapx_ord), [raw-key maps](../../strata/src/basic/mapx_ord_rawkey), [Orphan](../../strata/src/basic/orphan) | [Engine](patterns/engine.md) · [Map keys and guards](patterns/maps.md) |
 | Persistent B+ tree | [Pages, blobs, COW, diff, merge and runtime caches](../../strata/src/basic/persistent_btree) | [B+ tree](patterns/btree.md) |
 | Versioning | [Working edits and publication](../../strata/src/versioned/map.rs), [leased snapshot reads](../../strata/src/versioned/read.rs), [repair](../../strata/src/versioned/repair.rs) | [Versioning](patterns/versioning.md) · [B+ tree](patterns/btree.md) |
 | Merkle tries | [MPT, SMT, proofs, checkpoints and VerMap integration](../../strata/src/trie) | [Tries](patterns/trie.md) |
 | SlotDex | [Slot codec, tier counts and pagination](../../strata/src/slotdex) | [SlotDex](patterns/slotdex.md) |
 | DagMap | [Graph operations and recovery](../../strata/src/dagmap/raw), [typed and raw-key constructors](../../strata/src/dagmap), [co-located raw inserts](../../core/src/basic/mapx_raw/mod.rs) | [DagMap](patterns/dagmap.md) · [Placement tests](../../core/tests/colocated.rs) |
 | VecDex | [Query state, staged neighbor reads and mutation publication](../../strata/src/vecdex/mod.rs), [HNSW traversal](../../strata/src/vecdex/hnsw.rs), [shared row overlay](../../strata/src/common/staged.rs) | [VecDex](patterns/vecdex.md) · [Graph tests](../../strata/src/vecdex/test.rs) |
-| Shared codecs, frames, readers, guards and staged writes | [Typed infrastructure](../../strata/src/common), [error types](../../core/src/common/error.rs) | [Technical checks](technical-patterns.md) · [Compatibility](compatibility-policy.md) |
+| Shared codecs, frames, readers, guards and staged writes | [Typed infrastructure](../../strata/src/common), [error types](../../core/src/common/error.rs) | [Map keys and guards](patterns/maps.md) · [Compatibility](compatibility-policy.md) |
 | Physical generation staging | [CLI](../../migration/src/bin/vsdb-stage-v5.rs), [v4 source inventory, v5 export, verification and exclusive publication](../../migration/src/universe/staging.rs), [registry and allocator](../../migration/src/universe.rs) | [Migration](patterns/migration.md) · [Staged generation tests](../../migration/tests/staged_generation.rs) |
 | Logical v17 collection conversion | [Handle and collection converters](../../migration/src), [frozen fixtures](../../migration/tests/fixtures), [upgrade order](../../migration/README.md) | [Migration](patterns/migration.md) · [Compatibility](compatibility-policy.md) |
 | Public exports and build | [Core exports](../../core/src/lib.rs), [typed exports](../../strata/src/lib.rs), [runtime dependency](../../Cargo.toml), [offline dependencies](../../migration/Cargo.toml) | [Compatibility](compatibility-policy.md) · [Validation](commit-protocol.md#final-workspace-gate) |
@@ -107,18 +106,6 @@ handles and opening the destination writable. [Physical collection fixture](../.
 **Compatibility:** `compatibility-policy.md`. Old data preserve/reject/migrate
 intentionally. A break needs explicit user acceptance before any major bump.
 
-**Performance.** Preserve correctness and minimize latency and throughput regressions
-on foreground database paths. Compare the same workload against the baseline,
-including a contended run when synchronization changes. Extra time on necessary
-background cleanup can be acceptable when foreground latency, throughput and
-resource use remain bounded. Include time spent holding locks or delaying a writer
-when evaluating a maintenance job. For an upgrade claim, identify the v4-backed
-and v5-backed VSDB executables, corpus, cache regime and comparison metric.
-Report saturated foreground operations separately from total bytes and paced
-request latency. Compare candidate gains to control/control variation. A result
-from an archived experimental patch describes the binary built from that patch.
-[VSDB v18 implementation and measured decisions](../v18.md)
-
 **Design:** Locks, ownership, queues, multi-step install, degrade, public/on-disk
 → applicable D-\* in `design-patterns.md`; skip empty families.
 
@@ -129,6 +116,24 @@ work is required; `// TODO|FIXME|HACK` for unfinished required behavior;
 normal supported call reaches the incomplete behavior, then assign severity
 from its actual outcome under §5. A marker or macro name alone is not a defect.
 Grep before calling dead code. Cleanup-only → LOW/skip.
+
+### Performance evidence
+
+Choose the control that answers the claim. An upgrade comparison runs the
+same VSDB operation on v4-backed and v5-backed v18. An adapter optimization
+compares two implementations on the same MMDB v5 backend. Keep the data,
+durability, offered load and cache regime matched. Compare paired results
+with control-to-control variation and record the verified binary revisions.
+Use a contended run for synchronization changes. Measure lock holds or
+writer delays caused by background cleanup. Use the ordinary build for
+latency and treat diagnostic counters separately.
+
+At saturation, report small-put and bulk completion rates separately from
+aggregate bytes/s. For paced writes, include arrival-to-ack p99, unserved
+work and end-of-window storage debt. For queries, check ordered results and
+time the whole API call. Use actual I/O counters for device-read claims.
+A result from an archived patch describes the binary built from that patch.
+[Adapter trials](../evaluations/v18-adapter/README.md) · [Publication trials](../evaluations/v18-publication/README.md) · [VecDex query controls](../evaluations/v18-vecdex-v5/README.md)
 
 ## 4. Deterministic / style
 

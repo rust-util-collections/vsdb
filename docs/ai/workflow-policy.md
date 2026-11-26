@@ -1,7 +1,7 @@
 # Workflow Safety and Atomic Commit Policy
 
 SSOT safety for `$x-review`, `$x-commit`, `$x-fix`, `$x-overhaul`. Skills must
-not weaken it. See also `pragmatic-engineering.md`.
+not weaken it.
 
 **Hard rules:** user-invoked only · local commits and release tags (never push) ·
 no history rewrite · one independent issue per commit · no automatic PR or major bump.
@@ -21,6 +21,18 @@ Ordinary tasks do not implicitly invoke a commit or release workflow. These
 instructions describe workflow scope; they do not grant tool permissions or
 replace the runtime's approval controls. An explicit user request to push is
 separate authorization; none of these skills performs that step on its own.
+
+## Maintenance scope
+
+Ground each change in a named collection, storage operation or compatibility
+contract. Identify the ambiguity or failure it removes. Full-repository scope
+broadens file coverage while keeping the same evidence requirements. Describe
+Rust `unsafe` in terms of memory and aliasing, proof verification in terms of
+keys, roots and hashes, and recovery in terms of interrupted writes and reopen.
+Prefer existing tests, focused storage-failure doubles and isolated restart
+fixtures. If a tool or access failure blocks a step, report what failed and
+continue independent work. A change in wording does not establish permission
+or a successful retry. [Review evidence](review-core.md#3-evidence)
 
 ## 1. Preflight
 

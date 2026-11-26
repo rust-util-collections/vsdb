@@ -20,7 +20,7 @@ one root cause per commit · never touch unowned baseline · never accept a publ
 API or persisted-format break or choose a major bump on the user's behalf.
 Ground every finding and fix in a named VSDB collection, storage/recovery
 protocol, concurrency/`unsafe` contract, or public/on-disk compatibility rule
-([pragmatic-engineering.md](../../../docs/ai/pragmatic-engineering.md) §Maintenance scope).
+([maintenance scope](../../../docs/ai/workflow-policy.md#maintenance-scope)).
 
 ## Input
 

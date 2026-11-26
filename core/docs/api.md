@@ -20,7 +20,7 @@ child.env("VSDB_BASE_DIR", dir);
 The default writable path comes from `VSDB_BASE_DIR`, then `$HOME/.vsdb`.
 If neither variable is available, VSDB falls back to a per-process temporary
 path. For an existing read-only dataset, use
-`VsdbOptions::read_only(path)`. See the [read-only deployment guide](read-only.md).
+`VsdbOptions::read_only(path)`. See the [read-only deployment guide](../../docs/read-only.md).
 
 Writable configuration protects the universe from v17 writers by publishing
 `__SYSTEM__/format_version` with value `18` before first use, including when
@@ -37,26 +37,9 @@ levels and an eight-byte prefix are required on read-only and writable
 opens. MMDB checks the remaining manifest records, WALs and table files
 as it opens each shard.
 
-## Engine memory
-
-`Namespace::memory_usage()` reports two separate evictable stores in one
-shared pool and an ordered vector of member gauges. Count the pool's
-segmented and overflow charges once per namespace. Each shard reports
-active and immutable memtable estimates, its number of immutable generations,
-and L0 pin payload. These observations exclude caller-held pins, retired
-views and collection page caches. They do not sum to process RSS.
-
-With namespace budget `B` bytes and `S` shards, each pool store has capacity
-`B / 8`. A shard's write buffer uses `B / 8 / S`, clamped
-between 64 KiB and 512 MiB. Four immutable buffers plus one active buffer are
-possible on each shard. Thus 2 GiB and 16 shards gives 16 MiB per buffer and
-256 MiB per evictable store. Full active and immutable generations on all
-shards would total 1,280 MiB of nominal thresholds before either cache,
-application memory or oversized batches. The actual write and mixed-read
-trials measured lower RSS. [Measured resource use](../../docs/evaluations/v18-adapter/README.md)
-
-Large batches can overshoot these thresholds and
-the minimum buffer size can dominate a small budget.
+For named engines, see [namespace placement and lifecycle](../../docs/namespaces.md).
+For configuration, sizing formulas and per-shard telemetry, see
+[memory sizing](../../docs/storage.md#memory-sizing).
 
 ## MapxRaw
 
@@ -90,22 +73,10 @@ reservation errors, including on an empty map.
 
 ## Atomic batches and durability
 
-Ordinary writes use the shard WAL and may become visible before synchronization.
-Choose the boundary your application needs.
-
-| Operation | Scope and guarantee |
-| --- | --- |
-| `batch.commit()` | Publishes the staged edits atomically under one collection prefix. |
-| `batch.commit_sync()` | Synchronizes the shard WAL before publishing the staged edits. An empty batch performs no fence. |
-| `map.try_sync_wal()` | Fences prior successful writes on the assigned shard. An untouched map with no assigned shard returns immediately. `sync_wal()` is the panic-on-error form. |
-| `ns.try_sync_wal()` | Fences the namespace's shards in order. An error can leave earlier shards synchronized. |
-
 A batch created with `batch_wiped()` starts with a deletion covering the whole map.
 `delete_range(start, end)` stages a half-open deletion. Later inserts in the
-same batch take precedence. Both commit methods consume the batch. After an
-I/O failure, check the recovered state before retrying because the WAL may
-contain the write. WAL synchronization leaves memtable flushing independent.
-A batch covers one map even when several maps share a shard.
+same batch take precedence. Commit consumes the batch. Use `commit_sync()` when this
+write needs a synchronized shard WAL.
 
 ```rust
 use vsdb_core::MapxRaw;
@@ -118,11 +89,11 @@ batch.commit_sync().unwrap();
 assert_eq!(map.get(b"status").as_deref(), Some(&b"ready"[..]));
 ```
 
-A valid `commit_no_slowdown()` or `commit_sync_no_slowdown()` can refuse a
-write when L0 pressure or immutable-buffer capacity would stall admission.
-Match `VsdbError::Storage { kind: StorageErrorKind::Busy, .. }` to rebuild
-and retry that batch. The refusal consumes no WAL record or sequence.
-An admitted synchronous batch still uses one WAL-synchronized write.
+To handle admission pressure, match
+`VsdbError::Storage { kind: StorageErrorKind::Busy, .. }` and rebuild the
+refused batch. The storage guide describes which errors can leave an
+ambiguous recovery outcome and how to fence earlier writes.
+[Batch visibility and durability](../../docs/storage.md#batch-visibility-and-durability)
 
 ## Immutable iteration alongside writes
 
@@ -182,97 +153,3 @@ let mut view = map.range_detached(..);
 map.insert(b"key", b"after");
 assert_eq!(view.next().unwrap().1, b"before");
 ```
-
-## Memory budget
-
-The default namespace uses a 2 GiB sizing input unless overridden.
-A nonzero `with_mem_budget_mb` setting takes precedence over `VSDB_MEM_BUDGET_MB`.
-Zero means unset for the default namespace, so the environment may still supply
-the budget. A positive representable default-namespace budget is used as given.
-
-```rust,no_run
-use vsdb_core::{VsdbOptions, vsdb_configure};
-
-vsdb_configure(VsdbOptions::new("/data/vsdb").with_mem_budget_mb(8192)).unwrap();
-```
-
-Non-default namespaces persist `NamespaceOpts::mem_budget_mb` at creation.
-An absent value uses 512 MiB. Explicit values from 0 through 7 use an
-effective 8 MiB minimum in that namespace, including on reopen.
-All MB-named options use binary MiB. Budgets size caches and
-write buffers with floors and caps. Process RSS also includes pinned blocks,
-metadata and application allocations.
-See the [memory design](../../docs/storage.md#memory-sizing).
-
-## Namespaces
-
-`MapxRaw::new_in(&ns)` selects an engine. `ns.scope(|| MapxRaw::new())` selects
-the same engine for constructors on the current thread. Existing handles always
-route to their recorded namespace. For a fresh map on the **same shard** as an
-existing map, use `new_colocated`.
-
-```rust
-use vsdb_core::{MapxRaw, Namespace};
-
-let ns = Namespace::create().unwrap();
-let map = MapxRaw::new_in(&ns);
-let colocated = map.new_colocated();
-assert!(map.is_colocated_with(&colocated));
-
-let target = Namespace::default_ns();
-let copy = map.clone_in(&target).unwrap();
-assert_eq!(copy.namespace().id(), target.id());
-```
-
-### Placement and telemetry
-
-`Namespace::create()` derives the root under `__NAMESPACES__` and defaults to
-four shards. `create_with` accepts an explicit root, shard count (clamped to
-1–64) and memory sizing. The registry persists those choices. Each engine
-shares a single block cache across its shards.
-
-```rust,no_run
-use vsdb_core::{Namespace, NamespaceOpts};
-
-let ns = Namespace::create_with(NamespaceOpts {
-    path: Some("/mnt/fast/db".into()),
-    shards: 8,
-    mem_budget_mb: Some(1024),
-}).unwrap();
-
-let hits = ns.shard_properties("stats.block_cache_hits");
-let misses = ns.shard_properties("stats.block_cache_misses");
-assert_eq!(hits.len(), misses.len());
-```
-
-### Closing, relocating and destroying
-
-`Namespace::list()` lists registered non-default namespaces. Drop owning
-collections, readers and other namespace handles before closing one. On a
-writable close, the engine flushes and synchronizes its shards, releases its
-locks and leaves the registry entry available for `Namespace::open(id)`.
-
-```rust
-use vsdb_core::Namespace;
-
-let ns = Namespace::create().unwrap();
-let id = ns.id();
-match ns.close() {
-    Ok(()) => {
-        let reopened = Namespace::open(id).unwrap();
-        assert_eq!(reopened.id(), id);
-    }
-    Err((Some(ns), error)) => eprintln!("namespace {} still open: {error}", ns.id()),
-    Err((None, error)) => eprintln!("namespace closed with a teardown error: {error}"),
-}
-```
-
-`close_by_id(id)` takes an ID and requires all owning handles to have been
-dropped. The default namespace stays open for the lifetime of the process.
-
-To move a closed non-default namespace, move the complete directory first,
-then call `Namespace::relocate(id, new_path)` to update the registry. VSDB
-checks the destination's universe and namespace IDs, shard count, completion
-marker and shard anchors. To delete the namespace permanently, call
-`Namespace::destroy(id)` while it is closed. Destruction removes its registry
-entry and the whole directory tree.

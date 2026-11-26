@@ -20,7 +20,8 @@ same-key or structural multi-key ops need documented broader serialize.
 ## FP-3: Prefix isolation
 
 Structures use unique u64 prefixes. Cross-structure interference needs a concrete
-prefix collision (`technical-patterns.md` 1.1) — not assumed.
+prefix collision. Check reservation, durable ceilings and recovery in the
+[engine guide](patterns/engine.md#invariants).
 
 ## FP-4: unwrap/expect on proven state
 

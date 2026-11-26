@@ -60,7 +60,7 @@ Keep the ledger across commits. Stage only freeze set + this-invocation fix/form
    and `vsdb_migrate`. The runtime resolves v5. The offline tool resolves v5
    and the separately aliased v4 reader. Compare against the workspace and
    migration manifests. For edits to a standalone profile or its verifier,
-   run its documented entry point from the [evaluation index](../README.md#performance-evidence);
+   run its documented entry point from the [evaluation index](../evaluations/README.md);
    these programs have their own build or replay procedures.
 4. On fail: fix if unit-caused; else report pre-existing with evidence.
 5. Stage only the owned change. Use `git add -- <path>` for a wholly owned

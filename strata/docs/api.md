@@ -3,7 +3,7 @@
 | Task | Examples |
 |---|---|
 | Store and edit typed data | [Mapx](#mapx), [MapxOrd](#mapxord), [single values and byte keys](#single-values-and-byte-keys) |
-| Share or place collections | [Read views](#basic-collection-read-views), [namespaces](#namespaces), [read-only processes](read-only.md) |
+| Share or place collections | [Read views](#basic-collection-read-views), [namespace placement and handle restoration](../../docs/namespaces.md), [read-only processes](../../docs/read-only.md) |
 | Make writes durable | [Batch commits and WAL fences](#durability-fences) |
 | Track versions and prove state | [VerMap](#vermap), [Merkle tries](#mptcalc--smtcalc-merkle-trie), [VerMapWithProof](#vermapwithproof) |
 | Index slots, overlays or vectors | [SlotDex](#slotdex), [DagMap](#dagmap), [VecDex](vecdex.md) |
@@ -114,81 +114,12 @@ assert_eq!(reader.read_view().get("balance"), Some(7));
 
 Mutable value guards write back after a mutable dereference or a vacant insertion. Use `update` or `guard.commit()` to receive encoding and storage errors. Mutate a `RefCell` via the guard's mutable dereference. Debug builds diagnose interior changes made through a shared dereference.
 
-## Namespaces
-
-Persistent collections support namespaces — independently-rooted engine instances
-for physical placement and whole-directory removal without per-key traversal.
-In-memory `MptCalc` / `SmtCalc` need no namespace; `VerMapWithProof` inherits
-placement from its wrapped `VerMap`. A creation scope selects a namespace for ordinary constructors.
-
-```rust,no_run
-use vsdb::{Mapx, MapxOrd, Namespace, NamespaceOpts};
-
-let cold = Namespace::create().unwrap();
-
-// Ambient placement: ordinary new() calls inside scope() use `cold`.
-// Explicit new_in() and DagMap children use their explicit/parent namespace.
-let archive: Mapx<u64, String> = cold.scope(|| Mapx::new());
-
-// Same namespace placement (not necessarily the same shard).
-let index = Mapx::<u64, u64>::new_in(&archive.namespace());
-assert_eq!(archive.namespace().id(), index.namespace().id());
-
-// Save the handle and restore the same collection.
-
-let id = archive.save_meta().unwrap();
-// The token displays as "<map_id>@<namespace_id>" for this namespace.
-let restored: Mapx<u64, String> = Mapx::from_meta(id).unwrap();
-
-// A default-namespace v18 handle can also be looked up by its numeric map ID.
-let local: Mapx<u64, String> = Mapx::new();
-let numeric_id = local.save_meta().unwrap().map_id;
-let from_id: Mapx<u64, String> = Mapx::from_meta(numeric_id).unwrap();
-
-// Place this namespace on an explicit volume with its own shard count and budget.
-
-let fast = Namespace::create_with(NamespaceOpts {
-    path: Some("/mnt/nvme/vsdb".into()),
-    shards: 8,
-    mem_budget_mb: Some(2048),
-}).unwrap();
-let hot: MapxOrd<i32, String> = MapxOrd::new_in(&fast);
-
-// Deep-copy the entries into a fresh instance in the default namespace.
-let archive_copy = archive.clone_in(&Namespace::default_ns()).unwrap();
-```
-
-Typed handles restored by serde or `from_meta` check a tag of the fully
-qualified Rust type name, including generic parameters. Unrelated types with
-the same short name are rejected. Moving or renaming a persisted type requires
-an explicit migration; a type alias referring to the original type is fine.
-Application field changes under the same name require explicit schema versioning.
-v18 typed handles use `VSTYPE04`. Convert v17 handles offline using the
-[migration guide](../../migration/README.md).
-
-### Placement and memory
-
-- `Mapx::new()` uses the current creation scope, or the default namespace outside one.
-- Two `new_in(&ns)` calls can route to different shards; namespace placement alone does not provide a shared WAL.
-- A composite structure (`VerMap`, `SlotDex`, …) always lives wholly inside one namespace.
-- Cross-namespace atomic transactions do not exist (separate WALs).
-- Reads, writes, and deserialization always route via the handle's own namespace —
-  ambient scope affects creation only.
-- Memory sizing defaults to 2 GiB for the default namespace and 512 MiB for
-  each non-default namespace, without host-RAM/cgroup detection.
-  A nonzero `VsdbOptions::with_mem_budget_mb` (then `VSDB_MEM_BUDGET_MB`) configures the
-  default engine; `NamespaceOpts::mem_budget_mb` configures others. Units are
-  binary MiB. These inputs are not hard RSS limits: floors, caps, pinned
-  blocks, and runtime metadata affect actual memory use. See the
-  [memory design](../../docs/storage.md#memory-sizing).
-
 ## Durability fences
 
-`Mapx`, `MapxOrd`, and `MapxOrdRawKey` batches also expose `commit_sync()`.
-This opt-in operation synchronizes the shard WAL before atomic publication;
-ordinary `commit()` keeps its existing asynchronous default. An empty batch is
-not a fence for earlier writes. No cross-collection transaction is implied.
-An I/O failure may have left recoverable WAL data, so avoid automatic retries.
+Use `commit_sync()` to synchronize a typed map batch or `try_sync_wal()`
+to fence earlier writes on its shard. For empty batches, admission refusal
+and recovery after an I/O error, see
+[batch visibility and durability](../../docs/storage.md#batch-visibility-and-durability).
 
 SlotDex and VecDex use ordinary shard batches for mutations. Preflight
 rejection leaves that batch unapplied, and runtime caches update only after
@@ -208,14 +139,9 @@ fn main() -> vsdb::Result<()> {
 }
 ```
 
-The fence makes prior successful writes on the collection's shard durable
-without forcing a memtable flush; it returns synchronization errors. Other
-shards need their own fences. Use `collection.namespace().try_sync_wal()?` to
-cover every shard of that namespace, including composite indexes such as
-`SlotDex`. Shards synchronize sequentially, so an error can leave earlier
-shards synchronized. These calls do not provide cross-collection transactions.
-They are no-ops in read-only mode. The collection-level `sync_wal()` form
-panics on errors; ordinary inserts and batch commits do not fsync individually.
+Use `collection.namespace().try_sync_wal()?` to fence all shards of a
+namespace, including those used by a composite index such as `SlotDex`.
+The collection-level `sync_wal()` convenience method panics on errors.
 
 ## VerMap
 

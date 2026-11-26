@@ -23,26 +23,56 @@ Explicit placement selects the namespace for a new root. A DagMap child
 always inherits its parent's namespace and shard. Reads, writes and
 restores use the namespace recorded in the handle.
 
-```rust
-use vsdb::{Mapx, Namespace};
+In-memory `MptCalc` and `SmtCalc` can be used without a namespace.
+`VerMapWithProof` inherits placement from its wrapped map. To place a
+persistent collection on an explicit volume, create the namespace there
+and use its handle when constructing the collection.
 
-let ns = Namespace::create().unwrap();
-let map = Mapx::<u64, String>::new_in(&ns);
-let token = map.save_meta().unwrap();
+```rust,no_run
+use vsdb::{Mapx, Namespace, NamespaceOpts};
+
+let archive = Namespace::create_with(NamespaceOpts {
+    path: Some("/mnt/fast/archive".into()),
+    shards: 8,
+    mem_budget_mb: Some(1024),
+}).unwrap();
+let map = archive.scope(Mapx::<u64, String>::new);
+let id = map.save_meta().unwrap();
 drop(map);
-let restored = Mapx::<u64, String>::from_meta(token).unwrap();
-assert_eq!(restored.namespace().id(), ns.id());
+let restored = Mapx::<u64, String>::from_meta(id).unwrap();
+assert_eq!(restored.namespace().id(), archive.id());
 ```
 
 `InstanceId` carries the map prefix and namespace. A bare `u64` identifies
-a map in the default namespace. Parsing `42@7` selects map 42 in namespace
-7, while `42@0` canonicalizes to the default-namespace token. A raw
-`VSMAPX02` handle stores the prefix and namespace in 24 bytes.
-`VSTYPE04` adds a tag derived from the fully qualified Rust type name and
-collection-specific metadata. Applications version their own value
-schemas. `clone_in(&target)` deep-copies the collection to a fresh identity.
-A large raw map copy publishes bounded chunks and attempts to clear its
-destination on failure. [Collection and handle API](../core/docs/api.md#namespaces) · [Type frames](../strata/src/common/frame.rs)
+a map in the default namespace. For example, `42@7` selects map 42 in
+namespace 7, while `42@0` canonicalizes to the default-namespace token.
+A raw `VSMAPX02` handle stores the prefix and namespace in 24 bytes.
+Typed handles use `VSTYPE04` and check the fully qualified Rust type name,
+including generic arguments. A type alias preserves the original type's
+identity. Moving or renaming the persisted type needs a migration.
+Applications version their own value schemas.
+[Type frames](../strata/src/common/frame.rs) · [Migration guide](../migration/README.md)
+
+### Place raw maps on the same shard
+
+Two maps created with `new_in(&ns)` can land on different shards, each with
+its own WAL. Use `new_colocated` for a fresh raw map on an existing map's
+shard. Use `clone_in` to deep-copy a collection to a fresh identity. Large
+raw copies publish in bounded chunks and attempt to clear the destination
+on failure.
+
+```rust
+use vsdb_core::{MapxRaw, Namespace};
+
+let ns = Namespace::create().unwrap();
+let map = MapxRaw::new_in(&ns);
+let colocated = map.new_colocated();
+assert!(map.is_colocated_with(&colocated));
+
+let target = Namespace::default_ns();
+let copy = map.clone_in(&target).unwrap();
+assert_eq!(copy.namespace().id(), target.id());
+```
 
 ## Directory layout and recovery
 
@@ -80,7 +110,7 @@ pending record, creates and verifies the engine, then establishes the
 record. A writable opener can complete an interrupted initialization.
 An established root must contain its registered shards. Both open modes
 check the anchored v5 MANIFEST geometry before opening the shards.
-[Universe and engine validation](../core/src/common/universe.rs) · [Read-only operation](../core/docs/read-only.md)
+[Universe and engine validation](../core/src/common/universe.rs) · [Read-only operation](read-only.md)
 
 Prefixes are unique across the universe. The allocator persists the
 exclusive ceiling before issuing a new window of 8,192 IDs to a thread.
@@ -91,7 +121,8 @@ metadata and regular files under `__CUSTOM__` for issued IDs.
 
 ## Close, reopen, relocate and destroy
 
-The open namespace table retains one strong reference to a named engine.
+`Namespace::list()` lists registered non-default namespaces. The open
+namespace table retains one strong reference to a named engine.
 Namespace clones, collection handles, independent readers and owned VerMap
 snapshots can keep it open. Ordinary iterators borrow their source handle.
 A detached MMDB range retains its captured data sources independently and
@@ -111,4 +142,19 @@ Close proves exclusivity under the registry and open-table locks. It
 releases the table lock before I/O and holds the registry lock through
 teardown to serialize reopen against close. In writable mode it attempts
 all shard closes and returns the first error. Read-only teardown releases
-resources without flushing. [Administration examples](../core/docs/api.md#closing-relocating-and-destroying)
+resources without flushing.
+
+```rust
+use vsdb_core::Namespace;
+
+let ns = Namespace::create().unwrap();
+let id = ns.id();
+match ns.close() {
+    Ok(()) => {
+        let reopened = Namespace::open(id).unwrap();
+        assert_eq!(reopened.id(), id);
+    }
+    Err((Some(ns), error)) => eprintln!("namespace {} still open: {error}", ns.id()),
+    Err((None, error)) => eprintln!("namespace closed with a teardown error: {error}"),
+}
+```
