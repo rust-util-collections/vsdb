@@ -200,3 +200,18 @@ against the applicable format versions and ordinary public operations.
   now provides independent v4/v4 and v4/v5 pairs, checked binary hashes
   and per-class rates in both placements. RSS and load-qualification
   outcomes are reported separately. [Selected upgrade results](../../../evaluations/v18-adapter/README.md)
+
+## Corrected cutover and lifecycle operations
+
+The [four final cutover assessments](cutover-confirmation.json.gz)
+independently checked the production changes from `2ae6149` through
+`a331ecc`. All confirmed the documented behavior. The source inventory
+is now retained under all available source locks, after checking the
+registry again. The closing-writer regression verifies the final storage
+row and application attachment are copied together on retry. Only a
+missing required lifecycle record maps to corruption; ordinary I/O
+failures retain their original source. DagMap children inherit their
+parent's placement in both build profiles. Referenced zero-slot pages
+in a committed working root return a typed error without changing
+the handling of a valid empty tree or temporary removal-builder pages.
+[Lifecycle fixtures](../../../../core/tests/universe_header.rs) · [Namespace fixture](../../../../strata/tests/dagmap_namespace_test.rs)
