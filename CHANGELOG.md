@@ -6,6 +6,40 @@ Compiler requirements below are historical release notes. Current development
 uses the official latest stable Rust, without a declared compatible version
 range or minimum compiler; see [the toolchain policy](docs/ai/compatibility-policy.md#rust-toolchain).
 
+## [v19.0.1]
+
+Existing v19 stores open in place.
+
+### Fixed
+
+- `DagMap` treats undecodable node metadata as a read failure. A truncated
+  row or a trailing suffix no longer hides inherited values or lets prune
+  unlink the edge. Wrong magic, dag id, a missing record, or another shard
+  still fails authentication. Storage and I/O failures on fallback reads
+  stay fatal. A prune publishes its fold, reparented children, and clearing
+  markers together, and finishing a partly marked line keeps edits made on
+  the unmarked nodes. Deep descendant walks are iterative.
+- `VerMap` returns page-read errors from working-tree insertion and removal,
+  history, and diff. Every history read rejects a commit parent that is
+  missing, self-referential, or repeated. A reference recount installs only
+  when no newer poison or install replaced the counts it started from.
+- `Namespace::destroy` treats a root that disappears during destruction as
+  already removed, keeps an adopted root it cannot delete, and synchronizes
+  the parent directory before success. The wipe uses the directory that
+  passed the identity check, so a symlink swapped onto that path is not
+  followed. Failed explicit-root cleanup keeps namespace ownership until
+  its directory fence completes. Path getters retry after a failed universe
+  open.
+- A read-only open that finds no universe lock file checks again after the
+  header is visible. A writer that created the lock in that window returns
+  `Io(WouldBlock)`. A copy that never had a lock file stays lockless.
+
+### Changed
+
+- The runtime depends on MMDB 6.0.1.
+- `Mapx`, `MapxOrd`, and `MapxOrdRawKey` key iteration copies keys and does
+  not copy their values.
+
 ## [v19.0.0]
 
 ### Changed
