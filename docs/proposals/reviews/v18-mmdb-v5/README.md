@@ -124,6 +124,36 @@ and the memory timing binary used `b5f3153`. The reproduction instructions
 build the later v5 allocation executable separately. These revisions represent
 different measured source paths. [Binary and driver fingerprints](../../../evaluations/v18-adapter/builds.json)
 
+## First integrated release review
+
+The four reviewers inspected VSDB `7aafa3d` against the v4-backed
+`6ddaed9` baseline and MMDB `255015a`. The source findings below were
+checked after the individual checkpoint reviews. [Complete prompts and
+terminal reports](release.json.gz)
+
+| Finding | Verification and resolution |
+|---|---|
+| An existing allocator ceiling could equal a visible map prefix. | A real external v4 store reproduced successful staging with that stale ceiling. `18ba9a1` checks physical row owners during the verified export and checks the filenames of saved instances, including empty maps. Established and partially initialized namespaces now fail before publication, preserving the source. A complete foreign-handle frame in opaque values or an attachment leaves the local ceiling unchanged. [Cutover fixtures](../../../../migration/tests/staged_generation.rs) |
+| Inserting into a VecDex graph with malformed adjacency could panic. | `bdde0a6` propagates the storage or decoding error through staged traversal, insertion and linked updates. The focused test inserts a second node after damaging a persisted adjacency row and requires `Corrupt` before publishing graph rows. [VecDex regression tests](../../../../strata/src/vecdex/test.rs) |
+| A working edit could panic while reading a referenced tree page. | `470b462` provides checked lookup on the captured root. Absent user keys remain ordinary misses. Referenced missing pages and invalid reachable objects fail the callback. The reopen fixture confirms the error preserves the working root and generation and abandons the earlier staged edit. [Working edit tests](../../../../strata/src/versioned/test.rs) |
+| A closing writer could release its lock after the migration's filename inventory. | `d544071` acquires the existing universe and shard locks, checks the registry used to discover them and then inventories files. With a v4 writer holding the lock, the old test hook reached inventory. The corrected stage refuses the active writer and a retry includes both the last acknowledged row and an application sidecar. [Closing-writer test](../../../../migration/src/universe/staging.rs) |
+| The runtime classified missing required lifecycle markers as ordinary I/O, and DagMap namespace precedence differed by build profile. | `bcffffa` reports a required absent or malformed lifecycle record as `Corrupt` with its path. Probes cover default and named engines in writable and read-only opens. `32ae751` makes child constructors consistently inherit the parent namespace across raw, raw-key and typed maps. [Engine marker tests](../../../../core/tests/universe_header.rs) · [DagMap namespace tests](../../../../strata/tests/dagmap_namespace_test.rs) |
+
+The fixture at `9733c19` confirms the released v17 rule when both
+allocator records exist. The larger of the file and default-shard legacy
+values supplies the exclusive floor. The physical exporter preserves all
+visible rows, including a reserved one-byte legacy row. A v18 source with
+an existing allocator file instead checks ownership against that file.
+[Versioned allocator fixture](../../../../migration/tests/staged_generation.rs)
+
+The benchmark revisions cited by the reviewers (`b5f3153`, `d9f00f4`,
+`0481462`, `504630f`, `1300ad2` and `6854273`) are ancestors of the
+reviewed integration. The change log and execution record now identify
+the stock 16 MiB VecDex and tree comparisons separately from earlier
+experimental builds. The integrated reviewers inspected sources. Native
+gate results are recorded on the tested revision, with ARM macOS reserved
+for the maintainer. [Implementation and verification record](../../v18-mmdb-v5-execution.md)
+
 ## Working-read page validation
 
 [Four independent confirmations](leaf-confirmation.json.gz) cover the
