@@ -90,7 +90,7 @@ pub(super) fn check_shards(dir: &Path, shards: usize, complete: bool) -> Result<
             || header[..4] != crc32fast::hash(&header[6..]).to_le_bytes()
         {
             return Err(corrupt(format!(
-                "expected a checked MMDB v5 header in {}; convert v4 shards offline",
+                "expected a checked MMDB format-5 header in {}",
                 manifest.display()
             )));
         }

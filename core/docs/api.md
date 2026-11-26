@@ -22,14 +22,12 @@ If neither variable is available, VSDB falls back to a per-process temporary
 path. For an existing read-only dataset, use
 `VsdbOptions::read_only(path)`. See the [read-only deployment guide](../../docs/read-only.md).
 
-Writable configuration protects the universe from v17 writers by publishing
-`__SYSTEM__/format_version` with value `18` before first use, including when
-only non-default namespaces will be opened. Placed engines publish the same
-marker before creating shards. Writable reopen backfills an absent marker on
-an existing v18 root. Keep v17 processes offline while reopening an early v18
-dataset with a missing marker. A conflicting marker (including one written by
-an older writer) requires investigation against a trusted backup. Read-only
-reopen preserves the original files.
+The universe and its placed engines retain the v18 identities `VSUNI018`
+and `VSENG018`. Both roots use the ASCII value `18` in
+`__SYSTEM__/format_version`. A writable open creates a missing marker,
+including on an early v18 root. A read-only open leaves it untouched.
+A conflicting value returns `VsdbError::Corrupt`.
+[Universe and engine identity](../../docs/namespaces.md)
 
 A namespace verifies each existing shard's `CURRENT` and v5 MANIFEST
 header before it opens any of its shards for writable recovery. Seven

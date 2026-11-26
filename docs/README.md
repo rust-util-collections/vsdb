@@ -1,9 +1,21 @@
-# VSDB v18 documentation
+# VSDB documentation
 
-The workspace contains two runtime crates and an offline converter. Applications
-use [vsdb](../strata/README.md), which builds its collections on
-[vsdb_core](../core/README.md). The converter depends on both runtime crates and
-runs in a separate upgrade program. [Migrating from v17/v4 or v18/v4](../migration/README.md)
+The [vsdb](../strata/README.md) crate builds its typed collections on
+[vsdb_core](../core/README.md).
+
+## Upgrade an existing universe
+
+VSDB v19 opens a native v18 universe on MMDB v5 in place. Stop the v18
+processes and keep the base directory, all externally placed namespaces and
+application files containing IDs or serialized handles together. Update the
+application to v19, configure the same base and restore the saved handles.
+The universe identity, shard count, collection prefixes and typed-handle
+encodings stay valid. Check application queries before resuming writes.
+
+The data upgrade path for older stores is **v17 → v18 → v19**. Complete
+the conversion with the [v18 maintenance branch's upgrade guide](https://github.com/rust-util-collections/vsdb/blob/v18/migration/README.md).
+The same guide covers early v18 development stores built on the previous
+MMDB shard format.
 
 ## Using the database
 
@@ -15,13 +27,12 @@ runs in a separate upgrade program. [Migrating from v17/v4 or v18/v4](../migrati
 | Open an existing dataset read-only | [Reader setup, collection behavior and locking](read-only.md) |
 | Use branches, snapshots, merges and reference checkpoints | [Versioned storage](../strata/docs/versioned.md) |
 | Build an HNSW index or search a consistent view | [VecDex](../strata/docs/vecdex.md) |
-| Upgrade v17 or a v18 development universe built on MMDB v4 | [Public API changes](../CHANGELOG.md) · [Offline conversion procedure and supported handles](../migration/README.md) |
 
 ## Storage design
 
 | Topic | Guide |
 | --- | --- |
-| Follow a collection operation from handle to shard, trace a VerMap commit or plan an upgrade | [v18 architecture and core flow diagrams](v18.md) |
+| Follow a collection operation from handle to shard or trace a VerMap commit | [Storage architecture and core flow diagrams](v18.md) |
 | Placement, universe and engine identity, prefix allocation, close and relocation | [Namespaces](namespaces.md) |
 | Shard-local publication, fences, captured reads and per-namespace memory | [Storage operations and sizing](storage.md) |
 

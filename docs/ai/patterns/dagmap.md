@@ -30,7 +30,3 @@
   destroy can use the owner saved in its destroying state.
 - Use iterative traversal on deep graphs. A clone remaps every copied parent,
   child and recovery link into the copied graph and retains local edge tokens.
-
-## Migration
-
-The offline converter decodes the old node tuples and journals conversion. Check external references against the returned child-ID mapping. [DAG converter](../../../migration/src/dagmap.rs) · [Migration checks](migration.md)

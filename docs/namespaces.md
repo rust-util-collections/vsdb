@@ -51,7 +51,7 @@ Typed handles use `VSTYPE04` and check the fully qualified Rust type name,
 including generic arguments. A type alias preserves the original type's
 identity. Moving or renaming the persisted type needs a migration.
 Applications version their own value schemas.
-[Type frames](../strata/src/common/frame.rs) · [Migration guide](../migration/README.md)
+[Type frames](../strata/src/common/frame.rs)
 
 ### Place raw maps on the same shard
 
@@ -98,7 +98,7 @@ empty at creation. Its resolved path must be disjoint from the base and
 every other registered root. The registry persists the ID, optional path
 and budget, shard count, creation time and pending or established state.
 Back up the base, all explicit roots, and application-owned files from
-the same quiesced generation. [Offline migration and backup](../migration/README.md)
+the same quiesced generation.
 
 Configure the base and open mode before using directory, database or
 namespace APIs. Writable processes take an exclusive universe lock. Each

@@ -25,7 +25,7 @@ Assess platform correctness against the [supported architectures](compatibility-
 | Subsystem | Implementation | Review guide |
 | --- | --- | --- |
 | MMDB v5 shard adapter | [Admission, fences, snapshots, lending reads and cache ownership](../../core/src/common/engine/mmdb.rs), [shard geometry preflight](../../core/src/common/engine/mmdb/geometry.rs), [prefix-bound callers](../../core/src/common/engine/mod.rs) | [Engine](patterns/engine.md) · [Adapter contract tests](../../core/tests/v5_adapter_test.rs) |
-| Universe and prefix allocation | [Lifecycle records and locks](../../core/src/common/universe.rs), [allocation and ceiling recovery](../../core/src/common/engine/mmdb.rs), [shared shard format options](../../core/src/common/mod.rs) | [Engine](patterns/engine.md) · [Migration](patterns/migration.md) |
+| Universe and prefix allocation | [Lifecycle records and locks](../../core/src/common/universe.rs), [allocation and ceiling recovery](../../core/src/common/engine/mmdb.rs) | [Engine](patterns/engine.md) |
 | Namespace lifecycle | [Registry, routing and teardown](../../core/src/common/namespace.rs) | [Engine](patterns/engine.md) · [Compatibility](compatibility-policy.md) |
 | Raw and typed collections | [MapxRaw](../../core/src/basic/mapx_raw), [Mapx](../../strata/src/basic/mapx), [MapxOrd](../../strata/src/basic/mapx_ord), [raw-key maps](../../strata/src/basic/mapx_ord_rawkey), [Orphan](../../strata/src/basic/orphan) | [Engine](patterns/engine.md) · [Map keys and guards](patterns/maps.md) |
 | Persistent B+ tree | [Pages, blobs, COW, diff, merge and runtime caches](../../strata/src/basic/persistent_btree) | [B+ tree](patterns/btree.md) |
@@ -35,9 +35,7 @@ Assess platform correctness against the [supported architectures](compatibility-
 | DagMap | [Graph operations and recovery](../../strata/src/dagmap/raw), [typed and raw-key constructors](../../strata/src/dagmap), [co-located raw inserts](../../core/src/basic/mapx_raw/mod.rs) | [DagMap](patterns/dagmap.md) · [Placement tests](../../core/tests/colocated.rs) |
 | VecDex | [Query state, staged neighbor reads and mutation publication](../../strata/src/vecdex/mod.rs), [HNSW traversal](../../strata/src/vecdex/hnsw.rs), [shared row overlay](../../strata/src/common/staged.rs) | [VecDex](patterns/vecdex.md) · [Graph tests](../../strata/src/vecdex/test.rs) |
 | Shared codecs, frames, readers, guards and staged writes | [Typed infrastructure](../../strata/src/common), [error types](../../core/src/common/error.rs) | [Map keys and guards](patterns/maps.md) · [Compatibility](compatibility-policy.md) |
-| Physical generation staging | [CLI](../../migration/src/bin/vsdb-stage-v5.rs), [v4 source inventory, v5 export, verification and exclusive publication](../../migration/src/universe/staging.rs), [registry and allocator](../../migration/src/universe.rs) | [Migration](patterns/migration.md) · [Staged generation tests](../../migration/tests/staged_generation.rs) |
-| Logical v17 collection conversion | [Handle and collection converters](../../migration/src), [frozen fixtures](../../migration/tests/fixtures), [upgrade order](../../migration/README.md) | [Migration](patterns/migration.md) · [Compatibility](compatibility-policy.md) |
-| Public exports and build | [Core exports](../../core/src/lib.rs), [typed exports](../../strata/src/lib.rs), [runtime dependency](../../Cargo.toml), [offline dependencies](../../migration/Cargo.toml) | [Compatibility](compatibility-policy.md) · [Validation](commit-protocol.md#final-workspace-gate) |
+| Public exports and build | [Core exports](../../core/src/lib.rs), [typed exports](../../strata/src/lib.rs), [runtime dependency](../../Cargo.toml) | [Compatibility](compatibility-policy.md) · [Validation](commit-protocol.md#final-workspace-gate) |
 | Workload measurements | [Adapter memory and throughput](../evaluations/v18-adapter/README.md), [collection publications](../evaluations/v18-publication/README.md), [VecDex queries](../evaluations/v18-vecdex-v5/README.md), [tree controls](../evaluations/v18-tree-v5/README.md) | Use each report's named revisions, driver and verification procedure. |
 
 ### Full-repository coverage
@@ -46,11 +44,11 @@ Start the ledger from `git ls-files` and assign **every tracked file** one
 primary category: workspace source/tests/benches, build/CI, live documentation,
 historical records, maintenance workflows, or generated/excluded with a reason.
 Assign each Rust file one primary subsystem and map its tests and benches to the
-behavior they exercise. Include all three crates, `AGENTS.md`, `docs/ai/`, and
+behavior they exercise. Include both crates, `AGENTS.md`, `docs/ai/`, and
 each skill's `SKILL.md` and `agents/openai.yaml`.
 
 Use the [documentation index](../README.md) to locate current API guides,
-implemented design and historical evidence. Check the active v18 changelog
+implemented design and historical evidence. Check the current changelog
 section against code. Within design records, distinguish implemented contracts,
 measurements at named revisions and deferred proposals. Preserve the recorded
 revision and workload when referencing an evaluation. For skill changes,
@@ -98,10 +96,7 @@ SlotDex commits a batch of entries and tier counts together. VecDex can publish
 several mutation chunks during one call. Check the complete stream for a
 rejected chunk and the visibility of earlier successful chunks. DagMap creates a
 child with one checked two-prefix batch. Prune and reparent have ordered
-recovery phases. For a generation export, follow the locked source inventory,
-the copied data, the exclusive rename and the destination parent sync. Distinguish
-a byte-identical logical stream from a usable v18 universe by restoring actual
-handles and opening the destination writable. [Physical collection fixture](../../migration/tests/collections_generation.rs)
+recovery phases.
 
 **Compatibility:** `compatibility-policy.md`. Old data preserve/reject/migrate
 intentionally. A break needs explicit user acceptance before any major bump.
@@ -119,9 +114,8 @@ Grep before calling dead code. Cleanup-only → LOW/skip.
 
 ### Performance evidence
 
-Choose the control that answers the claim. An upgrade comparison runs the
-same VSDB operation on v4-backed and v5-backed v18. An adapter optimization
-compares two implementations on the same MMDB v5 backend. Keep the data,
+Choose the control that answers the claim. For an adapter change, compare two
+implementations on the same MMDB backend. Keep the data,
 durability, offered load and cache regime matched. Compare paired results
 with control-to-control variation and record the verified binary revisions.
 Use a contended run for synchronization changes. Measure lock holds or

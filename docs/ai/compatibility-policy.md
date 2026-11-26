@@ -17,7 +17,7 @@ layouts, enum discriminants, and metadata envelopes are wire:
 
 VSDB guarantees correct behavior on `x86_64` and `aarch64`. Other architectures
 carry no testing or correctness guarantee. This support boundary applies to
-the runtime, migration, review and release validation.
+runtime behavior, review and release validation.
 
 ## Rust toolchain
 
@@ -37,18 +37,22 @@ persisted-format breaks or automatic major bumps.
 ## Shard and collection formats
 
 Check the physical engine format and the logical VSDB format independently.
-The v18 runtime opens MMDB v5 shards. Earlier v18 development stores on
-MMDB v4 can already have the current VSDB envelopes. Their visible rows
-and handles must survive physical export and writable reopen. A v17 store
-also needs logical conversion for its saved or embedded handles. Trace
-runtime dependencies through `vsdb_core` and legacy readers through
-`vsdb_migrate`. [Operator routes](../../migration/README.md) · [Frozen v18/v4 application fixture](../../migration/tests/collections_generation.rs)
+VSDB v19 opens v18 universes on MMDB v5. Verify namespace placement, saved
+handles, collection contents and writable reopen across the upgrade.
+[Upgrade an existing universe](../README.md#upgrade-an-existing-universe)
 
 ## Typed-handle tags and wire decoders
 
-The v18 runtime accepts only the current universe, engine, registry, raw, and typed envelopes (`VSUNI018`, `VSENG018`, `VSNREG02`, `VSMAPX02`, `VSTYPE04`). Put all historical decoders (`VSMAPX01`, `VSTYPE02`, `VSTYPE03`, v16/v17 layouts), encoders for migration, and resumable format converters in the independent `vsdb_migrate` crate ([migration review guide](patterns/migration.md)). Verify migration with frozen source fixtures, interrupted-retry tests, and the normal v18 reader. MPT and SMT roots and serialized proofs retain their v17 wire contract. Check them against the [frozen v17 proof fixture](../../strata/src/trie/fixtures/v17-roots-proofs.postcard) when editing hash or transport code.
+The runtime checks the universe, engine, registry, raw and typed envelopes
+(`VSUNI018`, `VSENG018`, `VSNREG02`, `VSMAPX02`, `VSTYPE04`). Keep those
+identities and the MPT and SMT root and proof encodings stable. Exercise root
+hashes, proof verification and serialization when changing hash or transport code.
+[Native v18 proof fixture](../../strata/src/trie/fixtures/v18-roots-proofs.postcard)
 
-- **Nominal type tags:** `VSTYPE04` hashes the fully qualified Rust type name (including generic arguments) with FNV-1a. Moving a persisted type across modules or changing a struct/enum to a type alias changes `std::any::type_name` and requires explicit translation in `vsdb_migrate` (`legacy_type_name` and `legacy_tag_for` in [the migration crate](../../migration/src/lib.rs), plus mixed-type child handles). Application schema changes under a stable name require application-owned versioning.
+- **Nominal type tags:** `VSTYPE04` hashes the fully qualified Rust type name
+  (including generic arguments) with FNV-1a. Moving or renaming a persisted
+  type can change its tag. Applications version their value schemas under
+  a stable type name.
 - **Strict EOF decoding:** Decode metadata files, frames, canonical keys, and values with `postcard::take_from_bytes` and reject non-empty trailing slices (`postcard::from_bytes` silently ignores trailing bytes and can truncate evolved structs on `ValueGuard` write-back).
 
 ## Accepted breaks
@@ -58,7 +62,7 @@ undocumented patch surprise. An agent must not decide the break is accepted.
 Until the user explicitly accepts it in this conversation, do not ship it and do
 not major-bump; leave it Open.
 
-1. Major bump all three workspace crates (`vsdb_core`, `vsdb`, `vsdb_migrate`) in lockstep; update root `vsdb_core` and `migration` `vsdb` deps.
+1. Bump both workspace crates (`vsdb_core`, `vsdb`) in lockstep and update the root `vsdb_core` dependency.
 2. Document broken API/format and affected old versions: public migration docs in
    the behavior commit; `CHANGELOG.md` in the release commit (`commit-protocol.md`).
 3. State old-data behavior: hard reject, in-place migrate, or export/reimport.

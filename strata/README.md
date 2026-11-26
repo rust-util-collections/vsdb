@@ -5,13 +5,13 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](../LICENSE)
 [![Rust](https://github.com/rust-util-collections/vsdb/actions/workflows/rust.yml/badge.svg)](https://github.com/rust-util-collections/vsdb/actions/workflows/rust.yml)
 
-`vsdb` provides typed, persistent collections for Rust. v18 uses the mmdb
+`vsdb` provides typed, persistent collections for Rust. VSDB uses the MMDB
 storage engine through `vsdb_core`. Building its bundled Zstd compression
 dependency requires a C toolchain.
 
 ## Getting started
 
-From an application using a local v18 checkout:
+From an application using a local checkout:
 
 ```bash
 cargo add vsdb --path /path/to/vsdb/strata
@@ -50,9 +50,9 @@ data in the owning namespace as well as the metadata.
 
 - [Collection examples](docs/api.md) cover common operations, reader handles and WAL durability. See [namespace placement](../docs/namespaces.md) to select a storage root.
 - [Read-only mode](../docs/read-only.md) explains how to restore and query typed collections in a read-only process.
-- [Versioned storage](docs/versioned.md) describes branch operations, merge rules, the v18 B+ tree layout and recovery.
+- [Versioned storage](docs/versioned.md) describes branch operations, merge rules, the B+ tree layout and recovery.
 - [Vector search](docs/vecdex.md) covers HNSW configuration, filtering and persisted graph state.
-- [Migration from v17](../migration/README.md) covers upgrading the universe, configuring v18 and converting collection handles before resuming application traffic.
+- [Upgrade an existing universe](../docs/README.md#upgrade-an-existing-universe) covers reopening existing data and saved handles.
 
 ## License
 

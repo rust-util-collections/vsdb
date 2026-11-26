@@ -20,7 +20,7 @@ packs. Alg-4 heuristic prune. Sealed f32/f64 scalar encodings. `VecDexDyn` is a 
 **VD3 Maps inverse** — key↔node↔info consistent through insert/remove/compact.
 
 **VD4 Input** — all vectors and queries == `meta.dim` and finite; mutations
-reject nonfinite inputs before committing. `compact()` rejects legacy nonfinite
+reject nonfinite inputs before committing. `compact()` rejects stored nonfinite
 rows as `Corrupt` without rebuilding. Finite inputs can still overflow a
 metric's arithmetic; the input check cannot guarantee finite distances.
 
@@ -68,7 +68,7 @@ successful chunks visible if a later chunk fails. [Mutation fixtures](../../../s
 - [ ] Dim checks
 - [ ] Filter doesn’t block traversal; low-selectivity recall test still passes
 - [ ] Dimension checks and finite inputs: reject `NaN`/infinities for vectors and queries, including dynamic-metric dispatch; preserve prior rows on rejection
-- [ ] Legacy nonfinite stored row fails cold `compact()` as `Corrupt` without rewrite
+- [ ] A nonfinite stored row fails cold `compact()` as `Corrupt` without rewrite
 - [ ] Wire tags frozen/append-only + round-trip pins
 - [ ] Compact single wiped staged commit
 - [ ] Send+Sync; Scalar ops cover metrics

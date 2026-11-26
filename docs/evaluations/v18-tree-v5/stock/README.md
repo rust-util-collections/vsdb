@@ -50,17 +50,13 @@ reference. These are full-stack comparisons at the two recorded revisions.
 
 ## Reproduction
 
-On Linux with a local Btrfs scratch filesystem, use an empty working
-directory and CPU 4. The script restores the two [Cargo lockfiles](locks.json.gz),
-builds the exact source revisions in separate target directories, checks the
-v5 geometry and records the executable fingerprints from your build.
-The [analyzer](release.py) rejects missing cases, reused or swapped binaries,
-wrong order and mismatched seeds. It prints positive latency percentages
-for improvements, the opposite sign of the table's p99 cost column.
+Recompute the published comparison from the recorded trials. The analyzer
+checks binary fingerprints, process order, seeds and complete operation counts.
 
 ```sh
-mkdir /tmp/vsdb-final-tree
-bash docs/evaluations/v18-tree-v5/stock/reproduce.sh "$PWD" /tmp/vsdb-final-tree
 python3 -B docs/evaluations/v18-tree-v5/stock/release.py summarize \
     docs/evaluations/v18-tree-v5/stock/trials.csv docs/evaluations/v18-tree-v5/stock/host.json
 ```
+
+For fresh measurements, the [original build script and Cargo locks](https://github.com/rust-util-collections/vsdb/tree/4c15817f4bf26513386c9a6ce1d375dca33043dd/docs/evaluations/v18-tree-v5/stock)
+recreate both historical v18 builds.

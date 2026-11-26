@@ -124,7 +124,7 @@ fn keyless_line<'a>(stdout: &'a str, key: &str) -> &'a str {
         .trim()
 }
 
-/// An empty map whose only durable copy is a `VSMAPX01` value inside
+/// An empty map whose only durable copy is a `VSMAPX02` value inside
 /// another map has no key of its own. Deleting the ceiling file must
 /// not hand that prefix to the next `MapxRaw::new`.
 #[test]

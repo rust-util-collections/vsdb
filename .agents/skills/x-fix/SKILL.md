@@ -38,8 +38,7 @@ ownership overlap is a blocker, not a disposition: leave Open.
 1. Root-cause fix + focused regression.
 2. Use the [subsystem map](../../../docs/ai/review-core.md#subsystem-map) to
    inspect sibling callers of the fixed operation. For a staged mutation,
-   check which rows and allocator state survive a failure. For a cutover
-   fix, verify both the protected source and the writable destination.
+   check which rows and allocator state survive a failure.
 3. Drop that Open entry (code + tests + migration docs + registry = unit).
 4. Per-unit validation ([commit-protocol.md](../../../docs/ai/commit-protocol.md)).
 5. Stage freeze + fix paths; inspect cached; commit before next.

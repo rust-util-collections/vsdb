@@ -328,7 +328,7 @@ vmp.save_cache(commit).unwrap();
 
 Trie clones share immutable subtrees. Each batch publishes its candidate root
 after all operations succeed. Hashes and proofs can be computed through a
-shared reference. v18 preserves the v17 commitment and proof wire formats.
+shared reference.
 
 MPTC v2 and SMTC v4 checkpoints stream post-order nodes and omit cached
 node hashes. Loading verifies the checksum, canonical tree shape, root
@@ -408,13 +408,6 @@ writers across aliases. A stale writer returns an error, including on `clear`.
 Deserialize a fresh handle to resume writing. Reopen checks the widths and slot encodings of tier rows as it loads them into memory. `clone` and `clone_in` deep-copy
 the index to an independent prefix.
 
-For built-in v17 coordinates (`u32`, `u64`, `u128`), the offline
-`vsdb_migrate::slotdex::migrate_v17` converter keeps the prefix
-and index rows and upgrades the total and handle metadata. Legacy capacities
-must fit in `u32`. For a custom fixed-width codec, `migrate_custom_v17` checks
-the supplied capacity and every entry and tier count. A variable-width custom
-slot needs to rebuild its index from application records.
-
 ## DagMap
 
 `DagMap<K, V>` stores local overrides in a single-parent tree. Reads walk up
@@ -441,11 +434,6 @@ clears consumed nodes and fences that
 shard's WAL. Retrying on the consumed head finishes any interrupted cleanup.
 `clone` copies the connected graph. `clone_in` places the copy in another
 namespace and preserves each parent's child tokens.
-
-The offline converters `vsdb_migrate::dagmap::migrate_v17` and
-`migrate_rawkey_v17::<V>` preserve the root ID. They return the converted
-root and the mapping for children that needed a new co-located prefix.
-Update any saved application-side child IDs with that mapping.
 
 ## VecDex
 

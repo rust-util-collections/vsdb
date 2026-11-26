@@ -1,15 +1,15 @@
 mod geometry;
 
 use crate::common::{
-    PREFIX_ALLOC_START, PREFIX_SIZE, Pre, PreBytes, RawKey, RawRangeBounds, RawValue,
-    atomic_write_file, configured_mem_budget_mb, create_dir_all_durable,
+    MMDB_SHARD_LEVELS, PREFIX_ALLOC_START, PREFIX_SIZE, Pre, PreBytes, RawKey,
+    RawRangeBounds, RawValue, atomic_write_file, configured_mem_budget_mb,
+    create_dir_all_durable,
     error::{Result, VsdbError, corrupt, from_mmdb_err},
-    mmdb_shard_format_options, vsdb_freeze_base_dir, vsdb_get_base_dir,
-    vsdb_is_read_only,
+    vsdb_freeze_base_dir, vsdb_get_base_dir, vsdb_is_read_only,
 };
 use mmdb::{
-    BidiIterator, BlockCachePool, DB, DbOptions, DurabilityMode, ReadOptions, Snapshot,
-    WriteBatch, WriteOptions,
+    BidiIterator, BlockCachePool, CompressionType, DB, DbOptions, DurabilityMode,
+    ReadOptions, Snapshot, WriteBatch, WriteOptions,
 };
 use parking_lot::{Mutex, RwLock};
 use smallvec::SmallVec;
@@ -1539,7 +1539,19 @@ fn mmdb_open(
     pool: &Arc<BlockCachePool>,
 ) -> Result<DB> {
     let read_only = vsdb_is_read_only();
-    let opts = mmdb_shard_format_options()
+    let opts = DbOptions::default()
+        .with_num_levels(MMDB_SHARD_LEVELS)
+        .with_prefix_len(PREFIX_SIZE)
+        .with_block_size(16 * 1024)
+        .with_compression_per_level(vec![
+            CompressionType::Lz4,
+            CompressionType::Lz4,
+            CompressionType::Zstd,
+            CompressionType::Zstd,
+            CompressionType::Zstd,
+            CompressionType::Zstd,
+            CompressionType::Zstd,
+        ])
         .with_create_if_missing(!read_only)
         .with_write_buffer_size(sizing.write_buffer_size(shards))
         .with_max_immutable_memtables(IMMUTABLE_LIMIT)

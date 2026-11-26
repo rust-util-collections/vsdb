@@ -49,27 +49,6 @@ pub type PreBytes = [u8; PREFIX_SIZE];
 
 pub(crate) const MMDB_SHARD_LEVELS: usize = 7;
 
-/// Physical options shared by live VSDB shard opens and the offline
-/// `vsdb_migrate` exporter. Each caller supplies its own creation, cache
-/// and background-work policy for that operation.
-#[doc(hidden)]
-pub fn mmdb_shard_format_options() -> mmdb::DbOptions {
-    use mmdb::{CompressionType, DbOptions};
-    DbOptions::default()
-        .with_num_levels(MMDB_SHARD_LEVELS)
-        .with_prefix_len(PREFIX_SIZE)
-        .with_block_size(16 * 1024)
-        .with_compression_per_level(vec![
-            CompressionType::Lz4,
-            CompressionType::Lz4,
-            CompressionType::Zstd,
-            CompressionType::Zstd,
-            CompressionType::Zstd,
-            CompressionType::Zstd,
-            CompressionType::Zstd,
-        ])
-}
-
 /// A constant representing 1 kilobyte in bytes.
 pub const KB: u64 = 1 << 10;
 /// A constant representing 1 megabyte in bytes.

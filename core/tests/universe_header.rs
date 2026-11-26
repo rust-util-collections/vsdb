@@ -16,7 +16,7 @@ fn resumes_bootstrap_and_excludes_a_second_writer_before_opening_any_shard() {
         .join(format!("vsdb-v18-bootstrap-{}", rand::random::<u128>()));
     let system = root.join("__SYSTEM__");
     fs::create_dir_all(&system).unwrap();
-    // Crash after the downgrade marker and registry, before the ceiling/header.
+    // Crash after the format marker and registry, before the ceiling/header.
     fs::write(system.join("format_version"), b"18").unwrap();
     fs::write(system.join("__namespaces__"), b"VSNREG02\x01\x00").unwrap();
     vsdb_configure(VsdbOptions::new(&root)).unwrap();
@@ -139,7 +139,7 @@ fn read_only_open_reports_lock_contention_before_header_publish() {
 }
 
 #[test]
-fn legacy_writer_marker_covers_the_universe_and_placed_engines() {
+fn format_marker_covers_the_universe_and_placed_engines() {
     const PHASE: &str = "VSDB_V18_FORMAT_MARKER_PHASE";
     const BASE: &str = "VSDB_V18_FORMAT_MARKER_BASE";
     const MARKER: &str = "__SYSTEM__/format_version";
@@ -199,7 +199,7 @@ fn legacy_writer_marker_covers_the_universe_and_placed_engines() {
                 let out = Command::new(std::env::current_exe().unwrap())
                     .args([
                         "--exact",
-                        "legacy_writer_marker_covers_the_universe_and_placed_engines",
+                        "format_marker_covers_the_universe_and_placed_engines",
                         "--nocapture",
                     ])
                     .env(PHASE, phase)

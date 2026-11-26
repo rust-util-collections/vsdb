@@ -13,9 +13,8 @@ instructions.
 | --- | --- |
 | [vsdb](strata/README.md) | Typed maps and values, persistent B+ trees, VerMap, Merkle tries, SlotDex, DagMap and VecDex |
 | [vsdb_core](core/README.md) | MMDB v5 integration, namespace memory, raw maps, prefix batches and co-located publication |
-| [vsdb_migrate](migration/README.md) | Offline v4-shard generation staging and v17 → v18 collection conversion, including saved and embedded handles |
 
-Start at the [v18 documentation index](docs/README.md) for public guides, design
+Start at the [documentation index](docs/README.md) for public guides, design
 records and historical measurements. For a code change, the [subsystem
 map](docs/ai/review-core.md#subsystem-map) links each part of the workspace to
 its implementation and review guide. MMDB's bundled Zstd backend requires a C
@@ -66,7 +65,7 @@ selection with `allow_implicit_invocation: false`.
 
 - Start with the [workflow policy](docs/ai/workflow-policy.md) for preflight and worktree ownership and [maintenance scope](docs/ai/workflow-policy.md#maintenance-scope).
 - Use the [subsystem map](docs/ai/review-core.md#subsystem-map) to trace a change
-  through its v5 runtime caller, collection or v4 offline conversion path. The
+  through the MMDB v5 adapter and its collection callers. The
   [commit protocol](docs/ai/commit-protocol.md#per-unit-validate-and-commit)
   names focused tests for these boundaries.
 - Use the [compatibility policy](docs/ai/compatibility-policy.md) for toolchain, public API and wire-format decisions. The [commit protocol](docs/ai/commit-protocol.md) covers per-unit checks and the final gate, lockstep bump, CHANGELOG and local annotated tag for commit-producing skills.
@@ -85,7 +84,7 @@ selection with `allow_implicit_invocation: false`.
 - **Doc-code alignment** — public API changes must update corresponding docs
 - `parking_lot` for every `Mutex`, `RwLock`, and `Once` in library and test code (prefix allocator, `VSDB_BASE_DIR` global, one-time test setup); do not mix in `std::sync` lock primitives
 - Fallible storage APIs use `VsdbError`. Engine errors retain their source and a stable classification. Preserve documented panic behavior on infallible convenience APIs.
-- Use postcard for handle and application serialization. Keep old-format parsers and converters in the independent `vsdb_migrate` crate.
+- Use postcard for handle and application serialization.
 - Serialize writes through aliases of one composite index. SlotDex detects stale writer generations. VecDex reads graph state per operation and uses snapshots for graph queries.
 - Tests run in parallel; isolation comes from globally unique prefixes and per-invocation directories for file-level scratch; global-state assertions must be race-tolerant
 - Derive the live unsafe inventory during review. A raw or typed map `shadow()` requires exclusion of concurrent writes to the same key. Structural multi-key edits require the collection's documented writer exclusion. Mutable collection `Clone` performs a deep copy.

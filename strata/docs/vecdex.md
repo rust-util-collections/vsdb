@@ -227,14 +227,6 @@ ordinary reads. Traversals capture the graph at one engine sequence number.
 Construction caches at most 32 MiB of decoded vectors per transaction.
 Compaction still stages the full replacement graph in memory.
 
-### Upgrading a v17 index
-
-After converting the universe, run `vsdb_migrate::vecdex::migrate_v17::<K, D, S>(id)`
-with exclusive access. Use `D = MetricKind` for a v17 runtime metric. The
-converter rewrites vector rows in resumable chunks and preserves node IDs and
-adjacency lists. The migration guide also covers handles embedded in
-application records. [Migration from v17](../../migration/README.md)
-
 ## Type aliases
 
 ```rust

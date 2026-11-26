@@ -6,6 +6,15 @@ Compiler requirements below are historical release notes. Current development
 uses the official latest stable Rust, without a declared compatible version
 range or minimum compiler; see [the toolchain policy](docs/ai/compatibility-policy.md#rust-toolchain).
 
+## [v19.0.0]
+
+### Changed
+
+- VSDB opens native v18 universes in place using the same namespace identities,
+  collection layouts and saved handles. The workspace ships the two runtime
+  crates, `vsdb_core` and `vsdb`. Format conversion for older universes is
+  maintained on the v18 branch. [Upgrade path](docs/README.md#upgrade-an-existing-universe)
+
 ## [v18.0.3]
 
 Existing v18 stores open in place.
@@ -31,8 +40,8 @@ Existing v18 stores open in place.
 - Fallible reads and mutations across `StagedRows`, `VecDex`, `SlotDex`,
   `DagMap` and `VerMap` propagate engine read and row-decoding errors instead
   of panicking or treating damaged rows as absent.
-- Shard `CURRENT` and `MANIFEST` preflight checks across `vsdb_core` and
-  `vsdb_migrate` classify missing, non-regular-file or malformed anchors as
+- Shard `CURRENT` and `MANIFEST` preflight checks in `vsdb_core`
+  classify missing, non-regular-file or malformed anchors as
   `VsdbError::Corrupt` while preserving `VsdbError::Io` on permission and I/O
   errors.
 - `create_dir_all_durable` synchronizes newly created directories and their
@@ -44,18 +53,10 @@ Existing v18 stores open in place.
   records when explicit root creation fails before populating a directory, and
   verifies `.tmp` staging file prefixes in `__SYSTEM__` before adopting or
   cleaning up a pending root.
-- `vsdb_migrate` releases exclusive and shared lockfile descriptors on drop
-  across normal returns, errors and unwinds, and `stage_universe` rejects
-  `OpenMode::ReadOnly` before creating staging directories.
-- `vsdb_migrate::dagmap` verifies `State::Root` on current `VSTYPE04` handles
-  in root converters and re-tags saved root sidecars whose composite value
-  types carry legacy `VSTYPE02`/`VSTYPE03` type hashes after an earlier
-  byte-handle DAG conversion.
 
 ### Changed
 
-- The workspace depends on the published crates.io `mmdb` `5.0.1` runtime and
-  `4.3.15` offline migration reader instead of Git revisions.
+- The runtime depends on the crates.io release of MMDB 5.0.1.
 
 ## [v18.0.2]
 
@@ -82,11 +83,8 @@ Existing v18 stores open in place.
 - `VerMap` tracks staged page allocations through final publication,
   reclaiming spilled `[0x06]` markers and unpublished objects when publication
   is rejected or deferring unowned objects after an ambiguous WAL I/O failure.
-- `VerMap` verification/recovery, `PersistentBTree` ceiling/recount checks, and
-  `vsdb_migrate` logical value and collection converters use fallible engine
-  reads and preserve `VsdbError::Storage` classifications and sources.
-- `vsdb_migrate::stage_universe` checks both regular-file type and `u64`
-  numeric bounds before classifying shard entries as disposable engine files.
+- `VerMap` verification/recovery and `PersistentBTree` ceiling/recount checks
+  use fallible engine reads and preserve `VsdbError::Storage` classifications and sources.
 
 ## [v18.0.1]
 
@@ -102,8 +100,6 @@ Existing v18 stores open in place.
 - VecDex checks the dimensions of stored vectors during graph updates. Insert,
   pruning and entry-point repair reject a malformed vector before publishing
   new edges.
-- Offline universe migration explicitly unlocks the store on success and error,
-  allowing another caller to acquire it while a duplicate descriptor is open.
 
 ### Changed
 
@@ -112,24 +108,17 @@ Existing v18 stores open in place.
 
 ## [v18.0.0] (unreleased)
 
-This major version introduces a distinct storage format. Stop v17 processes and convert existing universes with the independent `vsdb_migrate` library. Its converters preserve primary collection IDs. Applications supply the schema for embedded handles and retain the mapping for relocated DAG children. [Upgrade guide](migration/README.md)
-
-- The runtime uses MMDB v5. Native shard WAL fences, retryable nonblocking batches, typed cursor errors and per-namespace memory gauges are available. Existing v18 development stores on MMDB v4 require offline generation staging.
+- The runtime uses MMDB v5. Native shard WAL fences, retryable nonblocking batches, typed cursor errors and per-namespace memory gauges are available.
 - DagMap creates a child and registers its parent edge in one shard batch. VerMap can express dependent edits with one working-root publication through `edit_working`.
 - Universe and engine headers bind storage to a universe, namespace and shard count. A process-wide writer lock covers namespaces on separate volumes. The registry records the pending or established state of each namespace.
 - Typed maps gain borrowed key lookups, safe occupied/vacant entries, fallible value updates and immutable readers. Ordered integer keys use explicit widths. A mutable dereference marks a guarded value for persistence.
 - VerMap publishes working and history changes under one prefix. Its slotted B+ tree supports owned snapshots, checked recovery and batched edits. Trie roots use copy-on-write nodes and map-bound checkpoints.
 - SlotDex uses fixed-width slot codecs and detects stale writers. DagMap stores each node under one co-located prefix and supports typed keys and empty values. VecDex reads persisted graph state, uses snapshots for search and supports stored metric parameters.
 
-On the measured Linux/x86_64 workload, v18/v5 reduced default-namespace
-DagMap child p99 by 33.38% versus v18/v4. The same-graph warm VecDex
-upgrade comparison with the selected profile at `6854273` had 37.48% higher
-p99. Stock B+ tree point hit and miss p99 rose 12.03% and 11.83% on the
-32,768-key warm fixture. The scan p99 comparison had high control variation.
-The reports give the workload, request sizes and control variation.
-[Publication measurements](docs/evaluations/v18-publication/README.md) · [VecDex queries](docs/evaluations/v18-vecdex-v5/README.md) · [Stock B+ tree results](docs/evaluations/v18-tree-v5/stock/README.md)
+The [historical measurements](docs/evaluations/README.md) cover shard sizing,
+DagMap publication, VecDex queries and B+ tree reads on Linux/x86_64.
 
-### Public API migration notes
+### Public API changes
 
 - Raw and typed map entries have `Occupied` and `Vacant` variants. A typed
   value guard tracks mutable dereferences. Map `update` takes a closure
@@ -154,595 +143,8 @@ The reports give the workload, request sizes and control variation.
 - `VecDexDyn<K, S>` is now an alias for `VecDex<K, MetricKind, S>`.
   Replace `VecDexDyn::new(metric, config)` with `new_with_metric(metric, config)`.
   Both the index and its read view support typed and encoded-key filters.
-- `vsdb_migrate` supports saved IDs and serialized handle bytes. DAG
-  descendants can be restored with the returned child-ID mapping. Use
-  `dagmap::DagHandleConverter` to translate serialized handles for members
-  of a converted graph, including children with a different value type.
-  [Converter table and upgrade sequence](migration/README.md)
 
-## [v17.0.21]
-
-Existing databases open in place.
-
-### Fixed
-
-- Relative database roots are resolved when selected and stay anchored after
-  the working directory changes. Attempts to configure a frozen instance
-  still return `BaseDirFrozen` after the working directory is removed.
-- Prefix recovery after loss of the allocator ceiling recognizes empty maps
-  referenced in stored keys or in files nested under `__CUSTOM__`. Reads of
-  those bootstrap files retry after an interruption.
-- DagMap writes a new child's parent link and its registration on the same
-  shard WAL, so crash recovery observes the link before the registration.
-- VerMap validates reachable B+ tree nodes before reclaiming orphans during
-  recovery. Restore fails on missing nodes reachable from working branches or
-  committed snapshots before deleting history.
-- VerMap treats a branch as clean when its working bytes match the committed
-  bytes after edits are reverted, allowing merge and rollback.
-- Branch Merkle roots and proofs use one captured state, including any
-  uncommitted changes in that state.
-- MPT and SMT checkpoint saves reject files over the 512 MiB encoded size
-  limit before truncating the previous checkpoint.
-
-## [v17.0.20]
-
-Public APIs and on-disk formats remain compatible; no data migration is
-required. Only the official latest stable Rust toolchain is supported.
-
-### Fixed
-
-- Prefix allocation saturates initial and bumped ceilings at `u64::MAX` and
-  bounds allocation windows below `u64::MAX`, preventing ceiling/counter
-  wraparound near `u64::MAX` from rejecting `from_meta` handles or re-issuing
-  live prefixes after restart.
-- `MptCalc::verify_proof` rejects unconsumed trailing `proof.nodes` entries,
-  reuses canonical varint/byte decoding, and validates MPT node encodings,
-  canonical shapes, and the `2 * MAX_MPT_KEY_LEN` nibble budget.
-- `VerMapWithProof` skips disk-cache loading on `new()` and verifies that
-  `sync_tag` refers to a live commit in `from_map`, preventing pre-existing or
-  reclaimed-commit cache files from serving foreign roots or stale proofs.
-- `MmDB::range_at` uses the exact lexicographical key successor (`v || [0x00]`)
-  for `Bound::Included` upper bounds instead of `prefix_successor`, avoiding
-  multi-block reverse scans on empty, `0xFF`, and prefix-key `get_le` queries.
-- `Namespace::relocate` promotes a `Pending` lifecycle sidecar to `Established`
-  once the target dataset is validated as complete, and `Namespace::create_with`
-  guards `next_id` advancement against `u64` overflow.
-- `SlotDex` and `VecDex` / `VecDexDyn` validate `tier_capacity >= 2` and
-  `HnswConfig` invariants during metadata deserialization, matching their
-  constructors.
-
-### Changed
-
-- Workspace dependencies update `mmdb` to `4.3.12` and `ruc` to `11.0.3`, and
-  use a compatible `1.1.3` requirement for `postcard`.
-
-## [v17.0.19]
-
-Public APIs and on-disk formats remain compatible; no data migration is
-required. Only the official latest stable Rust toolchain is supported.
-
-### Changed
-
-- `VerMap` merge-base search keeps a live frontier count instead of scanning
-  the heap on every round. Recovery reuses that commit-graph check when
-  reference counts need repair. Clean and read-only restores still validate
-  the graph before any index or reclamation change.
-- Persistent B+ tree iteration moves entries out of the decoded leaf buffer.
-  Deletion and merge avoid extra key copies and a second lookup. Reference
-  rebuild walks ownership edges without copying page payloads.
-- SlotDex batches count new floors as they appear, so each unique key no
-  longer rescans every pending floor before a tier can grow.
-- Filtered VecDex search keeps at most `k` keys that already passed the
-  predicate and reads any later hit from storage. Unfiltered search,
-  rejected keys, visit limits, and disconnected-graph fallback are unchanged.
-- DagMap maintenance tests membership with a set and scans the root registry
-  once. Stage barriers fence that namespace's WAL instead of flushing its
-  memtables. Phase order is unchanged.
-- Namespace prefix recovery copies open-engine handles and scans them
-  without holding the registry lock for the whole scan.
-- Merkle cache encoding appends nodes into one payload buffer. Byte order,
-  checksums, and load checks are unchanged. A full trie rebuild streams the
-  snapshot instead of collecting every entry before construction.
-
-## [v17.0.18]
-
-Public APIs and on-disk formats remain compatible; no data migration is
-required. Only the official latest stable Rust toolchain is supported.
-
-### Fixed
-
-- Namespace creation refuses reused IDs after registry loss for both derived
-  and explicit placement. Surviving lifecycle state and legacy derived roots
-  without sidecars prevent old handles from routing to a new engine.
-- VecDex resumes underfilled searches from unvisited live nodes when a graph
-  component is exhausted. An unfiltered beam at least as large as the index
-  reaches every vector, including in existing disconnected graphs, without
-  rewriting stored data or adding scans to mutations. Filtered restarts share
-  the existing visit cap; smaller beams remain approximate.
-- SlotDex reverse paging streams tier boundaries lazily, so a short page no
-  longer clones every level-one floor in its slot range.
-- VecDex rejects nonfinite vector and query components before mutation or
-  search, including runtime metric dispatch and batches. Compaction rejects
-  legacy nonfinite rows as corrupt without replacing the graph. Finite inputs
-  can still overflow distance arithmetic.
-
-## [v17.0.17]
-
-Public APIs and on-disk formats remain compatible; no data migration is
-required. Only the official latest stable Rust toolchain is supported.
-
-### Fixed
-
-- Missing `__prefix_ceiling__` recovery also counts `VSMAPX01` handles
-  stored in shard values and in the universe `__CUSTOM__` directory. An
-  empty nested map, or a top-level handle saved before it had keys, is no
-  longer reused by the next map allocation.
-- Merging a restored persistent B+ tree before its ref counts are rebuilt
-  no longer writes superseded intermediate nodes. The merged root matches
-  a live tree.
-
-## [v17.0.16]
-
-Public APIs and on-disk formats remain compatible; no data migration is
-required. Only the official latest stable Rust toolchain is supported.
-
-### Fixed
-
-- A missing `__prefix_ceiling__` file on a v16+ universe no longer restarts
-  prefix allocation at the floor. The next open raises the ceiling above
-  prefixes still stored in open engines, saved handle metadata, and
-  registered namespace roots, so a new map cannot overwrite a live key.
-  A fresh universe, and a crash after the format marker but before any
-  prefix is issued, still starts at the allocation floor. If an existing
-  shard cannot be scanned, opening fails instead of guessing low.
-
-### Changed
-
-- Skill and workflow test commands launch `cargo test` with a scratch
-  `VSDB_BASE_DIR`, so unit tests and doctests do not open `$HOME/.vsdb`.
-- Intra-doc links that blocked docs.rs builds use plain type names.
-- Maintenance instructions live in `AGENTS.md` and `docs/ai`. The four
-  project skills stay explicitly invoked.
-
-## [v17.0.15]
-
-Public APIs and on-disk formats remain compatible; no data migration is
-required. Only the official latest stable Rust toolchain is supported.
-
-### Fixed
-
-- Namespace creation durably advances the ID allocator before publishing
-  pending lifecycle state, so an interruption at that point cannot block
-  every later derived namespace creation. Existing-root and lost-registry
-  checks remain in place.
-- `VerMap` restoration preserves valid branch-name index entries while
-  repairing missing or incorrect mappings and removing stale names.
-  Concurrent immutable readers no longer temporarily miss live branches
-  while another handle is restored.
-- Namespace documentation correctly states that unsupported or malformed
-  format markers cause opening to fail.
-
-### Changed
-
-- Project skill prompts explicitly describe local Rust correctness,
-  durability, concurrency, and compatibility maintenance, with focused
-  regression evidence and severity based on demonstrated outcomes.
-
-## [v17.0.14]
-
-Existing public APIs and on-disk formats are unchanged; no data migration is
-required. Only the official latest stable Rust toolchain is supported.
-
-### Fixed
-
-- `VerMap` restore advances `next_commit`/`next_branch` past every stored row
-  and rejects non-older or sentinel parents. Legacy crash residue can no longer
-  reuse an ID, overwrite reachable history, or create a self-parented commit
-  that loops `log()`/`commit_distance()`.
-- Namespace overlap validation absolutizes and lexically resolves `.`/`..`
-  before comparing paths, so a relative or not-yet-existing base cannot be
-  reused as a namespace root.
-- Registry loading validates allocator and entry invariants. Derived namespace
-  creation refuses a surviving lifecycle sidecar or non-empty root instead of
-  adopting or deleting an earlier namespace's data.
-- Allocator initialization folds the legacy shard-0 ceiling before publishing
-  state, and ceiling writes take the on-disk maximum, preventing prefix reuse
-  after a pre-tripwire v15 write.
-- VecDex repairs its entry point only when it is lost or unhealthy, removing an
-  O(N) rescan from non-entry top-layer removals.
-- Trie dirty-state synchronization reverse-applies the previous diff instead of
-  cloning the whole trie, and short-circuits unchanged dirty roots.
-- Abandoned allocator windows purge their recovered-prefix reservations.
-
-### Changed
-
-- `make test`/`make bench` use a per-invocation scratch `VSDB_BASE_DIR` and no
-  longer delete `$HOME/.vsdb`, `/tmp/vsdb_testing`, or caller-provided data.
-- Integration test binaries configure a unique temporary base before touching
-  the engine; the release gate now includes doctests.
-- The declared MSRV floor, minimum-toolchain CI job, README badge, and
-  compatibility-policy synchronization rules were removed. Build, lint and
-  test with the official latest stable Rust; no `rust-version` floor is
-  declared.
-
-## [v17.0.13]
-
-Existing APIs and stored data remain compatible; no data migration is required.
-Rust 1.96 or later is required.
-
-### Changed
-
-- Runtime dependencies now track their latest stable releases: MMDB 4.3.7,
-  parking_lot 0.13.0, ruc 11.0.1, thiserror 2.0.21, serde 1.0.229 and
-  sha3 0.12.0. MMDB 4.3.7 also builds against parking_lot 0.13.
-  The criterion 0.8.2 and rand 0.10.3 dev-dependencies are aligned as well.
-- VSDB code and tests source synchronization primitives from parking_lot:
-  the remaining `std::sync::Once` initializers use `parking_lot::Once`.
-  Barriers and atomics remain standard-library primitives because
-  parking_lot provides no equivalent.
-
-## [v17.0.12]
-
-Rust 1.96 or later is required. Public APIs and VSDB storage formats are unchanged.
-
-### Fixed
-
-- Rust 1.99 builds pass the existing deny-warnings gate: the B+ tree allocator
-  uses `try_update`, and DAG cloning passes its remapping closure without
-  unnecessary borrows. The replacement API and existing allocation/clone
-  behavior are verified on the minimum compiler too.
-
-### Changed
-
-- The minimum supported Rust version follows official latest stable minus
-  three minor releases: currently stable 1.99 and minimum 1.96. Both crate
-  manifests and the README declare the same requirement.
-- CI checks every target on the declared minimum compiler in addition to its
-  latest-stable formatting, lint and test job. Shared AI compatibility and
-  release rules require official-channel verification and both toolchains.
-
-## [v17.0.11]
-
-Existing APIs and stored data remain compatible; no data migration is required.
-
-### Fixed
-
-- Metadata saves, namespace/engine initialization and allocator setup now
-  synchronize directory ancestry before publishing durable state. Retries
-  also fence directories created by earlier failed or concurrent attempts.
-- `VerMap` diffs retain both captured roots through comparison, including
-  when a restored writer alias discards working state or reclaims history.
-- `DagMapRawKey` mutable guards persist stable interior edits such as
-  `RefCell` changes, preserve untouched variable encodings, and discard
-  edits interrupted by unwinding.
-- HNSW neighbor-selection buffers reserve only for available candidates,
-  preventing capacity overflow and excessive allocation with large valid caps.
-
-### Changed
-
-- Require MMDB 4.3.5, including upstream write-queue aliasing, snapshot/filter
-  installation, namespace reopen and WAL recovery fixes.
-- Index mutation and node-flush docs distinguish unapplied preflight rejection
-  from persistence errors whose complete WAL data may replay after recovery.
-
-## [v17.0.10]
-
-Existing APIs and stored data remain compatible; no data migration is required.
-
-### Fixed
-
-- Configuration and concurrent first use cannot split the directory tree.
-  `vsdb_configure` publishes options under the base-directory lock, and the
-  default namespace and engine freeze configuration before capturing paths.
-- Concurrent `save_meta` calls use independent, exclusively created staging
-  files. Complete replacements retain file and directory synchronization;
-  occupied staging names are skipped and failed writes clean up their own file.
-
-### Changed
-
-- `make test` runs documentation examples and compile-fail checks. Batch
-  examples use independent temporary directories to avoid stale test data.
-- Removed the unused build script for the former RocksDB backend.
-
-## [v17.0.9]
-
-Existing APIs and stored data remain compatible; no data migration is required.
-
-### Fixed
-
-- `BranchId` and `CommitId` implement `KeyEnDeOrdered`, restoring their use as
-  keys in `MapxOrd`, `VerMap`, and `SlotDex`. Ordered key bytes remain identical
-  to v16's `u64` aliases, so existing indexes can be restored and updated while
-  current typed handles continue to distinguish the two ID types.
-
-## [v17.0.8]
-
-Existing APIs and VSDB storage formats remain compatible; no VSDB data
-migration is required. Ordinary write durability defaults are unchanged.
-
-### Added
-
-- Raw and ordinary typed collection batches expose `commit_sync()`, which
-  synchronizes the owning shard WAL before atomic publication. Empty batches
-  remain no-ops; this adds no cross-collection or cross-shard transaction.
-- `MapxRaw::read_view()` captures one committed state for repeated point and
-  range reads. Its borrowed lifetime retains the engine snapshot; derived
-  iterators borrow the view.
-- `MapxRaw::reader()` creates an immutable handle for concurrent reads while
-  the original map remains writable, without application-side mutable aliases.
-  Reader clones share identity and retain namespace ownership; ordinary map
-  clones still deep-copy. Fatal engine read faults retain panic behavior.
-
-### Changed
-
-- Batch documentation distinguishes preflight rejection from persistence
-  failures whose WAL data may appear after recovery; ambiguous failures must
-  not be retried automatically.
-
-## [v17.0.7]
-
-Existing APIs and stored data remain compatible; no data migration is required.
-
-### Added
-
-- MPT and SMT proofs support serde and versioned `to_bytes` / `from_bytes`
-  transport. Kind/version mismatches, incomplete frames and trailing bytes
-  are rejected. Proof verification still requires the expected root and key;
-  existing database and trie-cache formats are unchanged.
-- `try_sync_wal` exposes fallible durability fences on raw and typed maps,
-  `Orphan`, and `Namespace`, without forcing memtable flushes. Collection
-  fences cover one shard; namespace fences cover all its shards and retain
-  per-shard failure semantics. Read-only calls are no-ops.
-- `VerMapWithProof::prove_at` and `prove_at_commit` return a `ProofWithRoot`
-  for the explicitly selected working branch or historical commit, for both
-  MPT and SMT. Earlier root queries or cache saves do not choose their context.
-- `SlotDex::iter(range, order)` streams complete ranges without a page-size
-  ceiling, preserving ascending keys within each slot and decoding on demand.
-
-### Fixed
-
-- Immutable map iterators pin their committed sequence while acquiring
-  retained sources. Iterator views survive subsequent writes, clears and
-  flushes; public and internal alias documentation now agree on concurrent
-  immutable iteration with a coordinated writer.
-
-## [v17.0.6]
-
-No public API or storage-format changes; no data migration is required.
-
-### Changed
-
-- MPT lookups, proof generation and proof verification borrow the remaining
-  key path instead of copying it at every node, reducing temporary allocations
-  especially for long shared prefixes.
-- `SlotDex` checks whether tier growth is needed before copying cached buckets
-  and examines only pending updates for the top tier. Serial and bulk inserts
-  retain the same promotion cadence and atomic commit behavior.
-- Added MPT prefix-chain and `SlotDex` tier-growth benchmarks, including bounded
-  hot-slot insertion workloads.
-
-## [v17.0.5]
-
-No public API or storage-format changes; no data migration is required.
-
-### Fixed
-
-- MPT operations, cloning, cache loading and destruction handle the full
-  supported key depth on ordinary worker stacks. Root hashes and cache bytes
-  remain unchanged.
-- Untouched `Orphan` mutable guards preserve stored bytes when a value codec
-  varies its encoding between calls, including in read-only mode.
-- `DagMap` prune retries visit each marked node once even when restored
-  component handles contain repeated registry links.
-
-### Changed
-
-- Clarified that each `SlotDex::insert_batch` call commits one atomic batch;
-  callers can split large imports across calls to bound temporary memory.
-- Aligned guides with namespace lifecycle, memory sizing, explicit trie
-  checkpoints and ownership of restored index handles.
-
-## [v17.0.4]
-
-No storage-format changes; no data migration is required.
-
-### Fixed
-
-- `Mapx` byte-slice queries resolve through the owning key codec. Slices
-  matching fixed-array keys now find, edit and remove the correct entry;
-  wrong-length slices cannot address a different array key. Existing
-  `String`, `Vec<u8>` and `Box<[u8]>` queries remain supported.
-- `DagMap` prune retries complete and flush partial clearing-marker sets
-  before clearing consumed nodes. A crash between marker writes no longer
-  leaves intermediate nodes alive with stale values; surviving children
-  retain the merged view.
-
-## [v17.0.3]
-
-Pre-release v17 corrections from Hotmint integration testing. No persisted
-collection layout changes; existing trie cache files remain readable.
-
-### Fixed
-
-- Merkle root queries reject reclaimed commits even when an in-memory or
-  on-disk trie cache still names that commit. Both MPT and SMT now return
-  `CommitNotFound` consistently with the underlying versioned map.
-
-### Changed
-
-- `VerMapWithProof` saves its disposable disk cache only through the explicit
-  `save_cache(commit)` checkpoint. Root calculation and `Drop` no longer
-  serialize the whole state or hide cache I/O failures. Applications choose
-  checkpoint frequency and handle errors; construction still loads existing
-  caches and catches up or rebuilds when necessary. Call `merkle_root(branch)`
-  after saving a historical commit before proving the branch's working state.
-
-## [v17.0.2]
-
-Pre-release corrections; v17 has not been published. No v16 data migration
-is required. Development-only short-name `VSTYPE03` handles are rejected.
-
-### Fixed
-
-- Typed-handle tags retain fully qualified type names. The unpublished
-  short-name experiment let different modules' same-named types restore as
-  each other, permitting silent wrong-type reads and writes when their
-  encoded bytes overlapped. Moving a persisted type requires an explicit
-  migration; existing v16 handles remain supported.
-- `SlotDex`, `VecDex`, and `VecDexDyn` constructors return `ReadOnly` in
-  read-only mode instead of panicking through the raw collection constructor.
-## [v17.0.1]
-
-No public API or storage-format changes; no migration is required.
-
-### Fixed
-
-- `DagMap` deep clones remap the connected graph, including recovery links,
-  so pruning or destroying a copy cannot alter the original graph.
-- `VerMap` snapshots and their iterators retain captured tree nodes across
-  restored-alias writes, rollback, branch deletion, garbage collection and
-  recovery. Deep copies exclude readers belonging to the original map.
-- `VerMapWithProof` invalidates cached trie state when its underlying map is
-  replaced and keeps cache writes and retries tied to the owning map identity.
-- Reverse `SlotDex` pages stop at their planned quotas and skip unused boundary
-  tails while preserving ascending keys within each slot.
-- Explicit configuration no longer creates an unused environment-selected
-  default directory, avoiding a panic when that path is invalid.
-- API examples use valid namespace imports, explain explicit child-process
-  environment propagation, and show current trie cache arguments and save timing.
-
-### Changed
-
-- Merge benchmark samples vary their values so both branches retain 100 changed
-  keys in every sample.
-- The B+ tree sharing test measures allocated node IDs, avoiding count underflow
-  when background compaction removes old rows.
-
-## [v17.0.0]
-
-A public-API cleanup release. **Stored data is not affected**: v17 opens,
-reads and writes every v16 dataset as-is, with no migration step. Only
-source code calling the removed or changed APIs needs updating (see the
-table below). Downgrading is not supported — v16 cannot read handle
-metadata written by v17 and rejects it with an error.
-
-### Breaking
-
-- **Configuration**: `vsdb_set_base_dir` is removed; configure with
-  `vsdb_configure(VsdbOptions::new(dir))`. `vsdb_configure` no longer writes
-  `VSDB_BASE_DIR` into the process environment (that `env::set_var` was
-  unsound once other threads exist), so it is safe from any thread. A child
-  process that should share the universe gets it explicitly:
-  `Command::new(..).env("VSDB_BASE_DIR", vsdb_get_base_dir())`.
-- **Namespace administration** moved onto `Namespace`
-  (`list` / `destroy` / `relocate` / `close_by_id`). The engine singleton
-  `VSDB` / `VsDB` (which had no public methods) is internal. The path-only
-  helpers `vsdb_get_base_dir`, `vsdb_get_custom_dir`, `vsdb_get_system_dir`,
-  `vsdb_get_meta_dir` and `vsdb_meta_path` are unchanged.
-- **Write batches**: `batch_entry()` / `batch_entry_wiped()` are `batch()` /
-  `batch_wiped()`, returning concrete batch types whose `commit(self)`
-  consumes the batch (start a new `batch()` for the next group);
-  `BatchTrait` is removed — `MapxRawBatch` is the raw batch type.
-- **Raw handle constructors**: the typed maps and `Orphan` no longer expose
-  `unsafe fn from_bytes` / `from_bytes_in` / `as_bytes`, and `MapxRaw` drops
-  the ambient-namespace `from_bytes` (they skipped payload validation and
-  prefix reservation). Persist handles through serde or `save_meta` /
-  `from_meta`; `instance_id()` is the compact identity. Viewing an existing
-  `MapxRaw`'s storage through a typed map is no longer possible.
-- **VerMap**:
-  - `BranchId` / `CommitId` are newtypes (`from_raw` / `raw`) instead of
-    `u64` aliases, so they cannot be swapped; `NO_COMMIT` is internal.
-  - `at(commit)` / `snapshot(branch)` return a `Snapshot` view (`get`,
-    `contains_key`, `iter`, `range`) that replaces the `*_at_commit` methods;
-    `range` takes any `RangeBounds` like `BTreeMap::range`.
-  - The `Branch` / `BranchMut` handles and `branch()` / `branch_mut()` /
-    `main()` / `main_mut()` are removed (every operation has one form).
-  - `diff_commits` / `diff_uncommitted` return decoded `DiffEntry<K, V>`;
-    the stored-bytes forms are `raw_diff_commits` / `raw_diff_uncommitted`
-    (`TreeDiff`), and `Snapshot::raw_iter` replaces `raw_iter` /
-    `raw_iter_at_commit`.
-  - `Commit` exposes `id()`, `parents()`, `timestamp_us()`; the internal
-    `root` / `ref_count` fields are no longer public.
-  - `gc()` returns `Result` instead of panicking on a damaged commit graph.
-- **PersistentBTree**: the free functions `versioned::diff::diff_roots` and
-  `versioned::merge::{three_way_merge, three_way_merge_many_bases}` become
-  the methods `PersistentBTree::diff(old, new) -> Vec<TreeDiff>` and
-  `PersistentBTree::merge(bases, source, target)`; `TreeDiff` is the
-  stored-bytes diff entry.
-- **SlotDex**: `page(slots, page_size, page_index, Order)` and
-  `count(slots)` replace `get_entries_by_page`, `get_entries_by_page_slot`,
-  `entry_cnt_within_two_slots` and `total_by_slot`; `slots` is any
-  `RangeBounds` over the slot type and `slotdex::Order::{Asc, Desc}` replaces
-  the positional `bool`. `SlotType` gains `checked_succ` / `checked_pred`.
-- **Fallible index operations**: `SlotDex::remove` / `clear` and
-  `VecDex(Dyn)::set_ef_search` / `clear` return `Result` (and reject
-  read-only mode with `ReadOnly`) instead of panicking; `SlotDex::new` /
-  `new_in` and `VecDex(Dyn)::new` / `new_in` return `InvalidConfig` instead
-  of asserting.
-- **Borrowed-key lookups**: `get`, `get_mut`, `contains_key`, `remove` (and
-  `MapxOrd::get_le` / `get_ge`, `VerMap` / `Snapshot` reads) take `&Q` where
-  `K: Borrow<Q>`, like `HashMap::get`. Passing `&K` still works; only calls
-  that relied on `&K` to infer a conversion (`get(&"k".into())`) must pass
-  the borrowed form (`get("k")`).
-
-### Changed
-
-- Typed-handle metadata uses the `VSTYPE03` envelope and the **fully qualified**
-  Rust type name. Module paths and generic parameters distinguish unrelated
-  types; moving a persisted type requires an explicit migration. This is an
-  identity guard, not automatic schema validation. `VSTYPE02` metadata from
-  v16 is still restored and upgrades when re-saved.
-- Errors are typed: `NotAncestor`, `SelfMerge`, `NoCommits`,
-  `DimensionMismatch { expected, found }`, `InvalidConfig`, and `Corrupt`
-  replace the corresponding `Other` strings.
-- `VerMapWithProof::from_map` no longer repeats the restore-time sweep.
-
-### Fixed
-
-- Legacy `VSTYPE02` handles containing `BranchId` or `CommitId` restore using
-  their former `u64` alias tags, including nested generic parameters.
-  `VSTYPE03` continues to distinguish the two id types from each other and
-  from `u64`.
-- DagMap prune keeps child discovery links until every consumed node's
-  data and parent clears are durable. Interrupted cleanup retries no longer
-  strand uncleared descendant storage.
-
-### Added
-
-- `VsdbOptions::with_mem_budget_mb` sets the default namespace's memory
-  budget without the `VSDB_MEM_BUDGET_MB` environment variable (still
-  honored when no budget is configured).
-- `vsdb_get_custom_dir` is re-exported by `vsdb`.
-
-### Migration
-
-| v16 | v17 |
-|---|---|
-| `vsdb_set_base_dir(dir)` | `vsdb_configure(VsdbOptions::new(dir))` |
-| env `VSDB_MEM_BUDGET_MB` (set via `set_var`) | `VsdbOptions::new(dir).with_mem_budget_mb(mb)` |
-| `vsdb_ns_list()` / `vsdb_ns_destroy(id)` / `vsdb_ns_relocate(id, p)` / `vsdb_ns_close(id)` | `Namespace::list()` / `Namespace::destroy(id)` / `Namespace::relocate(id, p)` / `Namespace::close_by_id(id)` |
-| `m.batch_entry()` / `m.batch_entry_wiped()` | `m.batch()` / `m.batch_wiped()` |
-| `MapxBatchEntry` / `MapxOrdBatchEntry` / `MapxOrdRawKeyBatchEntry` | `MapxBatch` / `MapxOrdBatch` / `MapxOrdRawKeyBatch` |
-| `unsafe { T::from_bytes(b) }` / `h.as_bytes()` | serde, or `h.save_meta()` + `T::from_meta(id)` |
-| `m.get(&"k".to_string())` | `m.get("k")` (the old form still compiles) |
-| `let b: BranchId = 3;` | `BranchId::from_raw(3)`; `id.raw()` for the number |
-| `m.get_at_commit(c, &k)?` | `m.at(c)?.get(&k)` |
-| `m.iter_at_commit(c)?` / `m.range_at_commit(c, lo, hi)?` | `m.at(c)?.iter()` / `m.at(c)?.range(lo..hi)` |
-| `m.raw_iter(b)?` / `m.raw_iter_at_commit(c)?` | `m.snapshot(b)?.raw_iter()` / `m.at(c)?.raw_iter()` |
-| `diff_roots(&tree, a, b)` / `three_way_merge(&mut tree, base, s, t)` | `tree.diff(a, b)` / `tree.merge(&[base], s, t)` |
-| `m.diff_commits(a, b)?` → bytes `DiffEntry` | `m.diff_commits(a, b)?` → decoded `DiffEntry<K, V>`, or `m.raw_diff_commits(a, b)?` → bytes `TreeDiff` |
-| `Box<dyn BatchTrait>` | `MapxRawBatch` |
-| child processes inheriting `VSDB_BASE_DIR` | `Command::new(..).env("VSDB_BASE_DIR", vsdb_get_base_dir())` |
-| `m.range(b, Bound::Included(&x), Bound::Excluded(&y))?` | `m.range(b, x..y)?` |
-| `m.main_mut().insert(&k, &v)?` / `m.branch(b)?.get(&k)?` | `m.insert(m.main_branch(), &k, &v)?` / `m.get(b, &k)?` |
-| `commit.id` / `commit.parents` / `commit.timestamp_us` | `commit.id()` / `commit.parents()` / `commit.timestamp_us()` |
-| `m.gc();` | `m.gc()?;` |
-| `sd.get_entries_by_page(n, i, true)` | `sd.page(.., n, i, Order::Desc)` |
-| `sd.get_entries_by_page_slot(Some(a), Some(b), n, i, false)` | `sd.page(a..=b, n, i, Order::Asc)` |
-| `sd.total_by_slot(Some(a), Some(b))` | `sd.count(a..=b)` |
-| `SlotDex::new(cap, swap)` / `VecDex::new(cfg)` | `...::new(...)?` |
-| `sd.remove(s, &k);` / `sd.clear();` / `idx.clear();` / `idx.set_ef_search(ef);` | `...?` |
-| `Err(VsdbError::Other { .. })` for rollback / merge / dimension errors | `NotAncestor` / `SelfMerge` / `NoCommits` / `DimensionMismatch` |
+[Archived release notes for the preceding major version](https://github.com/rust-util-collections/vsdb/blob/4c15817f4bf26513386c9a6ce1d375dca33043dd/CHANGELOG.md#v17021).
 
 ## [v16.3.11]
 
@@ -907,37 +309,9 @@ silently adopted.
 
 ### Documentation and tooling
 
-- Added concrete legacy export/reimport, backup, validation, and rollback
-  guidance.
 - Corrected namespace examples, review invariants, shared-cache proposal
   status, crate license links, and benchmark workload semantics.
 - CI now enforces `cargo fmt --all -- --check`.
-
-## Legacy persisted-data migration
-
-Current releases do not perform an in-place migration from the historical
-msgpack, CBOR, pre-magic handle, or pre-`VSTYPE02` typed-meta formats. Do not
-point a current binary at the only copy of an old dataset.
-
-1. Back up the complete old default base directory plus every explicitly
-   rooted namespace. Keep the old binary and dependency lockfile for rollback.
-2. Open a copy with the last release that can read it: v9.1.0 for msgpack,
-   v11.0.0 for CBOR, a compatible v13 build for pre-v13.4 handle metadata, or
-   v14.0.1 for postcard metadata predating `VSTYPE02`.
-3. Export logical contents through that release's public APIs into a neutral
-   application format. Export every required versioned branch/snapshot and DAG
-   relationship, not only the current key/value view.
-4. Start the current release with a fresh base directory/fresh namespaces,
-   recreate the collections, import the logical data, and save new
-   `InstanceId` metadata. Do not copy old instance-meta, trie-cache, registry,
-   allocator, or engine-system files into the new dataset.
-5. Validate counts, representative reads/ranges/searches, branch heads, and
-   Merkle roots where applicable before switching traffic. Roll back by
-   restoring the untouched backup and old binary; never downgrade a dataset
-   after the current release has written to it.
-
-If the old reader is unavailable, there is no safe generic recovery path:
-restore that toolchain first or recover from an application-level export.
 
 ## [v16.3.2]
 
@@ -1302,10 +676,6 @@ registry: `docs/audit.md`).
   `from_meta(impl Into<InstanceId>)` still accepts bare `u64` ids
   (⇒ default namespace) — stored pre-v16 tokens keep working, and
   resolution is deterministic (never a search).
-- **Meta wire format: optional `ns_id` suffix.** Default-namespace
-  handles serialize byte-identically to v15 (`"VSMAPX01" ‖ prefix`,
-  16 B); non-default handles append `ns_id_le` (24 B). One magic, no
-  format versions; v15 data decodes as `None` verbatim.
 
 ### Changed (P0 — allocator persistence relocation)
 
@@ -1680,7 +1050,7 @@ Consolidates the unpublished v14.0.2/v14.0.3 work (v14.0.1 is the last published
 
 ### Breaking
 
-- **Typed-handle instance metadata is envelope-tagged** (on-disk format `VSTYPE02`). Safe restore paths (`serde` / `from_meta`) of `Mapx`, `MapxOrd`, `MapxOrdRawKey`, `Orphan`, `VerMap`, `SlotDex`, `VecDex`, and `DagMapRawKey` now embed and validate an 8-byte hash of the concrete wrapper type (including **all** generic parameters — notably `VerMap<K, V>`'s key/value types, `VecDex`'s distance metric, and `DagMapRawKey<V>`'s value type, none of which occur in any field type), so loading persisted metadata under a different type fails loudly instead of silently misreading data. The tag derives from `std::any::type_name`, so persisted metas are additionally tied to the writing build's type paths/compiler rendering — a false rejection is always safer than type confusion. **Migration**: older typed metas are rejected; follow [Legacy persisted-data migration](#legacy-persisted-data-migration) and export with the old reader before reimporting into a fresh dataset.
+- Typed-handle metadata records and verifies the concrete wrapper type and its generic parameters.
 - **Safe prefix restore is validated against the allocator.** `MapxRaw::from_meta` / serde deserialization reject prefixes outside the allocator-issued range and reserve still-pending prefixes so future allocations skip them; `unsafe from_bytes` remains the trusted escape hatch. The fast path is lock-free: allocator state is mirrored in process atomics, previous-run prefixes (the common restore case) are accepted without reservation, and the reservation set stays bounded (pending-window registry).
 - **SMT internal-node hashing gained a `0x00` domain byte** (leaf/internal domain separation — standard second-preimage hardening). All SMT root hashes and proofs change; the SMT disk-cache format is now v2 and v1 caches are rejected cleanly (the trie rebuilds from authoritative data). MPT is unaffected. Measured cost: ~2% on SMT insert/get/remove (one extra byte per internal-node Keccak input); all other benchmark suites show no change beyond the noise floor.
 
@@ -1707,7 +1077,7 @@ Consolidates the unpublished v14.0.2/v14.0.3 work (v14.0.1 is the last published
 ### Breaking
 
 - **Unified error type across the whole ecosystem.** `VsdbError` / `Result` now live in `vsdb_core::common::error` (re-exported as `vsdb::common::error`, `vsdb::VsdbError`, `vsdb::Result`). Every public API of **both** crates returns this type — including the `KeyEnDe` / `ValueEnDe` / `KeyEnDeOrdered` encoding traits, collection batch `commit()`, `save_meta` / `from_meta`, and `vsdb_set_base_dir` — all of which previously returned `ruc::Result` (`Box<dyn RucError>`). Implementing the encoding traits for custom types no longer requires a third-party error dependency. `ruc` remains internal-only; boundary conversions preserve the **complete** chain (every frame, with file/line context) via `stringify_chain`, and the new type additionally offers matchable variants (including new `Decode` and `BaseDirFrozen`), `std::error::Error` interop, and `Send + Sync`. The root alias `vsdb::VsdbResult` was renamed to `vsdb::Result`.
-- **Legacy (pre-magic) instance-meta decoding removed.** The `with_legacy_mapx_meta_decode` escape hatch and the length-only prefix decode path are gone; deserialization now unconditionally requires the magic-tagged meta format introduced in v13.4. **Migration**: use a compatible v13 reader to export logical data, then follow [Legacy persisted-data migration](#legacy-persisted-data-migration); merely re-saving a v13 meta does not produce the later `VSTYPE02` envelope.
+- Restoring instance metadata requires a magic-tagged envelope.
 - **Deprecated `MapxRaw::from_prefix_slice` / `MapxRaw::as_prefix_slice` removed** (deprecated since 13.0.0). Use `from_bytes` / `as_bytes`.
 - **`DagMapRaw::new` / `DagMapRawKey::new` redesigned**: the signature is now `new(parent: Option<&mut DagMapRaw>) -> Self` (previously `new(&mut Orphan<Option<DagMapRaw>>) -> Result<Self>`). Each node now **owns** its parent slot instead of aliasing a caller-managed `Orphan` shared by all siblings. Consequences: `destroy()` persistently unlinks the node from its parent chain, so stale clones, shadows, and `from_meta`-restored handles can no longer resolve inherited reads through a destroyed node (previously a documented per-handle-tombstone limitation); constructing a node can no longer fail. The on-disk serde format (3-tuple) is unchanged; DAGs whose siblings were created from one shared `Orphan` slot under v13 keep that sharing until the affected nodes are recreated.
 - **`vsdb::SlotDex` now names the generic struct** `slotdex::SlotDex<S, K>` instead of silently aliasing `SlotDex64<K>` (the same name previously referred to different types depending on the import path). **Migration**: replace `vsdb::SlotDex<K>` with `vsdb::SlotDex64<K>`.
@@ -1737,7 +1107,7 @@ Consolidates the unpublished v14.0.2/v14.0.3 work (v14.0.1 is the last published
 
 ### Breaking
 
-- **Replaced CBOR codec with postcard** — `serde_cbor_2` has been removed and replaced with `postcard` as the sole serialization codec. Existing data serialized with CBOR is incompatible; export it with v11.0.0 and follow [Legacy persisted-data migration](#legacy-persisted-data-migration).
+- **Replaced CBOR codec with postcard** — `serde_cbor_2` has been removed and replaced with `postcard` as the sole serialization codec.
 
 ## [v11.0.0]
 
@@ -1763,7 +1133,7 @@ Consolidates the unpublished v14.0.2/v14.0.3 work (v14.0.1 is the last published
 
 ### Breaking
 
-- **Removed msgpack codec** — CBOR (`serde_cbor_2`) is now the only serde encoding. Existing data serialized with msgpack is incompatible; export it with v9.1.0 and follow [Legacy persisted-data migration](#legacy-persisted-data-migration).
+- **Removed msgpack codec** — CBOR (`serde_cbor_2`) is now the only serde encoding.
 - **Default backend for `vsdb` crate** — `backend_mmdb` is now enabled by default so that `vsdb = "10.0.0"` works out of the box without a C/C++ toolchain (previously required explicit feature selection).
 
 ### Added
