@@ -80,6 +80,10 @@ pub const DEFAULT_NS_ID: NsId = 0;
 /// non-default `NsId` to its configuration.
 const NS_REGISTRY_REL_PATH: &str = "__SYSTEM__/__namespaces__";
 
+/// Records explicit-root creations currently in flight or rolled back before
+/// directory cleanup could finish, relative to the default base dir.
+const NS_PENDING_CREATE_REL_PATH: &str = "__SYSTEM__/__pending_create__";
+
 /// Parent dir (relative to the default base dir) of derived namespace
 /// roots — namespaces created without an explicit path.
 const NS_DERIVED_DIR: &str = "__NAMESPACES__";
@@ -302,6 +306,68 @@ thread_local! {
 }
 
 const REGISTRY_MAGIC: &[u8; 8] = b"VSNREG02";
+const PENDING_CREATE_MAGIC: &[u8; 8] = b"VSNPCR01";
+
+#[derive(Serialize, Deserialize, Clone)]
+struct PendingCreate {
+    universe: u128,
+    id: NsId,
+    shards: u32,
+    path: String,
+}
+
+fn read_pending_creates(base: &Path) -> Result<Vec<PendingCreate>> {
+    let bytes = match fs::read(base.join(NS_PENDING_CREATE_REL_PATH)) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        result => result?,
+    };
+    let payload = bytes
+        .strip_prefix(PENDING_CREATE_MAGIC)
+        .ok_or_else(|| corrupt("invalid pending namespace creation format"))?;
+    let (entries, rest) = postcard::take_from_bytes(payload)
+        .map_err(|e| corrupt(format!("invalid pending namespace creation: {e}")))?;
+    if !rest.is_empty() {
+        return Err(corrupt("trailing pending namespace creation data"));
+    }
+    Ok(entries)
+}
+
+fn save_pending_creates(base: &Path, entries: &[PendingCreate]) -> Result<()> {
+    let mut bytes = PENDING_CREATE_MAGIC.to_vec();
+    postcard::to_io(entries, &mut bytes)?;
+    REGISTRY_DIR_UNSYNCED.store(true, Ordering::Release);
+    atomic_write_file(&base.join(NS_PENDING_CREATE_REL_PATH), &bytes)?;
+    REGISTRY_DIR_UNSYNCED.store(false, Ordering::Release);
+    Ok(())
+}
+
+fn record_pending_create(
+    base: &Path,
+    reg: &RegistryFile,
+    pending: PendingCreate,
+) -> Result<()> {
+    let mut list = read_pending_creates(base)?;
+    list.retain(|e| {
+        e.universe == pending.universe
+            && e.id != pending.id
+            && !reg
+                .entries
+                .iter()
+                .any(|r| r.id == e.id && r.state == NsLifecycleState::Established)
+    });
+    list.push(pending);
+    save_pending_creates(base, &list)
+}
+
+fn clear_pending_create(base: &Path, id: NsId) -> Result<()> {
+    let mut list = read_pending_creates(base)?;
+    let before = list.len();
+    list.retain(|e| e.id != id);
+    if list.len() != before {
+        save_pending_creates(base, &list)?;
+    }
+    Ok(())
+}
 
 fn read_registry(base: &Path) -> Result<RegistryFile> {
     let bytes = match fs::read(base.join(NS_REGISTRY_REL_PATH)) {
@@ -620,10 +686,132 @@ fn cleanup_failed_root(root: &Path, preexisted: bool) {
     }
 }
 
+fn is_atomic_tmp_for(name: &str, prefix: &str) -> bool {
+    name.strip_prefix(prefix)
+        .and_then(|s| s.strip_suffix(".tmp"))
+        .and_then(|s| s.split_once('.'))
+        .is_some_and(|(pid, seq)| {
+            pid.parse::<u32>().is_ok() && seq.parse::<u64>().is_ok()
+        })
+}
+
+fn is_empty_shard_file(entry: &fs::DirEntry) -> Result<bool> {
+    if !entry.file_type()?.is_file() {
+        return Ok(false);
+    }
+    let raw = entry.file_name();
+    let Some(name) = raw.to_str() else {
+        return Ok(false);
+    };
+    let is_u64 = |s: &str| {
+        !s.is_empty()
+            && s.bytes().all(|b| b.is_ascii_digit())
+            && s.parse::<u64>().is_ok()
+    };
+    if name == "LOCK"
+        || name == "CURRENT"
+        || name == "CURRENT.tmp"
+        || name.strip_prefix("CURRENT.tmp.").is_some_and(is_u64)
+        || name.strip_prefix("MANIFEST-").is_some_and(is_u64)
+    {
+        return Ok(true);
+    }
+    if let Some(stem) = name.strip_suffix(".wal")
+        && is_u64(stem)
+    {
+        return Ok(entry.metadata()?.len() == 0);
+    }
+    Ok(false)
+}
+
+fn is_unpopulated_failed_root(
+    root: &Path,
+    universe_id: u128,
+    ns: NsId,
+    shards: usize,
+) -> Result<bool> {
+    let expected_identity = super::universe::engine_bytes(universe_id, ns, shards);
+    let mut saw_owned_artifact = false;
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            return Ok(false);
+        }
+        let name = entry.file_name();
+        if name == "__SYSTEM__" {
+            for sys in fs::read_dir(entry.path())? {
+                let sys = sys?;
+                if !sys.file_type()?.is_file() {
+                    return Ok(false);
+                }
+                let raw = sys.file_name();
+                let Some(fname) = raw.to_str() else {
+                    return Ok(false);
+                };
+                match fname {
+                    "engine_header" | "__initializing__" => {
+                        if fs::read(sys.path())? != expected_identity {
+                            return Ok(false);
+                        }
+                        saw_owned_artifact = true;
+                    }
+                    ".shards_ready" | "format_version" => {
+                        if fs::read(sys.path())? != b"18" {
+                            return Ok(false);
+                        }
+                    }
+                    "LOCK" => {}
+                    other
+                        if [
+                            "engine_header.",
+                            "__initializing__.",
+                            ".shards_ready.",
+                            "format_version.",
+                        ]
+                        .iter()
+                        .any(|p| is_atomic_tmp_for(other, p)) =>
+                    {
+                        saw_owned_artifact = true;
+                    }
+                    _ => return Ok(false),
+                }
+            }
+        } else if name == "mmdb" {
+            for shard in fs::read_dir(entry.path())? {
+                let shard = shard?;
+                if !shard.file_type()?.is_dir() {
+                    return Ok(false);
+                }
+                let raw = shard.file_name();
+                let Some(sname) = raw.to_str() else {
+                    return Ok(false);
+                };
+                if !(0..shards).any(|i| sname == format!("shard_{i:02}")) {
+                    return Ok(false);
+                }
+                for file in fs::read_dir(shard.path())? {
+                    if !is_empty_shard_file(&file?)? {
+                        return Ok(false);
+                    }
+                }
+            }
+        } else {
+            return Ok(false);
+        }
+    }
+    Ok(saw_owned_artifact
+        || super::universe::validate_pending_root(root, universe_id, ns, shards).is_ok())
+}
+
 /// Reclaims a non-empty explicit root left behind when an earlier failed
 /// creation rolled back its registry entry, after `load_registry` has durably
-/// synchronized `__SYSTEM__` and confirmed the burnt ID is absent.
-fn reclaim_unregistered_owned_root(root: &Path, reg: &RegistryFile) -> Result<()> {
+/// synchronized `__SYSTEM__` and confirmed the matching pending-creation
+/// record's burnt ID is absent and the root contains no user data or sidecars.
+fn reclaim_unregistered_owned_root(
+    base: &Path,
+    root: &Path,
+    reg: &RegistryFile,
+) -> Result<()> {
     let mut entries = match fs::read_dir(root) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
         Ok(entries) => entries,
@@ -639,29 +827,24 @@ fn reclaim_unregistered_owned_root(root: &Path, reg: &RegistryFile) -> Result<()
     let is_unregistered_burnt = |id: NsId| {
         id != DEFAULT_NS_ID && id < reg.next_id && reg.entries.iter().all(|r| r.id != id)
     };
-    let parse_owned = |path: &Path| -> Option<(NsId, usize)> {
-        let bytes = fs::read(path).ok()?;
-        if bytes.len() != 36 || &bytes[..8] != b"VSENG018" {
-            return None;
-        }
-        let uid = u128::from_le_bytes(bytes[8..24].try_into().unwrap());
-        let ns = u64::from_le_bytes(bytes[24..32].try_into().unwrap());
-        let shards = u32::from_le_bytes(bytes[32..36].try_into().unwrap()) as usize;
-        (uid == universe_id && (1..=64).contains(&shards)).then_some((ns, shards))
+    let target = normalize_physical(root);
+    let pending = read_pending_creates(base)?;
+    let Some(matched) = pending.into_iter().find(|e| {
+        e.universe == universe_id
+            && (1..=64).contains(&(e.shards as usize))
+            && is_unregistered_burnt(e.id)
+            && normalize_physical(Path::new(&e.path)) == target
+    }) else {
+        return Ok(());
     };
-    let header = root.join("__SYSTEM__/engine_header");
-    let sentinel = root.join("__SYSTEM__/__initializing__");
-    let owned = if let Some((ns, _)) = parse_owned(&header) {
-        is_unregistered_burnt(ns)
-    } else if let Some((ns, _)) = parse_owned(&sentinel) {
-        is_unregistered_burnt(ns)
-    } else {
-        !header.exists()
-            && !sentinel.exists()
-            && super::universe::validate_pending_root(root, universe_id, 1, 1).is_ok()
-    };
-    if owned {
+    if is_unpopulated_failed_root(
+        root,
+        universe_id,
+        matched.id,
+        matched.shards as usize,
+    )? {
         cleanup_failed_root(root, true);
+        let _ = clear_pending_create(base, matched.id);
     }
     Ok(())
 }
@@ -786,7 +969,7 @@ impl Namespace {
         let mut root_preexisted = false;
         if let Some(p) = &opts.path {
             validate_explicit_root(&base, &reg, p)?;
-            reclaim_unregistered_owned_root(p, &reg)?;
+            reclaim_unregistered_owned_root(&base, p, &reg)?;
             root_preexisted = ensure_root_adoptable(p)?;
         }
 
@@ -818,12 +1001,34 @@ impl Namespace {
             .checked_add(1)
             .ok_or_else(|| ns_err("namespace id space exhausted"))?;
         reg.entries.push(rec.clone());
-        save_registry(&reg)?;
+        if let Some(path) = &rec.path {
+            record_pending_create(
+                &base,
+                &reg,
+                PendingCreate {
+                    universe: super::universe::active()?.id,
+                    id,
+                    shards: shards as u32,
+                    path: path.clone(),
+                },
+            )?;
+        }
+        if let Err(err) = save_registry(&reg) {
+            if rec.path.is_some() {
+                let _ = clear_pending_create(&base, id);
+            }
+            return Err(err);
+        }
         #[cfg(test)]
         tests::interrupt_creation_after_pending(id);
 
         match open_record_locked(&base, &rec, &root) {
-            Ok(ns) => Ok(ns),
+            Ok(ns) => {
+                if rec.path.is_some() {
+                    let _ = clear_pending_create(&base, id);
+                }
+                Ok(ns)
+            }
             Err(e) => {
                 // Non-crash open failure (bad path, disk full, …): roll
                 // the entry back so a failed `create` leaves no registry
@@ -850,6 +1055,9 @@ impl Namespace {
                     // A second universe can race for the same explicit root.
                     // Only reclaim empty residue or our own initializer/header.
                     cleanup_failed_root(&root, root_preexisted);
+                    if rec.path.is_some() {
+                        let _ = clear_pending_create(&base, id);
+                    }
                 }
                 Err(e)
             }
@@ -1197,6 +1405,7 @@ impl Namespace {
         } else {
             None
         };
+        clear_pending_create(&base, id)?;
         reg.entries.remove(pos);
         save_registry(&reg)?;
         if link_meta.is_some_and(|m| m.file_type().is_symlink()) {

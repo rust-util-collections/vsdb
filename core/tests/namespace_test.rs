@@ -8,7 +8,10 @@
 #[path = "common/scratch.rs"]
 mod scratch;
 
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 use vsdb_core::{
     DEFAULT_NS_ID, InstanceId, Namespace, NamespaceOpts, basic::mapx_raw::MapxRaw,
 };
@@ -507,8 +510,124 @@ fn namespace_lifecycle() {
     Namespace::close_by_id(pid).unwrap();
     Namespace::destroy(pid).unwrap();
 
+    verify_retired_namespace_backup_preserved();
+
     fs::remove_dir_all(&dir).ok();
     // Sibling scratch dirs created by the sub-scenarios above.
     fs::remove_dir_all(dir.with_extension("mnt")).ok();
     fs::remove_dir_all(dir.with_extension("ro_parent")).ok();
+}
+
+fn copy_tree_snapshot(src: &Path, dst: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut files = Vec::new();
+    let mut dirs = vec![PathBuf::new()];
+    while let Some(rel) = dirs.pop() {
+        fs::create_dir_all(dst.join(&rel)).unwrap();
+        let mut entries: Vec<_> = fs::read_dir(src.join(&rel))
+            .unwrap()
+            .map(|e| e.unwrap())
+            .collect();
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries {
+            let child = rel.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                dirs.push(child);
+            } else {
+                let bytes = fs::read(entry.path()).unwrap();
+                fs::write(dst.join(&child), &bytes).unwrap();
+                files.push((child, bytes));
+            }
+        }
+    }
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    files
+}
+
+fn snapshot_tree(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut files = Vec::new();
+    let mut dirs = vec![PathBuf::new()];
+    while let Some(rel) = dirs.pop() {
+        for entry in fs::read_dir(root.join(&rel)).unwrap() {
+            let entry = entry.unwrap();
+            let child = rel.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                dirs.push(child);
+            } else {
+                files.push((child, fs::read(entry.path()).unwrap()));
+            }
+        }
+    }
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    files
+}
+
+fn verify_retired_namespace_backup_preserved() {
+    let scratch = std::env::temp_dir()
+        .join(format!("vsdb_retired_backup_{}", rand::random::<u128>()));
+    let explicit = scratch.join("origin");
+    let backup = scratch.join("backup");
+    let restored_origin = scratch.join("restored_origin");
+    fs::create_dir_all(&scratch).unwrap();
+
+    let ns = Namespace::create_with(NamespaceOpts {
+        path: Some(explicit.clone()),
+        shards: 2,
+        mem_budget_mb: Some(16),
+    })
+    .unwrap();
+    let id = ns.id();
+    let mut map = MapxRaw::new_in(&ns);
+    for i in 0..32u32 {
+        map.insert(i.to_be_bytes(), [i as u8; 256]);
+    }
+    let _ = map.save_meta().unwrap();
+    ns.flush();
+    drop(map);
+    ns.close().unwrap();
+
+    fs::write(explicit.join("operator-backup-note.txt"), b"do-not-delete").unwrap();
+    fs::write(
+        explicit.join("mmdb/shard_00/sidecar.bin"),
+        b"shard-sidecar-bytes",
+    )
+    .unwrap();
+
+    let expected_backup = copy_tree_snapshot(&explicit, &backup);
+    let expected_origin = copy_tree_snapshot(&explicit, &restored_origin);
+    assert!(
+        expected_backup
+            .iter()
+            .any(|(p, _)| p.extension().is_some_and(|e| e == "sst")),
+        "expected flushed SST files in backup snapshot"
+    );
+
+    Namespace::destroy(id).unwrap();
+    assert!(!explicit.exists());
+
+    // Passing the backup directory as a new explicit root must fail and
+    // preserve every shard file and application sidecar byte for byte.
+    assert!(
+        Namespace::create_with(NamespaceOpts {
+            path: Some(backup.clone()),
+            shards: 2,
+            mem_budget_mb: Some(16),
+        })
+        .is_err()
+    );
+    assert_eq!(snapshot_tree(&backup), expected_backup);
+
+    // Even if the backup is placed back at the retired namespace's original
+    // explicit path, creation must reject it without deleting any file.
+    fs::rename(&restored_origin, &explicit).unwrap();
+    assert!(
+        Namespace::create_with(NamespaceOpts {
+            path: Some(explicit.clone()),
+            shards: 2,
+            mem_budget_mb: Some(16),
+        })
+        .is_err()
+    );
+    assert_eq!(snapshot_tree(&explicit), expected_origin);
+
+    fs::remove_dir_all(&scratch).unwrap();
 }
