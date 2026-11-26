@@ -2755,3 +2755,40 @@ fn mutations_propagate_key_encoding_errors_without_publishing_rows() {
     assert_eq!(idx.len(), 1);
     assert_eq!(idx.store.iter().collect::<Vec<_>>(), before);
 }
+
+#[test]
+fn entry_point_repair_rejects_missing_or_unissued_node_info_before_commit() {
+    let mut idx = VecDex::<u64, L2>::new(HnswConfig {
+        dim: 2,
+        ..Default::default()
+    })
+    .unwrap();
+    insert_at_layer(&mut idx, 0, &[0.0, 0.0], 0);
+    insert_at_layer(&mut idx, 1, &[1.0, 1.0], 0);
+    let id = idx.save_meta().unwrap();
+    assert_eq!(idx.state().entry_point, Some(0));
+
+    // Corrupt by removing the surviving vector's node-info row while keeping
+    // the two-vector graph searchable.
+    idx.store.remove(node_key(TAG_INFO, 1));
+    assert_eq!(idx.search(&[1.0, 1.0], 2).unwrap().len(), 2);
+    let before = idx.store.iter().collect::<Vec<_>>();
+
+    assert!(matches!(idx.remove(&0), Err(VsdbError::Corrupt { .. })));
+    assert!(matches!(
+        idx.insert(&0, &[2.0, 2.0]),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    assert_eq!(idx.store.iter().collect::<Vec<_>>(), before);
+    assert_eq!(idx.search(&[1.0, 1.0], 2).unwrap().len(), 2);
+    let reopened = VecDex::<u64, L2>::from_meta(id).unwrap();
+    assert_eq!(reopened.len(), 2);
+    assert_eq!(reopened.search(&[1.0, 1.0], 2).unwrap().len(), 2);
+
+    // Restore node 1's info row and inject an unissued node-info ID.
+    idx.store.insert(node_key(TAG_INFO, 1), encode_value(&0u8));
+    idx.store.insert(node_key(TAG_INFO, 99), encode_value(&0u8));
+    let before_unissued = idx.store.iter().collect::<Vec<_>>();
+    assert!(matches!(idx.remove(&0), Err(VsdbError::Corrupt { .. })));
+    assert_eq!(idx.store.iter().collect::<Vec<_>>(), before_unissued);
+}

@@ -1418,9 +1418,17 @@ where
         let mut live = Vec::new();
         for (key, value) in txn.rows.scan_prefix(txn.store, &[TAG_INFO]) {
             let id = decode_info_key(&key)?;
+            if id >= txn.state.next_node_id {
+                return Err(corrupt("VecDex node-info ID exceeds the issued range"));
+            }
             if txn.get(&node_key(TAG_VEC, id)).is_some() {
                 live.push((id, decode_layer(&value)?));
             }
+        }
+        if live.len() as u64 != txn.state.node_count {
+            return Err(corrupt(
+                "VecDex live node-info count disagrees with graph state",
+            ));
         }
         let Some(true_max) = live.iter().map(|(_, layer)| *layer).max() else {
             txn.state.entry_point = None;
