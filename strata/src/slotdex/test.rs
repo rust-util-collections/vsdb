@@ -1483,3 +1483,51 @@ fn large_tier_restore_checks_the_streamed_tail() {
     ));
     assert_eq!(index.store.get(last), Some(vec![1]));
 }
+
+#[test]
+fn failed_clone_in_wipes_copied_destination_prefix() {
+    use serde::{
+        Deserialize,
+        de::value::{BytesDeserializer, Error as ValueError},
+    };
+
+    let dst = crate::Namespace::create().unwrap();
+    let dst_id = dst.id();
+    let open_prefix = |map_id: u64| -> MapxRaw {
+        let frame = [
+            b"VSMAPX02".as_slice(),
+            &map_id.to_le_bytes(),
+            &dst_id.to_le_bytes(),
+        ]
+        .concat();
+        MapxRaw::deserialize(BytesDeserializer::<ValueError>::new(&frame)).unwrap()
+    };
+
+    // Case 1: corrupt TOTAL_KEY fails before hydration.
+    let mut bad_total = SlotDex64::<u64>::new(4, false).unwrap();
+    bad_total.insert_batch((0..20).map(|k| (k, k))).unwrap();
+    bad_total.store.insert(TOTAL_KEY, [0xaa; 3]);
+    let base = MapxRaw::new_in(&dst).instance_id().map_id;
+    assert!(matches!(
+        bad_total.clone_in(&dst),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    assert_eq!(MapxRaw::new_in(&dst).instance_id().map_id, base + 2);
+    assert_eq!(open_prefix(base + 1).iter().count(), 0);
+
+    // Case 2: corrupt tier row fails during hydration after TOTAL_KEY rewrite.
+    let mut bad_tier = SlotDex64::<u64>::new(2, false).unwrap();
+    bad_tier.insert_batch((0..16).map(|k| (k, k))).unwrap();
+    bad_tier.store.insert(level_key(1, &0u64), [1]);
+    let base = MapxRaw::new_in(&dst).instance_id().map_id;
+    assert!(matches!(
+        bad_tier.clone_in(&dst),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    assert_eq!(MapxRaw::new_in(&dst).instance_id().map_id, base + 2);
+    assert_eq!(open_prefix(base + 1).iter().count(), 0);
+
+    drop(dst);
+    crate::Namespace::close_by_id(dst_id).unwrap();
+    crate::Namespace::destroy(dst_id).unwrap();
+}

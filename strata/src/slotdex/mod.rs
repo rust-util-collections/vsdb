@@ -369,16 +369,8 @@ where
         Self::hydrate(store, capacity, swap)
     }
     fn hydrate(store: MapxRaw, tier_capacity: u32, swap_order: bool) -> Result<Self> {
-        let view = store.read_view();
-        let (total_cache, generation) = read_total(view.get(TOTAL_KEY))?;
-        let levels = Self::load_levels(&view, tier_capacity)?;
-        let slot_rows = if levels.is_empty() {
-            view.range(level_prefix(0)..level_prefix(1))
-                .try_fold(0, |n, (k, v)| checked_level_row::<S>(&k, &v).map(|_| n + 1))?
-        } else {
-            0
-        };
-        drop(view);
+        let (total_cache, generation, levels, slot_rows) =
+            Self::load_cached_state(&store, tier_capacity)?;
         Ok(Self {
             store,
             tier_capacity,
@@ -389,6 +381,22 @@ where
             slot_rows,
             _p: PhantomData,
         })
+    }
+
+    fn load_cached_state(
+        store: &MapxRaw,
+        tier_capacity: u32,
+    ) -> Result<(EntryCnt, u64, Vec<Level<S>>, EntryCnt)> {
+        let view = store.read_view();
+        let (total_cache, generation) = read_total(view.get(TOTAL_KEY))?;
+        let levels = Self::load_levels(&view, tier_capacity)?;
+        let slot_rows = if levels.is_empty() {
+            view.range(level_prefix(0)..level_prefix(1))
+                .try_fold(0, |n, (k, v)| checked_level_row::<S>(&k, &v).map(|_| n + 1))?
+        } else {
+            0
+        };
+        Ok((total_cache, generation, levels, slot_rows))
     }
 
     fn load_levels(
@@ -427,11 +435,29 @@ where
     /// Deep-copies the captured state into a fresh prefix in `ns`.
     pub fn clone_in(&self, ns: &crate::common::Namespace) -> Result<Self> {
         let mut store = self.store.clone_in(ns)?;
-        let (total, _) = read_total(store.get(TOTAL_KEY))?;
-        let mut batch = store.batch();
-        batch.insert(TOTAL_KEY, total_record(total, 0));
-        batch.commit()?;
-        Self::hydrate(store, self.tier_capacity, self.swap_order)
+        let init = (|| -> Result<_> {
+            let (total, _) = read_total(store.get(TOTAL_KEY))?;
+            let mut batch = store.batch();
+            batch.insert(TOTAL_KEY, total_record(total, 0));
+            batch.commit()?;
+            Self::load_cached_state(&store, self.tier_capacity)
+        })();
+        match init {
+            Ok((total_cache, generation, levels, slot_rows)) => Ok(Self {
+                store,
+                tier_capacity: self.tier_capacity,
+                swap_order: self.swap_order,
+                total_cache,
+                generation,
+                levels,
+                slot_rows,
+                _p: PhantomData,
+            }),
+            Err(err) => {
+                let _ = store.batch_wiped().commit();
+                Err(err)
+            }
+        }
     }
 
     fn check_generation(&self) -> Result<()> {

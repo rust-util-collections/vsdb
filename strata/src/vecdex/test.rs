@@ -2792,3 +2792,45 @@ fn entry_point_repair_rejects_missing_or_unissued_node_info_before_commit() {
     assert!(matches!(idx.remove(&0), Err(VsdbError::Corrupt { .. })));
     assert_eq!(idx.store.iter().collect::<Vec<_>>(), before_unissued);
 }
+
+#[test]
+fn failed_clone_in_wipes_copied_destination_prefix() {
+    use serde::{
+        Deserialize,
+        de::value::{BytesDeserializer, Error as ValueError},
+    };
+
+    let mut idx = VecDex::<u64, L2>::new(HnswConfig {
+        dim: 2,
+        ..Default::default()
+    })
+    .unwrap();
+    for k in 0..16u64 {
+        idx.insert(&k, &[k as f32, 1.0]).unwrap();
+    }
+    // Corrupt STATE_KEY after creation so raw copy succeeds and post-copy
+    // validation rejects the destination handle.
+    idx.store.insert(STATE_KEY, [0xff; 5]);
+
+    let dst = crate::Namespace::create().unwrap();
+    let dst_id = dst.id();
+    let probe0 = MapxRaw::new_in(&dst).instance_id().map_id;
+    for attempt in 0..2u64 {
+        assert!(matches!(idx.clone_in(&dst), Err(VsdbError::Corrupt { .. })));
+        let allocated = probe0 + 1 + attempt * 2;
+        let marker = MapxRaw::new_in(&dst).instance_id().map_id;
+        assert_eq!(marker, allocated + 1);
+        let frame = [
+            b"VSMAPX02".as_slice(),
+            &allocated.to_le_bytes(),
+            &dst_id.to_le_bytes(),
+        ]
+        .concat();
+        let raw =
+            MapxRaw::deserialize(BytesDeserializer::<ValueError>::new(&frame)).unwrap();
+        assert_eq!(raw.iter().count(), 0);
+    }
+    drop(dst);
+    crate::Namespace::close_by_id(dst_id).unwrap();
+    crate::Namespace::destroy(dst_id).unwrap();
+}

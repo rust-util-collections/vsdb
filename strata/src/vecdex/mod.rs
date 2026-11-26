@@ -761,6 +761,16 @@ where
     }
 
     fn hydrate(store: MapxRaw, binding: &[u8]) -> Result<Self> {
+        let (config, metric) = Self::validate_store(&store, binding)?;
+        Ok(Self {
+            store,
+            config,
+            metric,
+            _p: PhantomData,
+        })
+    }
+
+    fn validate_store(store: &MapxRaw, binding: &[u8]) -> Result<(HnswConfig, D)> {
         let schema = store
             .get(META_KEY)
             .ok_or_else(|| corrupt("missing VecDex schema"))?;
@@ -788,12 +798,7 @@ where
         };
         config.validate()?;
         GraphState::read(store.get(STATE_KEY))?;
-        Ok(Self {
-            store,
-            config,
-            metric,
-            _p: PhantomData,
-        })
+        Ok((config, metric))
     }
 
     fn state(&self) -> GraphState {
@@ -802,7 +807,20 @@ where
 
     /// Deep-copies the entire index, preserving its graph, into a fresh prefix.
     pub fn clone_in(&self, ns: &crate::Namespace) -> Result<Self> {
-        Self::hydrate(self.store.clone_in(ns)?, &schema_binding(&self.schema()?))
+        let binding = schema_binding(&self.schema()?);
+        let mut store = self.store.clone_in(ns)?;
+        match Self::validate_store(&store, &binding) {
+            Ok((config, metric)) => Ok(Self {
+                store,
+                config,
+                metric,
+                _p: PhantomData,
+            }),
+            Err(err) => {
+                let _ = store.batch_wiped().commit();
+                Err(err)
+            }
+        }
     }
 
     /// Returns the unique instance ID.

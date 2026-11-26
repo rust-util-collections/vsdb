@@ -218,7 +218,26 @@ impl<K, V> Clone for VerMap<K, V> {
 impl<K, V> VerMap<K, V> {
     /// Deep-copies the complete working state and retained history into `ns`.
     pub fn clone_in(&self, ns: &crate::common::Namespace) -> Result<Self> {
-        Self::open(self.tree.nodes.clone_in(ns)?, true)
+        Self::open_or_wipe(self.tree.nodes.clone_in(ns)?, true)
+    }
+
+    fn open_or_wipe(mut store: MapxRaw, deep: bool) -> Result<Self> {
+        let header = match Header::get(&store) {
+            Ok(header) => header,
+            Err(err) => {
+                let _ = store.batch_wiped().commit();
+                return Err(err);
+            }
+        };
+        let mut m = Self {
+            tree: PersistentBTree::version_store(store, header.next_id),
+            _phantom: PhantomData,
+        };
+        if let Err(err) = m.recover(deep) {
+            let _ = m.tree.nodes.batch_wiped().commit();
+            return Err(err);
+        }
+        Ok(m)
     }
 
     pub(crate) fn open(store: MapxRaw, deep: bool) -> Result<Self> {

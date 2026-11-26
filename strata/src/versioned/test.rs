@@ -5519,3 +5519,61 @@ fn working_read_detects_wrong_leaf_class_and_an_out_of_bounds_slot() {
         assert_eq!(map.get_branch(branch).unwrap(), head);
     }
 }
+
+#[test]
+fn failed_clone_in_wipes_copied_destination_prefix() {
+    use crate::basic::persistent_btree::object_key;
+    use serde::{
+        Deserialize,
+        de::value::{BytesDeserializer, Error as ValueError},
+    };
+
+    let dst = crate::Namespace::create().unwrap();
+    let dst_id = dst.id();
+    let open_prefix = |map_id: u64| -> crate::MapxRaw {
+        let frame = [
+            b"VSMAPX02".as_slice(),
+            &map_id.to_le_bytes(),
+            &dst_id.to_le_bytes(),
+        ]
+        .concat();
+        crate::MapxRaw::deserialize(BytesDeserializer::<ValueError>::new(&frame))
+            .unwrap()
+    };
+
+    // Case 1: corrupt HEADER fails before PersistentBTree construction.
+    let mut bad_hdr = VerMap::<u64, u64>::new();
+    let main = bad_hdr.main_branch();
+    bad_hdr.insert(main, &1, &10).unwrap();
+    bad_hdr.tree.nodes.insert(super::store::HEADER, [0xff; 4]);
+    let base = crate::MapxRaw::new_in(&dst).instance_id().map_id;
+    assert!(matches!(
+        bad_hdr.clone_in(&dst),
+        Err(crate::VsdbError::Corrupt { .. })
+    ));
+    assert_eq!(crate::MapxRaw::new_in(&dst).instance_id().map_id, base + 2);
+    assert_eq!(open_prefix(base + 1).iter().count(), 0);
+
+    // Case 2: corrupt reachable page fails deep verification in recover(true).
+    let mut bad_page = VerMap::<u64, u64>::new();
+    let main = bad_page.main_branch();
+    bad_page
+        .bulk_load(main, (0..128u64).map(|k| (k, k * 3)))
+        .unwrap();
+    bad_page.commit(main).unwrap();
+    let root = bad_page.get_branch(main).unwrap().dirty_root;
+    bad_page.tree.nodes.insert(object_key(root), [0x18, 0]);
+    for _ in 0..2 {
+        let base = crate::MapxRaw::new_in(&dst).instance_id().map_id;
+        assert!(matches!(
+            bad_page.clone_in(&dst),
+            Err(crate::VsdbError::Corrupt { .. })
+        ));
+        assert_eq!(crate::MapxRaw::new_in(&dst).instance_id().map_id, base + 2);
+        assert_eq!(open_prefix(base + 1).iter().count(), 0);
+    }
+
+    drop(dst);
+    crate::Namespace::close_by_id(dst_id).unwrap();
+    crate::Namespace::destroy(dst_id).unwrap();
+}
