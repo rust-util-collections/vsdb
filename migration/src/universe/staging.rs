@@ -571,7 +571,19 @@ fn stage(
         for n in 0..*shards {
             let relative = format!("mmdb/shard_{n:02}");
             let copy = dst.join(&relative);
-            if copy.join("CURRENT").is_file() {
+            let current = copy.join("CURRENT");
+            let anchored = match fs::symlink_metadata(&current) {
+                Ok(m) if m.file_type().is_file() => true,
+                Ok(_) => {
+                    return Err(corrupt(format!(
+                        "invalid shard anchor at {}",
+                        current.display()
+                    )));
+                }
+                Err(e) if e.kind() == io::ErrorKind::NotFound => false,
+                Err(e) => return Err(e.into()),
+            };
+            if anchored {
                 export_shard(&copy, ceiling)?;
                 completed(Step::Shard)?;
             } else if copy.try_exists()? {

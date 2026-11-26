@@ -463,8 +463,8 @@ impl MmDB {
     /// Batch version of [`lazy_delete`](Self::lazy_delete).
     ///
     /// All keys share the same prefix (and therefore the same shard).
-    /// Triggers auto-compaction when the dead-key count crosses the
-    /// threshold configured in `DbOptions`.
+    /// Registered keys are dropped lazily during organic level compaction;
+    /// automatic dead-key sweep compaction is disabled (`lazy_delete_compaction_threshold = 0`).
     pub(crate) fn lazy_delete_batch(
         &self,
         meta_prefix: PreBytes,
@@ -1214,12 +1214,22 @@ fn scan_shard_layout(mmdb_dir: &Path, shards: usize) -> Result<ShardScan> {
 fn validate_shard_anchors(mmdb_dir: &Path, shards: usize) -> Result<()> {
     for i in 0..shards {
         let current = mmdb_dir.join(format!("shard_{i:02}")).join("CURRENT");
-        if !current.is_file() {
-            return Err(corrupt(format!(
-                "damaged dataset at {}: shard_{i:02} has no MMDB CURRENT \
-                 anchor — refusing to recreate it as an empty shard",
-                mmdb_dir.display()
-            )));
+        match fs::symlink_metadata(&current) {
+            Ok(m) if m.file_type().is_file() => {}
+            Ok(_) => {
+                return Err(corrupt(format!(
+                    "invalid shard anchor {}",
+                    current.display()
+                )));
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                return Err(corrupt(format!(
+                    "damaged dataset at {}: shard_{i:02} has no MMDB CURRENT \
+                     anchor — refusing to recreate it as an empty shard",
+                    mmdb_dir.display()
+                )));
+            }
+            Err(e) => return Err(e.into()),
         }
     }
     Ok(())

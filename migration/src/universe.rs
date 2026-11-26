@@ -579,7 +579,18 @@ impl Engine {
             if self.initializing && !dir.try_exists()? {
                 continue;
             }
-            let anchored = dir.join("CURRENT").is_file();
+            let current_path = dir.join("CURRENT");
+            let anchored = match fs::symlink_metadata(&current_path) {
+                Ok(m) if m.file_type().is_file() => true,
+                Ok(_) => {
+                    return Err(corrupt(format!(
+                        "invalid shard anchor at {}",
+                        current_path.display()
+                    )));
+                }
+                Err(e) if e.kind() == io::ErrorKind::NotFound => false,
+                Err(e) => return Err(e.into()),
+            };
             if !anchored && !self.initializing {
                 return Err(corrupt(format!(
                     "missing shard anchor at {}",

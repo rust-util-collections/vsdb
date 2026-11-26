@@ -317,3 +317,63 @@ fn named_budget_floor_is_preserved_through_reopen() {
         reopened.close().unwrap();
     }
 }
+
+#[test]
+fn shard_preflight_classifies_corrupt_anchors_and_io_permissions() {
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    common::setup();
+    let ns = Namespace::create_with(NamespaceOpts {
+        shards: 2,
+        mem_budget_mb: Some(16),
+        ..Default::default()
+    })
+    .unwrap();
+    let id = ns.id();
+    let shard0 = ns.path().join("mmdb/shard_00");
+    ns.close().unwrap();
+
+    let current = shard0.join("CURRENT");
+    let saved_current = fs::read(&current).unwrap();
+    let manifest_name = std::str::from_utf8(&saved_current)
+        .unwrap()
+        .trim_end_matches(['\r', '\n'])
+        .to_owned();
+    let manifest = shard0.join(&manifest_name);
+    let saved_manifest = fs::read(&manifest).unwrap();
+
+    // 1. Invalid UTF-8 in CURRENT must report VsdbError::Corrupt (not Io).
+    fs::write(&current, [0xff, 0xfe, b'\n']).unwrap();
+    assert!(matches!(
+        Namespace::open(id),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    fs::write(&current, &saved_current).unwrap();
+
+    // 2. Missing MANIFEST selected by CURRENT must report VsdbError::Corrupt.
+    fs::remove_file(&manifest).unwrap();
+    assert!(matches!(
+        Namespace::open(id),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    fs::write(&manifest, &saved_manifest).unwrap();
+
+    // 3. Unreadable shard directory (EACCES on CURRENT stat) must report
+    // VsdbError::Io rather than misclassifying permission loss as Corrupt.
+    #[cfg(unix)]
+    {
+        let orig_mode = fs::metadata(&shard0).unwrap().permissions().mode();
+        fs::set_permissions(&shard0, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::symlink_metadata(&current).is_err() {
+            let err = Namespace::open(id).unwrap_err();
+            assert!(matches!(err, VsdbError::Io(_)), "got {err:?}");
+        }
+        fs::set_permissions(&shard0, fs::Permissions::from_mode(orig_mode)).unwrap();
+    }
+
+    let reopened = Namespace::open(id).unwrap();
+    reopened.close().unwrap();
+    Namespace::destroy(id).unwrap();
+}

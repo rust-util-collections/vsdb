@@ -454,3 +454,48 @@ fn legacy_allocator_fold_precedes_v17_ownership_checks_but_cannot_mask_a_stale_v
     assert!(!rejected.exists());
     assert_eq!(inventory(&input), before);
 }
+
+#[test]
+fn migrate_and_stage_reject_non_file_current_and_preserve_io_errors() {
+    #[cfg(unix)]
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let input = tmp.path().join("v17");
+    let files: Vec<(&str, &[u8])> =
+        postcard::from_bytes(include_bytes!("fixtures/tree-v17.postcard")).unwrap();
+    for (name, bytes) in files {
+        let path = input.join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, bytes).unwrap();
+    }
+
+    let shard0 = input.join("mmdb/shard_00");
+    let current = shard0.join("CURRENT");
+    let saved_current = fs::read(&current).unwrap();
+
+    // Symlink CURRENT must be rejected as Corrupt rather than followed.
+    #[cfg(unix)]
+    {
+        let target = shard0.join("CURRENT.real");
+        fs::write(&target, &saved_current).unwrap();
+        fs::remove_file(&current).unwrap();
+        symlink(&target, &current).unwrap();
+        assert!(matches!(
+            vsdb_migrate::migrate_universe(&input),
+            Err(vsdb::VsdbError::Corrupt { .. })
+        ));
+        fs::remove_file(&current).unwrap();
+        fs::remove_file(&target).unwrap();
+        fs::write(&current, &saved_current).unwrap();
+
+        // PermissionDenied on shard_00 must surface as VsdbError::Io, not Corrupt.
+        let orig_mode = fs::metadata(&shard0).unwrap().permissions().mode();
+        fs::set_permissions(&shard0, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::symlink_metadata(&current).is_err() {
+            let err = vsdb_migrate::migrate_universe(&input).unwrap_err();
+            assert!(matches!(err, vsdb::VsdbError::Io(_)), "got {err:?}");
+        }
+        fs::set_permissions(&shard0, fs::Permissions::from_mode(orig_mode)).unwrap();
+    }
+}
