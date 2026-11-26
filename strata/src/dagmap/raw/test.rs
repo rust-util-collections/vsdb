@@ -946,3 +946,43 @@ fn prune_returns_marker_write_error_and_can_resume() {
     assert_eq!(merged.get(b"edited").as_deref(), Some(b"value".as_slice()));
     assert!(merged.child_ids().is_empty());
 }
+
+#[test]
+fn partial_markers_and_intermediate_destroy_preserve_merged_state_and_retry() {
+    // Case 1: interrupted mark pass left `head` in State::Clearing while `mid`
+    // remained State::Child. Calling `mid.prune()` must finish clearing `[mid, head]`
+    // without destroying `survivor` or re-folding stale `mid` values over `root`.
+    let (root, mid, mut head) = build_prune_fixture();
+    let mut survivor = DagMapRaw::new(Some(&mut head));
+    survivor.insert("survivor", "value");
+    {
+        let (mut line, mut genesis) = head.open(head.id()).unwrap().mainline().unwrap();
+        DagMapRaw::fold(&line, &mut genesis).unwrap();
+        line[0].reparent(&mut genesis).unwrap();
+        DagMapRaw::mark(&mut line[..1], root.id()).unwrap();
+    }
+    let recovered = mid.open(mid.id()).unwrap().prune().unwrap();
+    assert_eq!(recovered.id(), root.id());
+    assert_merged_view(&recovered);
+    assert_merged_view(&survivor);
+    assert_eq!(
+        survivor.get("survivor").as_deref(),
+        Some(b"value".as_slice())
+    );
+    assert!(mid.is_dead());
+    assert!(head.is_dead());
+    assert_eq!(head.prune().unwrap().id(), root.id());
+
+    // Case 2: `mid.destroy()` before `clear_line()` must wipe `mid` and `head`
+    // data/edges without erasing `head`'s State::Clearing retry target.
+    let (root2, mut mid2, mut head2) = build_prune_fixture();
+    let survivor2 = DagMapRaw::new(Some(&mut head2));
+    prepare_marked_clear(&mut head2);
+    mid2.destroy();
+    assert!(mid2.is_dead());
+    assert!(head2.is_dead());
+    let recovered2 = head2.prune().unwrap();
+    assert_eq!(recovered2.id(), root2.id());
+    assert_merged_view(&recovered2);
+    assert_merged_view(&survivor2);
+}

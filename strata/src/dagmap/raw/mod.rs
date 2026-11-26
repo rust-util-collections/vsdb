@@ -412,9 +412,11 @@ impl DagMapRaw {
                 continue;
             }
             pending.extend(node.links().filter_map(|(edge, id)| node.owned(edge, id)));
-            meta.state = State::Destroying(meta.state.owner());
             let mut batch = node.store.batch();
-            batch.insert(META, meta.bytes());
+            if !matches!(meta.state, State::Clearing { .. }) {
+                meta.state = State::Destroying(meta.state.owner());
+                batch.insert(META, meta.bytes());
+            }
             batch.delete_range(&DATA, &END);
             batch.commit()?;
             marked.push(node);
@@ -437,10 +439,12 @@ impl DagMapRaw {
     }
     fn finish_destroy(&mut self) -> Result<()> {
         let mut meta = self.meta()?;
-        meta.state = State::Destroyed;
         let mut batch = self.store.batch();
         batch.delete_range(&EDGE, &DATA);
-        batch.insert(META, meta.bytes());
+        if !matches!(meta.state, State::Clearing { .. }) {
+            meta.state = State::Destroyed;
+            batch.insert(META, meta.bytes());
+        }
         batch.commit()
     }
     /// Destroys the owned subtree and durably unlinks it from its parent.
@@ -499,6 +503,7 @@ impl DagMapRaw {
                 match (state, p.meta()?.state) {
                     (State::Clearing { genesis, .. }, State::Root)
                         if genesis == p.id() => {}
+                    (State::Clearing { .. }, State::Child(_)) => {}
                     (
                         State::Clearing { genesis, .. },
                         State::Clearing { genesis: other, .. },
@@ -605,6 +610,40 @@ impl DagMapRaw {
         }
         Ok(())
     }
+    fn collect_marked_below_head(line: &mut Vec<Self>, genesis: u64) -> Result<bool> {
+        fn dfs(
+            node: &DagMapRaw,
+            genesis: u64,
+            seen: &mut HashSet<u64>,
+            out: &mut Vec<DagMapRaw>,
+        ) -> Result<bool> {
+            let mut has_marked = false;
+            for (edge, id) in node.links() {
+                if !seen.insert(id) {
+                    continue;
+                }
+                let Some(child) = node.owned(edge, id) else {
+                    continue;
+                };
+                let child_marked = matches!(
+                    child.meta()?.state,
+                    State::Clearing { genesis: g, .. } if g == genesis
+                );
+                let sub_marked = dfs(&child, genesis, seen, out)?;
+                if child_marked || sub_marked {
+                    out.push(child);
+                    has_marked = true;
+                }
+            }
+            Ok(has_marked)
+        }
+
+        let mut seen: HashSet<_> = line.iter().map(Self::id).collect();
+        let mut extra = Vec::new();
+        let found = dfs(&line[0], genesis, &mut seen, &mut extra)?;
+        line.extend(extra);
+        Ok(found)
+    }
     fn clear_line(line: &mut [Self], root: &mut Self) -> Result<()> {
         for node in line.iter_mut() {
             let mut batch = node.store.batch();
@@ -642,8 +681,12 @@ impl DagMapRaw {
     pub fn prune(self) -> Result<Self> {
         ensure_writable(&self.namespace(), "DAG pruning")?;
         let (mut line, mut root) = self.mainline()?;
-        if let Some((head, ancestors)) = line.split_first_mut() {
-            if head.meta()?.state.live() {
+        if !line.is_empty() {
+            let head_live = line[0].meta()?.state.live();
+            let resumed_from_ancestor =
+                head_live && Self::collect_marked_below_head(&mut line, root.id())?;
+            if head_live && !resumed_from_ancestor {
+                let (head, ancestors) = line.split_first_mut().unwrap();
                 let protected: HashSet<_> = std::iter::once(head.id())
                     .chain(ancestors.iter().map(Self::id))
                     .chain(head.links().map(|(_, id)| id))
