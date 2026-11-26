@@ -33,8 +33,9 @@ before the application's first v5 write.
    files. The preflight checks directory identities across source placements
    and the destination parent, including aliases through mount points. The target needs space for the working copy and the verified v5
    shards. The v4 data remains available for a retry. The tool takes shared
-   locks on existing universe and shard locks; immutable snapshots may omit
-   those files. Quiescence also covers external application files.
+   locks on existing universe and shard locks before inventorying the files
+   to copy. It rechecks the registry used to select those locks. Immutable
+   snapshots may omit the lock files. Quiescence also covers external application files.
 
    The new base is `/archive/generation-v5/base`. Derived namespace paths
    stay relative to that base. Explicit placements become siblings under

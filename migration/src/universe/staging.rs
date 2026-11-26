@@ -427,6 +427,7 @@ pub fn stage_universe(source: impl AsRef<Path>, destination: impl AsRef<Path>) -
 
 #[derive(Clone, Copy)]
 enum Step {
+    Inventoried,
     Copied,
     Shard,
     Publish,
@@ -464,8 +465,6 @@ fn stage(
     let root_lock = File::open(&source)?;
     root_lock.try_lock_shared().map_err(io::Error::from)?;
     let mut locks = vec![root_lock];
-    let mut visited = HashSet::new();
-    let base_files = SourceTree::read(&source, &parent_id, &mut visited)?;
     lock_existing_file(&source.join("__SYSTEM__/LOCK"), &mut locks)?;
     let mut plan = registry(
         &source,
@@ -478,7 +477,7 @@ fn stage(
         return Err(corrupt("source and destination generation overlap"));
     }
     let mut placements = vec![target_location, base_location];
-    let mut external_files = Vec::new();
+    let mut external_roots = Vec::new();
     let mut roots = vec![(source.clone(), PathBuf::from("base"), 16u32)];
     for (record, state) in &plan.entries {
         let root = physical_path(&namespace_path(&source, record))?;
@@ -497,10 +496,7 @@ fn stage(
             }
             placements.push(place);
             if root.try_exists()? {
-                external_files.push((
-                    record.id,
-                    SourceTree::read(&root, &parent_id, &mut visited)?,
-                ));
+                external_roots.push((record.id, root.clone()));
             }
             staged_placement(Path::new(""), record.id)
         } else {
@@ -513,6 +509,27 @@ fn stage(
             lock_existing_file(&root.join(format!("mmdb/shard_{i:02}/LOCK")), &mut locks)?;
         }
     }
+    // A closing writer can create a WAL, SST or application sidecar before
+    // relinquishing its shard lock. Capture the file list only after taking
+    // every available shared lock. v17 has no universe lease; recheck the
+    // registry used to discover its lock set before copying that registry.
+    let checked = registry(
+        &source,
+        read_id(&source.join(HEADER))?.is_some(),
+        read_id(&source.join(PROGRESS))?.is_some(),
+    )?;
+    if plan != checked {
+        return Err(corrupt(
+            "namespace registry changed while acquiring source locks",
+        ));
+    }
+    let mut visited = HashSet::new();
+    let base_files = SourceTree::read(&source, &parent_id, &mut visited)?;
+    let mut external_files = Vec::with_capacity(external_roots.len());
+    for (id, root) in external_roots {
+        external_files.push((id, SourceTree::read(&root, &parent_id, &mut visited)?));
+    }
+    completed(Step::Inventoried)?;
     let mut staging = tempfile::Builder::new();
     staging.prefix(".vsdb-stage-");
     #[cfg(unix)]
@@ -627,6 +644,67 @@ mod tests {
             b"checkpoint"
         );
         assert!(!source.join(HEADER).exists());
+    }
+
+    #[test]
+    fn closing_writer_cannot_add_rows_outside_the_locked_inventory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("v17");
+        let first = tmp.path().join("first");
+        let second = tmp.path().join("second");
+        old_tree(&source);
+        let shard = source.join("mmdb/shard_00");
+        let mut writer = Some(
+            mmdb_v4::DB::open(
+                mmdb_v4::DbOptions {
+                    prefix_len: 8,
+                    ..Default::default()
+                },
+                &shard,
+            )
+            .unwrap(),
+        );
+        fs::create_dir_all(source.join("__CUSTOM__")).unwrap();
+        // The writer's operation and shutdown occur at a deterministic
+        // boundary. Inventory must not start while its v4 LOCK is held.
+        let close_writer = |db: mmdb_v4::DB| {
+            fs::write(
+                source.join("__CUSTOM__/cut"),
+                b"last acknowledged application record",
+            )
+            .unwrap();
+            db.put(
+                &[super::super::FLOOR.to_le_bytes().as_slice(), b"cut"].concat(),
+                b"last acknowledged shard row",
+            )
+            .unwrap();
+            db.flush().unwrap();
+            db.close().unwrap();
+        };
+        let failed = stage(&source, &first, |step| {
+            if matches!(step, Step::Inventoried) {
+                close_writer(writer.take().unwrap());
+            }
+            Ok(())
+        });
+        assert!(failed.is_err() && !first.exists());
+        close_writer(writer.take().expect("active writer excluded inventory"));
+        stage_universe(&source, &second).unwrap();
+        assert_eq!(
+            fs::read(second.join("base/__CUSTOM__/cut")).unwrap(),
+            b"last acknowledged application record"
+        );
+        let db = mmdb::DB::open(
+            mmdb_shard_format_options().with_create_if_missing(false),
+            second.join("base/mmdb/shard_00"),
+        )
+        .unwrap();
+        let key = [super::super::FLOOR.to_le_bytes().as_slice(), b"cut"].concat();
+        assert_eq!(
+            db.get(&key).unwrap().as_deref(),
+            Some(&b"last acknowledged shard row"[..])
+        );
+        db.close().unwrap();
     }
 
     #[test]
@@ -932,7 +1010,10 @@ mod tests {
             let path = input.join("__SYSTEM__").join(file);
             let socket = UnixListener::bind(&path).unwrap();
             let error = stage_universe(&input, &generation).unwrap_err();
-            assert!(error.to_string().contains("stage requires regular files"));
+            assert!(
+                error.to_string().contains(path.to_str().unwrap()),
+                "{error}"
+            );
             assert!(!generation.exists());
             assert_eq!(
                 super::super::read_metadata(&path).unwrap_err().kind(),

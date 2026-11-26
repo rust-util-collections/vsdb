@@ -53,12 +53,12 @@ const CEILING: &str = "__SYSTEM__/__prefix_ceiling__";
 const INIT: &str = "__SYSTEM__/__initializing__";
 const FLOOR: u64 = 4096_0000;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, PartialEq, Eq)]
 struct Registry<R> {
     next_id: u64,
     entries: Vec<R>,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, PartialEq, Eq)]
 struct Record {
     id: u64,
     path: Option<String>,
