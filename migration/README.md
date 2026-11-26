@@ -149,7 +149,15 @@ namespace so v18 can complete shard creation. An orphan established record
 or populated namespace directory requires recovery of the missing registration.
 When the allocator file is missing, reconstruction includes the default shard's
 historical ceiling, namespace data, instance metadata filenames and embedded
-handle bytes. Before publishing any generation, the exporter requires the
+handle bytes. On a v17/v4 source the exclusive floor is the larger of the
+file's value and the historical one-byte allocator record in default shard
+zero. For example, a file containing `C`, a visible map with ID `C`, and a
+shard-zero record containing `C + 1` yield a valid floor of `C + 1`. A
+v18/v4 universe with an existing file uses that file as its exclusive floor.
+A residual legacy key cannot raise a stale v18 file during staging.
+[Released v17 allocator fold](https://github.com/rust-util-collections/vsdb/blob/cc317226ffd9049290aacd974891085a9d68f00b/core/src/common/engine/mmdb.rs#L1103-L1121)
+
+Before publishing any generation, the exporter requires the
 exclusive allocator ceiling to exceed every visible physical row prefix
 and every canonical saved-instance filename, including empty maps and
 external or initializing namespaces. A contradiction aborts publication.

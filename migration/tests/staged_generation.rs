@@ -374,3 +374,83 @@ fn pending_partial_engine_also_proves_a_stale_allocator_ceiling() {
     assert_eq!(inventory(&source), source_before);
     assert_eq!(inventory(&external), ext_before);
 }
+
+#[test]
+fn legacy_allocator_fold_precedes_v17_ownership_checks_but_cannot_mask_a_stale_v18_file() {
+    const NEW_MAP: u64 = 60_000_000;
+    let key = [NEW_MAP.to_le_bytes().as_slice(), b"legacy-owner"].concat();
+    if let Some(generation) = std::env::var_os("VSDB_LEGACY_FLOOR_REOPEN") {
+        vsdb_configure(VsdbOptions::new(PathBuf::from(generation).join("base"))).unwrap();
+        let next = MapxRaw::new().instance_id();
+        assert_eq!(next.map_id, NEW_MAP + 1);
+        return;
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let input = tmp.path().join("v17");
+    let generation = tmp.path().join("v5");
+    let files: Vec<(&str, &[u8])> =
+        postcard::from_bytes(include_bytes!("fixtures/tree-v17.postcard")).unwrap();
+    for (name, bytes) in files {
+        let path = input.join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, bytes).unwrap();
+    }
+    assert!(!input.join("__SYSTEM__/universe_header").exists());
+    let stored = input.join("__SYSTEM__/__prefix_ceiling__");
+    fs::write(&stored, NEW_MAP.to_le_bytes()).unwrap();
+    let shard = input.join("mmdb/shard_00");
+    let old = mmdb_v4::DB::open(
+        mmdb_v4::DbOptions {
+            prefix_len: 8,
+            ..Default::default()
+        },
+        &shard,
+    )
+    .unwrap();
+    old.put(&[0], &(NEW_MAP + 1).to_le_bytes()).unwrap();
+    old.put(&key, b"preserved").unwrap();
+    old.close().unwrap();
+    drop(old);
+    let before = inventory(&input);
+    stage_universe(&input, &generation).unwrap();
+    assert_eq!(inventory(&input), before);
+    assert_eq!(
+        fs::read(generation.join("base/__SYSTEM__/__prefix_ceiling__")).unwrap(),
+        (NEW_MAP + 1).to_le_bytes()
+    );
+    let selected = mmdb::DB::open(
+        vsdb_core::common::mmdb_shard_format_options().with_create_if_missing(false),
+        generation.join("base/mmdb/shard_00"),
+    )
+    .unwrap();
+    assert_eq!(
+        selected.get(&key).unwrap().as_deref(),
+        Some(&b"preserved"[..])
+    );
+    selected.close().unwrap();
+    drop(selected);
+    let reopened = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "legacy_allocator_fold_precedes_v17_ownership_checks_but_cannot_mask_a_stale_v18_file",
+        ])
+        .env("VSDB_LEGACY_FLOOR_REOPEN", &generation)
+        .output()
+        .unwrap();
+    assert!(reopened.status.success(), "{reopened:?}");
+
+    // The old physical shard can still contain the one-byte record after the
+    // v18 metadata has been committed. The v18 file now owns the ceiling.
+    vsdb_migrate::migrate_universe(&input).unwrap();
+    assert_eq!(fs::read(&stored).unwrap(), (NEW_MAP + 1).to_le_bytes());
+    fs::write(&stored, NEW_MAP.to_le_bytes()).unwrap();
+    let before = inventory(&input);
+    let rejected = tmp.path().join("rejected");
+    assert!(matches!(
+        stage_universe(&input, &rejected),
+        Err(vsdb::VsdbError::Corrupt { .. })
+    ));
+    assert!(!rejected.exists());
+    assert_eq!(inventory(&input), before);
+}
