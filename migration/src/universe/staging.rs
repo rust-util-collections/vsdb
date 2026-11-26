@@ -56,7 +56,7 @@ impl Rows {
 }
 
 fn numbered(value: &str) -> bool {
-    !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit())
+    value.bytes().all(|b| b.is_ascii_digit()) && value.parse::<u64>().is_ok()
 }
 
 fn bootstrap_file(name: &str) -> bool {
@@ -168,7 +168,7 @@ fn export_shard(staged_copy: &Path, ceiling: u64) -> Result<()> {
     for entry in fs::read_dir(staged_copy)? {
         let entry = entry?;
         let name = entry.file_name();
-        if !name.to_str().is_some_and(engine_file) {
+        if !(entry.file_type()?.is_file() && name.to_str().is_some_and(engine_file)) {
             renamest::rename_exclusive(entry.path(), temp.path().join(name))?;
         }
     }
@@ -626,6 +626,13 @@ mod tests {
         let generation = tmp.path().join("v5");
         old_tree(&source);
         fs::write(source.join("mmdb/shard_00/operator-note"), b"checkpoint").unwrap();
+        fs::create_dir_all(source.join("mmdb/shard_00/42.sst")).unwrap();
+        fs::write(source.join("mmdb/shard_00/42.sst/nested"), b"dir-sidecar").unwrap();
+        fs::write(
+            source.join("mmdb/shard_00/18446744073709551616.sst"),
+            b"overflow-sidecar",
+        )
+        .unwrap();
         let exit = Command::new(env::current_exe().unwrap())
             .args([
                 "--exact",
@@ -642,6 +649,28 @@ mod tests {
         assert_eq!(
             fs::read(generation.join("base/mmdb/shard_00/operator-note")).unwrap(),
             b"checkpoint"
+        );
+        assert_eq!(
+            fs::read(generation.join("base/mmdb/shard_00/42.sst/nested")).unwrap(),
+            b"dir-sidecar"
+        );
+        assert_eq!(
+            fs::read(generation.join("base/mmdb/shard_00/18446744073709551616.sst")).unwrap(),
+            b"overflow-sidecar"
+        );
+        let reopened = mmdb::DB::open(
+            mmdb_shard_format_options().with_create_if_missing(false),
+            generation.join("base/mmdb/shard_00"),
+        )
+        .unwrap();
+        reopened.close().unwrap();
+        assert_eq!(
+            fs::read(generation.join("base/mmdb/shard_00/42.sst/nested")).unwrap(),
+            b"dir-sidecar"
+        );
+        assert_eq!(
+            fs::read(generation.join("base/mmdb/shard_00/18446744073709551616.sst")).unwrap(),
+            b"overflow-sidecar"
         );
         assert!(!source.join(HEADER).exists());
     }
