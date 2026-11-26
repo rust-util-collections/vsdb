@@ -4925,9 +4925,13 @@ fn validate_commit_graph_rejects_a_self_parent() {
 type PublicationHook = Box<dyn FnOnce() -> crate::Result<()>>;
 thread_local! {
     static PUBLICATION_HOOK: std::cell::RefCell<Option<PublicationHook>>=const{std::cell::RefCell::new(None)};
+    static AFTER_PUBLICATION_HOOK: std::cell::RefCell<Option<PublicationHook>>=const{std::cell::RefCell::new(None)};
 }
 pub(crate) fn before_tree_publication() -> crate::Result<()> {
     PUBLICATION_HOOK.take().map_or(Ok(()), |hook| hook())
+}
+pub(crate) fn after_tree_publication() -> crate::Result<()> {
+    AFTER_PUBLICATION_HOOK.take().map_or(Ok(()), |hook| hook())
 }
 
 #[test]
@@ -5638,7 +5642,7 @@ fn rejected_final_publication_reclaims_spilled_stage_markers_and_blobs() {
         .nodes
         .insert(super::store::row(super::store::STAGE, leaf_id), []);
     map.tree
-        .defer_ambiguous_staged(vec![leaf_id], ambig_start, ambig_start + 2, true);
+        .defer_ambiguous_staged(vec![leaf_id], ambig_start, ambig_start + 2);
     assert_eq!(map.records(super::store::STAGE).count(), 1);
     assert_eq!(map.records(0x12).count(), 1);
     map.insert(main, &10_000, &vec![11]).unwrap();
@@ -5808,4 +5812,69 @@ fn convenience_commit_queries_panic_on_corrupt_or_missing_parent_commits() {
     map.tree.nodes.remove(c2_key);
     assert!(catch_unwind(AssertUnwindSafe(|| map.fork_point(c3, c1))).is_err());
     assert!(catch_unwind(AssertUnwindSafe(|| map.commit_distance(c3, c1))).is_err());
+}
+
+#[test]
+fn failed_publish_with_failing_ref_restore_preserves_live_staged_data_and_heals() {
+    let mut map = VerMap::<u32, Vec<u8>>::new();
+    let main = map.main_branch();
+    map.insert(main, &0, &vec![7; 32]).unwrap();
+    let c0 = map.commit(main).unwrap();
+
+    // Part 1: ambiguous post-WAL sync failure after >16 MiB staged spill has
+    // committed to the engine, while restore_visible_refs() also fails.
+    let bad_commit_key = super::store::row(COMMIT, 999_999);
+    let raw_handle = postcard::to_allocvec(&map.tree.nodes).unwrap();
+    let tree_nodes: crate::MapxRaw = postcard::from_bytes(&raw_handle).unwrap();
+    AFTER_PUBLICATION_HOOK.set(Some(Box::new(move || {
+        let mut nodes = tree_nodes;
+        nodes.insert(bad_commit_key, [0xff; 3]);
+        Err(VsdbError::Io(std::io::Error::other(
+            "injected post-commit WAL sync I/O failure",
+        )))
+    })));
+    assert!(matches!(
+        map.bulk_load(main, (1..=1_100).map(|k| (k, vec![5u8; 16_384]))),
+        Err(VsdbError::Io(_))
+    ));
+
+    // Clear the transient fault; all 1,100 durably committed entries must
+    // survive subsequent reads, writes, and checkpoints without deletion.
+    map.tree.nodes.remove(bad_commit_key);
+    assert_eq!(map.get(main, &1).unwrap(), Some(vec![5u8; 16_384]));
+    assert_eq!(map.get(main, &1_100).unwrap(), Some(vec![5u8; 16_384]));
+    map.insert(main, &2_000, &vec![9u8; 64]).unwrap();
+    map.flush().unwrap();
+    assert_eq!(map.get(main, &1).unwrap(), Some(vec![5u8; 16_384]));
+    assert_eq!(map.get(main, &1_100).unwrap(), Some(vec![5u8; 16_384]));
+    assert_eq!(map.get(main, &2_000).unwrap(), Some(vec![9u8; 64]));
+    assert_eq!(map.at(c0).unwrap().get(&0), Some(vec![7; 32]));
+
+    // Part 2: pre-commit publication failure releases dirty_root in memory
+    // when runtime is unique; if restore_visible_refs() also fails, RefState
+    // must poison and heal once the fault clears instead of reporting a bogus
+    // untracked branch root.
+    let tree_nodes: crate::MapxRaw = postcard::from_bytes(&raw_handle).unwrap();
+    PUBLICATION_HOOK.set(Some(Box::new(move || {
+        let mut nodes = tree_nodes;
+        nodes.insert(bad_commit_key, [0xff; 3]);
+        Err(VsdbError::Io(std::io::Error::other(
+            "injected pre-commit failure",
+        )))
+    })));
+    assert!(matches!(
+        map.insert(main, &3_000, &vec![11u8; 64]),
+        Err(VsdbError::Io(_))
+    ));
+    assert!(matches!(
+        map.get(main, &2_000),
+        Err(VsdbError::Corrupt { .. })
+    ));
+
+    map.tree.nodes.remove(bad_commit_key);
+    assert_eq!(map.get(main, &2_000).unwrap(), Some(vec![9u8; 64]));
+    assert_eq!(map.get(main, &3_000).unwrap(), None);
+    map.insert(main, &3_000, &vec![11u8; 64]).unwrap();
+    assert_eq!(map.get(main, &3_000).unwrap(), Some(vec![11u8; 64]));
+    map.verify_and_gc().unwrap();
 }

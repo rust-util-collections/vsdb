@@ -1865,4 +1865,25 @@ mod diff_merge {
         }
         assert!(small.used_bytes() <= 64 * 1024);
     }
+
+    #[test]
+    fn finish_ref_counts_and_abandon_staged_evict_dead_internal_pages() {
+        let mut tree = PersistentBTree::new();
+        let entries: Vec<_> = (0u32..400)
+            .map(|i| (i.to_be_bytes().to_vec(), i.to_be_bytes().to_vec()))
+            .collect();
+        let root = tree.bulk_load(entries);
+        assert_eq!(root & super::CLASS_MASK, 0);
+        assert_eq!(
+            tree.get(root, &7u32.to_be_bytes()),
+            Some(7u32.to_be_bytes().to_vec())
+        );
+        assert!(tree.runtime.page_cache.get(root).is_some());
+        assert!(tree.runtime.page_cache.used_bytes() > 0);
+
+        // Sweeping with no live roots must evict dead internal pages from RAM.
+        tree.gc(&[]);
+        assert!(tree.runtime.page_cache.get(root).is_none());
+        assert_eq!(tree.runtime.page_cache.used_bytes(), 0);
+    }
 }

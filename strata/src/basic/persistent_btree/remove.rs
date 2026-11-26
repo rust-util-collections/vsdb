@@ -117,15 +117,22 @@ impl PersistentBTree {
         // deletion.  NodeIds are never reused, so a lazy-delete
         // registration can never shadow a future write of the same key.
         let mut durable_dead = Vec::new();
+        let mut dead_internal = Vec::new();
         for id in dead_ids {
             if let Some(raw) = self.pending.remove(&id) {
                 self.pending_bytes -= 9 + raw.len();
             } else {
+                if id & super::CLASS_MASK == 0 {
+                    dead_internal.push(id);
+                }
                 durable_dead.push(super::object_key(id).to_vec());
             }
         }
         let immediate = refs.defer_or_return(durable_dead);
         drop(refs);
+        for id in dead_internal {
+            self.runtime.page_cache.remove(id);
+        }
         if !immediate.is_empty() {
             self.nodes.lazy_delete_batch(immediate);
         }

@@ -165,6 +165,28 @@ impl CacheShard {
             }
         }
     }
+
+    fn remove_serial_range(&mut self, start: u64, end: u64) {
+        let mut slot = 0;
+        while slot < self.ring.len() {
+            let serial = self.ring[slot].id & !CLASS_MASK;
+            if serial >= start && serial < end {
+                let evicted = self.ring.swap_remove(slot);
+                self.index.remove(&evicted.id);
+                self.used_bytes =
+                    self.used_bytes.saturating_sub(Self::weight(&evicted.bytes));
+                if slot < self.ring.len() {
+                    let moved_id = self.ring[slot].id;
+                    self.index.insert(moved_id, slot);
+                }
+            } else {
+                slot += 1;
+            }
+        }
+        if self.hand > self.ring.len() {
+            self.hand = 0;
+        }
+    }
 }
 
 /// Byte-bounded 8-way lock-sharded clock cache of committed internal B+ tree
@@ -205,6 +227,15 @@ impl InternalPageCache {
 
     pub(crate) fn remove(&self, id: NodeId) {
         self.shard(id).lock().remove(id);
+    }
+
+    pub(crate) fn remove_serial_range(&self, start: u64, end: u64) {
+        if start >= end {
+            return;
+        }
+        for shard in &self.shards {
+            shard.lock().remove_serial_range(start, end);
+        }
     }
 
     #[cfg(test)]
@@ -308,6 +339,8 @@ pub(crate) struct RefState {
     edges: HashMap<NodeId, Box<[NodeId]>>,
     zombies: HashSet<NodeId>,
     ready: bool,
+    pub(crate) poisoned: bool,
+    pub(crate) ambiguous_staged: Vec<(Vec<NodeId>, u64, u64)>,
     /// One reference per live snapshot lease, shared by its iterators.
     pins: HashMap<NodeId, u32>,
     /// Live branch head cache synchronized under the same lock as `counts`.
@@ -331,6 +364,7 @@ impl RefState {
             }
         }
         self.ready = true;
+        self.poisoned = false;
     }
 
     pub(crate) fn set_head(&mut self, branch: BranchId, head: Option<BranchHead>) {
@@ -349,13 +383,17 @@ impl RefState {
         nodes: &MapxRaw,
         branch: BranchId,
     ) -> Result<BranchHead> {
-        if let Some(&head) = self.heads.get(&branch) {
+        if !self.poisoned
+            && let Some(&head) = self.heads.get(&branch)
+        {
             return Ok(head);
         }
         let head = nodes
             .try_get_with(row(HEAD, branch.raw()), BranchHead::decode)?
             .ok_or(VsdbError::BranchNotFound { branch_id: branch })?;
-        self.heads.insert(branch, head);
+        if !self.poisoned {
+            self.heads.insert(branch, head);
+        }
         Ok(head)
     }
 
@@ -364,13 +402,17 @@ impl RefState {
         nodes: &MapxRawReader,
         branch: BranchId,
     ) -> Result<BranchHead> {
-        if let Some(&head) = self.heads.get(&branch) {
+        if !self.poisoned
+            && let Some(&head) = self.heads.get(&branch)
+        {
             return Ok(head);
         }
         let head = nodes
             .try_get_with(row(HEAD, branch.raw()), BranchHead::decode)?
             .ok_or(VsdbError::BranchNotFound { branch_id: branch })?;
-        self.heads.insert(branch, head);
+        if !self.poisoned {
+            self.heads.insert(branch, head);
+        }
         Ok(head)
     }
 
@@ -380,13 +422,17 @@ impl RefState {
         }
         let pins = self.pins.get_mut(&root).expect("missing snapshot pin");
         *pins -= 1;
-        if *pins == 0 {
+        let unpinned = *pins == 0;
+        if unpinned {
             self.pins.remove(&root);
-            if self.zombies.remove(&root) {
-                self.deferred
-                    .get_or_insert_with(Vec::new)
-                    .push(row(RETIRED, root).to_vec());
-            }
+        }
+        if self.poisoned {
+            return Vec::new();
+        }
+        if unpinned && self.zombies.remove(&root) {
+            self.deferred
+                .get_or_insert_with(Vec::new)
+                .push(row(RETIRED, root).to_vec());
         }
         // A reader may outlive the writer. A later writer drains these
         // releases after its WAL fence, or recovers them on the next open.
@@ -827,6 +873,8 @@ impl<'de> Deserialize<'de> for PersistentBTree {
                         tip_cache: TipCache::default(),
                         deferred: None,
                         ready: false,
+                        poisoned: false,
+                        ambiguous_staged: Vec::new(),
                     },
                 );
                 Ok(Self {
@@ -893,6 +941,8 @@ impl PersistentBTree {
                 edges: HashMap::new(),
                 zombies: HashSet::new(),
                 ready: true,
+                poisoned: false,
+                ambiguous_staged: Vec::new(),
                 pins: HashMap::new(),
                 heads: HashMap::new(),
                 tip_cache: TipCache::default(),
@@ -994,8 +1044,9 @@ impl PersistentBTree {
         branch: BranchId,
         f: impl FnOnce(NodeId) -> R,
     ) -> Result<R> {
+        let reader = self.nodes.reader();
         let root = {
-            let mut refs = self.runtime.refs.lock();
+            let mut refs = self.runtime.lock_healthy_refs(&reader)?;
             let root = refs.resolve_branch_raw(&self.nodes, branch)?.dirty_root;
             if root != EMPTY_ROOT {
                 assert!(refs.ready, "lookup requires initialized tree references");
@@ -1269,6 +1320,9 @@ impl PersistentBTree {
                 refs.counts.retain(|id, _| id & !CLASS_MASK < start);
                 refs.edges.retain(|id, _| id & !CLASS_MASK < start);
                 drop(refs);
+                self.runtime
+                    .page_cache
+                    .remove_serial_range(start, self.next_id());
                 let abandoned = self
                     .nodes
                     .iter()
@@ -1627,19 +1681,8 @@ impl PersistentBTree {
         Ok(counts)
     }
 
-    pub(crate) fn restore_runtime_refs(&self, roots: &[NodeId]) -> Result<()> {
-        let mut counts = self.required_node_refs(roots)?;
-        let mut refs = self.runtime.refs.lock();
-        self.count_nodes(
-            &mut counts,
-            refs.pins.iter().map(|(&root, &pins)| (root, pins)),
-        )?;
-        refs.install(counts);
-        Ok(())
-    }
-
     /// Validate persisted edges before using them to count or retire pages.
-    fn checked_edges(id: NodeId, bytes: &[u8]) -> Result<Vec<NodeId>> {
+    pub(super) fn checked_edges(id: NodeId, bytes: &[u8]) -> Result<Vec<NodeId>> {
         if id & CLASS_MASK == BLOB {
             return Ok(Vec::new());
         }
@@ -1711,6 +1754,7 @@ impl PersistentBTree {
         // lazy-delete) nodes in place and corrupt shared snapshots.
         let mut max_id = 0;
         let mut dead_keys = Vec::new();
+        let mut dead_internal = Vec::new();
         let mut cursor = self.nodes.try_range(..)?;
         while let Some((k, _)) = cursor.try_step_next()? {
             let Some(id) = object_id(k) else {
@@ -1718,6 +1762,9 @@ impl PersistentBTree {
             };
             max_id = max_id.max(id & !CLASS_MASK);
             if !new_refs.contains_key(&id) {
+                if id & CLASS_MASK == 0 {
+                    dead_internal.push(id);
+                }
                 dead_keys.push(k.to_vec());
             }
         }
@@ -1730,8 +1777,12 @@ impl PersistentBTree {
             Ordering::AcqRel,
         );
 
+        refs.ambiguous_staged.clear();
         refs.install(new_refs);
         drop(refs);
+        for id in dead_internal {
+            self.runtime.page_cache.remove(id);
+        }
         if self.stage.is_some() && !self.namespace().is_read_only() {
             for group in dead_keys.chunks(8192) {
                 let mut batch = self.nodes.batch();
@@ -1843,6 +1894,8 @@ impl PersistentBTree {
                 edges: refs.edges.clone(),
                 zombies: HashSet::new(),
                 ready: refs.ready,
+                poisoned: refs.poisoned,
+                ambiguous_staged: Vec::new(),
                 pins: HashMap::new(),
                 heads: HashMap::new(),
                 tip_cache: TipCache::default(),
@@ -1869,7 +1922,7 @@ impl TreeReadState {
         nodes: &MapxRawReader,
         resolve: impl FnOnce(&mut RefState) -> Result<[NodeId; N]>,
     ) -> Result<[Arc<RootLease>; N]> {
-        let mut refs = self.0.refs.lock();
+        let mut refs = self.0.lock_healthy_refs(nodes)?;
         let roots = resolve(&mut refs)?;
         // Validate the whole set before changing counts, so a corrupt
         // later root cannot strand an earlier pin during unwinding.

@@ -323,6 +323,7 @@ impl<K, V> VerMap<K, V> {
             Ok(hdr) => hdr,
             Err(err) => {
                 self.tree.abandon_staged();
+                self.tree.mark_refs_poisoned();
                 let _ = self.restore_visible_refs();
                 return Err(err);
             }
@@ -336,9 +337,11 @@ impl<K, V> VerMap<K, V> {
         mut edits: Edits,
         sync: bool,
     ) -> Result<()> {
+        self.tree.ensure_healthy_refs()?;
         let Some(generation) = hdr.generation.checked_add(1) else {
             self.tree.abandon_staged();
-            self.restore_visible_refs()?;
+            self.tree.mark_refs_poisoned();
+            let _ = self.restore_visible_refs();
             return Err(corrupt("version store generation exhausted"));
         };
         hdr.generation = generation;
@@ -353,31 +356,17 @@ impl<K, V> VerMap<K, V> {
             &edits.retire,
             sync.then_some(generation),
         ) {
-            let restored = self.restore_visible_refs();
             if let FailedPublish::AmbiguousStaged { staged, start, end } = cleanup {
-                self.tree
-                    .defer_ambiguous_staged(staged, start, end, restored.is_ok());
+                self.tree.defer_ambiguous_staged(staged, start, end);
             }
-            restored?;
+            let _ = self.restore_visible_refs();
             return Err(err);
         }
         Ok(())
     }
 
     fn restore_visible_refs(&self) -> Result<()> {
-        // A failed WAL sync can have an ambiguous durable outcome. Restore
-        // in-memory counts against the visible graph without issuing writes.
-        let mut roots = Vec::new();
-        let mut heads = self.try_tag_range(HEAD)?;
-        while let Some((_, row)) = heads.try_step_next()? {
-            roots.push(BranchHead::decode(row)?.dirty_root);
-        }
-        let mut commits = self.try_tag_range(COMMIT)?;
-        while let Some((k, v)) = commits.try_step_next()? {
-            let id = CommitId::from_raw(super::repair::record_id(k)?);
-            roots.push(Commit::parse(id, v)?.root);
-        }
-        self.tree.restore_runtime_refs(&roots)
+        self.tree.restore_visible_refs()
     }
 
     fn build_root(
@@ -385,12 +374,14 @@ impl<K, V> VerMap<K, V> {
         build: impl FnOnce(&mut PersistentBTree) -> Result<NodeId>,
     ) -> Result<NodeId> {
         use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+        self.tree.ensure_healthy_refs()?;
         self.tree.begin_staged_build();
         match catch_unwind(AssertUnwindSafe(|| build(&mut self.tree))) {
             Ok(Ok(root)) => Ok(root),
             result => {
                 self.tree.abandon_staged();
-                self.restore_visible_refs()?;
+                self.tree.mark_refs_poisoned();
+                let _ = self.restore_visible_refs();
                 match result {
                     Ok(result) => result,
                     Err(payload) => resume_unwind(payload),
@@ -747,9 +738,11 @@ where
         self.ensure_writable("versioned map insert")?;
         let state = self.get_branch(branch)?;
         let bytes = encode_value(value)?;
-        let root = key.with_ordered_bytes(|k| {
-            self.tree.insert_buffered(state.dirty_root, k, &bytes)
-        });
+        let root = self.build_root(|tree| {
+            Ok(key.with_ordered_bytes(|k| {
+                tree.insert_buffered(state.dirty_root, k, &bytes)
+            }))
+        })?;
         self.publish_working(branch, state, root)
     }
 
@@ -863,10 +856,12 @@ where
     {
         self.ensure_writable("versioned map remove")?;
         let state = self.get_branch(branch)?;
-        let root = K::with_ordered_lookup(key, |bytes| {
-            self.tree.remove_buffered(state.dirty_root, bytes)
-        })
-        .unwrap_or(state.dirty_root);
+        let root = self.build_root(|tree| {
+            Ok(K::with_ordered_lookup(key, |bytes| {
+                tree.remove_buffered(state.dirty_root, bytes)
+            })
+            .unwrap_or(state.dirty_root))
+        })?;
         self.publish_working(branch, state, root)
     }
 

@@ -2,10 +2,11 @@
 
 use super::*;
 use crate::versioned::{
-    BranchId,
-    store::{BranchHead, Header, RETIRED, STAGE, row},
+    BranchId, Commit, CommitId,
+    store::{BranchHead, COMMIT, HEAD, Header, RETIRED, STAGE, record_id, row},
 };
 use std::{borrow::Cow, collections::BTreeMap};
+use vsdb_core::basic::mapx_raw::MapxRawReadView;
 
 /// Structural writers are serialized by the version store's alias contract.
 struct HistoryPublication<'a>(&'a TreeRuntime);
@@ -55,6 +56,8 @@ impl PersistentBTree {
                 tip_cache: TipCache::default(),
                 deferred: Some(Vec::new()),
                 ready: true,
+                poisoned: false,
+                ambiguous_staged: Vec::new(),
             },
         );
         Self {
@@ -88,6 +91,7 @@ impl PersistentBTree {
             batch.remove(row(STAGE, id));
         }
         if start < end {
+            self.runtime.page_cache.remove_serial_range(start, end);
             for (class, class_end) in [
                 (0, [0x10u8, 0x40, 0, 0, 0, 0, 0, 0, 0].as_slice()),
                 (LEAF, [0x10u8, 0x80, 0, 0, 0, 0, 0, 0, 0].as_slice()),
@@ -104,8 +108,26 @@ impl PersistentBTree {
             }
         }
         if batch.commit().is_err() {
-            self.defer_ambiguous_staged(staged, start, end, false);
+            self.defer_ambiguous_staged(staged, start, end);
         }
+    }
+
+    pub(crate) fn mark_refs_poisoned(&self) {
+        let mut refs = self.runtime.refs.lock();
+        refs.poisoned = true;
+        refs.heads.clear();
+        refs.tip_cache = TipCache::default();
+    }
+
+    pub(crate) fn ensure_healthy_refs(&self) -> Result<()> {
+        if self.runtime.refs.lock().poisoned {
+            self.runtime.restore_visible_refs(&self.nodes.reader())?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn restore_visible_refs(&self) -> Result<()> {
+        self.runtime.restore_visible_refs(&self.nodes.reader())
     }
 
     pub(crate) fn defer_ambiguous_staged(
@@ -113,32 +135,26 @@ impl PersistentBTree {
         staged: Vec<NodeId>,
         start: u64,
         end: u64,
-        check_unowned: bool,
     ) {
+        let reader = self.nodes.reader();
+        let view = reader.read_view();
         let mut refs = self.runtime.refs.lock();
-        let mut deferred: Vec<Vec<u8>> = staged
-            .into_iter()
-            .map(|id| row(STAGE, id).to_vec())
-            .collect();
-        if start < end && (!check_unowned || refs.ready) {
-            for class in [0, LEAF, BLOB_LEAF, BLOB] {
-                let lo = object_key(class | start);
-                let hi = object_key(class | end.saturating_sub(1).min(!CLASS_MASK));
-                if let Ok(mut cursor) =
-                    self.nodes.try_range(lo.as_slice()..=hi.as_slice())
-                {
-                    while let Ok(Some((k, _))) = cursor.try_step_next() {
-                        let unowned = !check_unowned
-                            || object_id(k)
-                                .is_none_or(|id| !refs.counts.contains_key(&id));
-                        if unowned {
-                            deferred.push(k.to_vec());
-                        }
-                    }
+        if !refs.poisoned && refs.ready {
+            if let Ok((deferred, dead_internal)) =
+                collect_unowned_staged(&view, &refs.counts, &staged, start, end)
+            {
+                refs.deferred.get_or_insert_with(Vec::new).extend(deferred);
+                drop(refs);
+                for id in dead_internal {
+                    self.runtime.page_cache.remove(id);
                 }
+                return;
             }
+            refs.poisoned = true;
+            refs.heads.clear();
+            refs.tip_cache = TipCache::default();
         }
-        refs.deferred.get_or_insert_with(Vec::new).extend(deferred);
+        refs.ambiguous_staged.push((staged, start, end));
     }
 
     pub(crate) fn next_id(&self) -> u64 {
@@ -182,11 +198,11 @@ impl PersistentBTree {
             for &id in &roots {
                 batch.insert(row(STAGE, id), []);
             }
-            batch.commit()?;
             self.stage
                 .as_mut()
                 .expect("missing stage tracker")
                 .extend(roots);
+            batch.commit()?;
         }
         self.pending_bytes = 0;
         Ok(())
@@ -263,14 +279,17 @@ impl PersistentBTree {
             }
         };
         #[cfg(test)]
-        let result =
-            crate::versioned::test::before_tree_publication().and_then(|()| submit());
+        let result = crate::versioned::test::before_tree_publication()
+            .and_then(|()| submit())
+            .and_then(|()| crate::versioned::test::after_tree_publication());
         #[cfg(not(test))]
         let result = submit();
         if let Err(err) = result {
             {
                 let mut refs = self.runtime.refs.lock();
+                refs.poisoned = true;
                 refs.heads.clear();
+                refs.tip_cache = TipCache::default();
                 refs.deferred
                     .get_or_insert_with(Vec::new)
                     .extend(dead.into_iter().take(previously_dead));
@@ -351,6 +370,8 @@ impl PersistentBTree {
             edges: refs.edges.clone(),
             zombies: HashSet::new(),
             ready: true,
+            poisoned: false,
+            ambiguous_staged: Vec::new(),
             pins: HashMap::new(),
             heads: HashMap::new(),
             tip_cache: TipCache::default(),
@@ -392,6 +413,9 @@ impl PersistentBTree {
         roots: &[NodeId],
     ) -> Option<usize> {
         use sha3::{Digest, Keccak256};
+        if !self.runtime.refs.lock().ambiguous_staged.is_empty() {
+            return None;
+        }
         let (mut data, sum) = raw.split_at_checked(raw.len().checked_sub(32)?)?;
         if Keccak256::digest(data).as_slice() != sum {
             return None;
@@ -584,4 +608,193 @@ pub(super) fn check_nodes_ceiling(
         }
     }
     Ok(())
+}
+
+impl TreeRuntime {
+    pub(crate) fn lock_healthy_refs(
+        &self,
+        nodes: &MapxRawReader,
+    ) -> Result<parking_lot::MutexGuard<'_, RefState>> {
+        loop {
+            {
+                let refs = self.refs.lock();
+                if !refs.poisoned {
+                    return Ok(refs);
+                }
+            }
+            self.restore_visible_refs(nodes)?;
+        }
+    }
+
+    pub(crate) fn restore_visible_refs(&self, nodes: &MapxRawReader) -> Result<()> {
+        let view = nodes.read_view();
+        let mut roots = Vec::new();
+        let mut heads = view.try_range([HEAD].as_slice()..[HEAD + 1].as_slice())?;
+        while let Some((k, v)) = heads.try_step_next()? {
+            record_id(k)?;
+            roots.push(BranchHead::decode(v)?.dirty_root);
+        }
+        drop(heads);
+
+        let mut commits =
+            view.try_range([COMMIT].as_slice()..[COMMIT + 1].as_slice())?;
+        while let Some((k, v)) = commits.try_step_next()? {
+            let id = CommitId::from_raw(record_id(k)?);
+            roots.push(Commit::parse(id, v)?.root);
+        }
+        drop(commits);
+
+        let mut retired_on_disk = Vec::new();
+        let mut retired =
+            view.try_range([RETIRED].as_slice()..[RETIRED + 1].as_slice())?;
+        while let Some((k, _)) = retired.try_step_next()? {
+            retired_on_disk.push(record_id(k)?);
+        }
+        drop(retired);
+
+        let mut counts = HashMap::new();
+        count_nodes_in_view(&view, &mut counts, roots.into_iter().map(|id| (id, 1)))?;
+
+        let mut refs = self.refs.lock();
+        count_nodes_in_view(
+            &view,
+            &mut counts,
+            refs.pins.iter().map(|(&id, &pins)| (id, pins)),
+        )?;
+
+        let mut new_zombies = HashSet::new();
+        let mut extra_deferred = Vec::new();
+        let mut dead_internal = Vec::new();
+        let mut visited_retired = HashSet::new();
+        for zroot in retired_on_disk {
+            if refs.pins.contains_key(&zroot) {
+                new_zombies.insert(zroot);
+            } else {
+                collect_unowned_subtree(
+                    &view,
+                    &counts,
+                    zroot,
+                    &mut visited_retired,
+                    &mut extra_deferred,
+                    &mut dead_internal,
+                )?;
+                extra_deferred.push(row(RETIRED, zroot).to_vec());
+            }
+        }
+
+        let live_counts: HashMap<NodeId, u32> =
+            counts.iter().map(|(&id, v)| (id, v.ref_count)).collect();
+        for (staged, start, end) in &refs.ambiguous_staged {
+            let (deferred, internal) =
+                collect_unowned_staged(&view, &live_counts, staged, *start, *end)?;
+            extra_deferred.extend(deferred);
+            dead_internal.extend(internal);
+        }
+
+        refs.zombies = new_zombies;
+        refs.ambiguous_staged.clear();
+        if !extra_deferred.is_empty() {
+            refs.deferred
+                .get_or_insert_with(Vec::new)
+                .extend(extra_deferred);
+        }
+        refs.install(counts);
+        drop(refs);
+        for id in dead_internal {
+            self.page_cache.remove(id);
+        }
+        Ok(())
+    }
+}
+
+fn count_nodes_in_view(
+    view: &MapxRawReadView<'_>,
+    counts: &mut HashMap<NodeId, NodeRef>,
+    roots: impl Iterator<Item = (NodeId, u32)>,
+) -> Result<()> {
+    let mut queue: Vec<_> = roots.filter(|&(id, _)| id != EMPTY_ROOT).collect();
+    while let Some((id, owners)) = queue.pop() {
+        if let Some(node) = counts.get_mut(&id) {
+            node.ref_count = node.ref_count.checked_add(owners).ok_or_else(|| {
+                VsdbError::Corrupt {
+                    detail: "B+ tree reference count overflow".into(),
+                }
+            })?;
+            continue;
+        }
+        let children = view
+            .try_get_with(object_key(id), |raw| {
+                PersistentBTree::checked_edges(id, raw)
+            })?
+            .ok_or_else(|| VsdbError::Corrupt {
+                detail: format!("missing reachable B+ tree node {id}"),
+            })?;
+        queue.extend(children.iter().map(|&child| (child, 1)));
+        counts.insert(
+            id,
+            NodeRef {
+                ref_count: owners,
+                children,
+            },
+        );
+    }
+    Ok(())
+}
+
+fn collect_unowned_subtree(
+    view: &MapxRawReadView<'_>,
+    counts: &HashMap<NodeId, NodeRef>,
+    root: NodeId,
+    visited: &mut HashSet<NodeId>,
+    deferred: &mut Vec<Vec<u8>>,
+    dead_internal: &mut Vec<NodeId>,
+) -> Result<()> {
+    let mut stack = vec![root];
+    while let Some(id) = stack.pop() {
+        if id == EMPTY_ROOT || counts.contains_key(&id) || !visited.insert(id) {
+            continue;
+        }
+        if let Some(children) = view.try_get_with(object_key(id), |raw| {
+            PersistentBTree::checked_edges(id, raw)
+        })? {
+            if id & CLASS_MASK == 0 {
+                dead_internal.push(id);
+            }
+            deferred.push(object_key(id).to_vec());
+            stack.extend(children);
+        }
+    }
+    Ok(())
+}
+
+fn collect_unowned_staged(
+    view: &MapxRawReadView<'_>,
+    counts: &HashMap<NodeId, u32>,
+    staged: &[NodeId],
+    start: u64,
+    end: u64,
+) -> Result<(Vec<Vec<u8>>, Vec<NodeId>)> {
+    let mut deferred: Vec<Vec<u8>> =
+        staged.iter().map(|&id| row(STAGE, id).to_vec()).collect();
+    let mut dead_internal = Vec::new();
+    if start < end {
+        for class in [0, LEAF, BLOB_LEAF, BLOB] {
+            let lo = object_key(class | start);
+            let hi = object_key(class | end.saturating_sub(1).min(!CLASS_MASK));
+            let mut cursor = view.try_range(lo.as_slice()..=hi.as_slice())?;
+            while let Some((k, _)) = cursor.try_step_next()? {
+                match object_id(k) {
+                    Some(id) if counts.contains_key(&id) => {}
+                    Some(id) => {
+                        if id & CLASS_MASK == 0 {
+                            dead_internal.push(id);
+                        }
+                        deferred.push(k.to_vec());
+                    }
+                    None => deferred.push(k.to_vec()),
+                }
+            }
+        }
+    }
+    Ok((deferred, dead_internal))
 }

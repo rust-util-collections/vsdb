@@ -17,7 +17,7 @@ pub(super) const HEADER: [u8; 1] = [0];
 pub(crate) const HEAD: u8 = 1;
 pub(super) const NAME: u8 = 2;
 pub(super) const BY_NAME: u8 = 3;
-pub(super) const COMMIT: u8 = 4;
+pub(crate) const COMMIT: u8 = 4;
 pub(crate) const RETIRED: u8 = 5;
 pub(crate) const STAGE: u8 = 6;
 pub(super) const REFS: [u8; 1] = [7];
@@ -26,6 +26,14 @@ pub(crate) fn row(tag: u8, id: u64) -> [u8; 9] {
     let mut key = [tag; 9];
     key[1..].copy_from_slice(&id.to_be_bytes());
     key
+}
+
+pub(crate) fn record_id(k: &[u8]) -> Result<u64> {
+    let bytes = k
+        .get(1..)
+        .and_then(|v| v.try_into().ok())
+        .ok_or_else(|| corrupt("invalid version store key length"))?;
+    Ok(u64::from_be_bytes(bytes))
 }
 
 pub(super) fn by_name(name: &str) -> Vec<u8> {
@@ -156,7 +164,7 @@ impl Commit {
         }
         raw
     }
-    pub(super) fn parse(id: CommitId, raw: &[u8]) -> Result<Self> {
+    pub(crate) fn parse(id: CommitId, raw: &[u8]) -> Result<Self> {
         if !matches!(raw.len(), 20 | 28 | 36) {
             return Err(corrupt("invalid commit length"));
         }

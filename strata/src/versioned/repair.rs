@@ -257,16 +257,9 @@ impl<K, V> VerMap<K, V> {
     /// Durably checkpoints the current reference graph for fast reopening.
     pub fn flush(&mut self) -> Result<()> {
         self.ensure_writable("version store checkpoint")?;
+        self.tree.ensure_healthy_refs()?;
         let hdr = Header::get(&self.tree.nodes)?;
         let bytes = self.tree.ref_checkpoint(hdr.generation)?;
         self.tree.flush_refs(&REFS, bytes)
     }
-}
-
-pub(super) fn record_id(k: &[u8]) -> Result<u64> {
-    let bytes = k
-        .get(1..)
-        .and_then(|v| v.try_into().ok())
-        .ok_or_else(|| corrupt("invalid version store key length"))?;
-    Ok(u64::from_be_bytes(bytes))
 }
