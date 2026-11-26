@@ -6,6 +6,57 @@ Compiler requirements below are historical release notes. Current development
 uses the official latest stable Rust, without a declared compatible version
 range or minimum compiler; see [the toolchain policy](docs/ai/compatibility-policy.md#rust-toolchain).
 
+## [v18.0.3]
+
+Existing v18 stores open in place.
+
+### Fixed
+
+- `VerMap::merge`, `VerMap::rollback_to` and `VerMap::get_commit` propagate
+  commit-read and decoding errors across ancestry walks instead of treating a
+  corrupt or unreadable ancestor as absent history.
+- `VerMap` and `PersistentBTree` poison in-memory reference state when a
+  publication fails, heal reference counts across every live branch and commit
+  root on subsequent mutations, evict abandoned internal pages from the page
+  cache, and defer unowned staged objects after ambiguous WAL errors.
+- `DagMap` preserves `State::Clearing` recovery markers across partial prune
+  marking and subtree destruction so interrupted prunes cannot leave detached
+  descendants unreachable on retry.
+- `VecDex::remove` validates the target node's info and vector rows before
+  staging updates and repairs a stale entry point when `node_count` reaches
+  zero.
+- Typed `from_meta` handles preserve `VsdbError` classifications and underlying
+  I/O, storage, corruption and decode sources instead of collapsing failures
+  into stringified `Corrupt` errors.
+- Fallible reads and mutations across `StagedRows`, `VecDex`, `SlotDex`,
+  `DagMap` and `VerMap` propagate engine read and row-decoding errors instead
+  of panicking or treating damaged rows as absent.
+- Shard `CURRENT` and `MANIFEST` preflight checks across `vsdb_core` and
+  `vsdb_migrate` classify missing, non-regular-file or malformed anchors as
+  `VsdbError::Corrupt` while preserving `VsdbError::Io` on permission and I/O
+  errors.
+- `create_dir_all_durable` synchronizes newly created directories and their
+  deepest pre-existing parent, then stops ancestor directory synchronization at
+  mount boundaries, traverse-only (`0o111`/`0o711`) parents and read-only
+  parent mounts while still surfacing `EIO`.
+- `Namespace::create_with` rolls back the persisted registry entry when the
+  initial `Pending` write fails, clears or prunes stale `__pending_create__`
+  records when explicit root creation fails before populating a directory, and
+  verifies `.tmp` staging file prefixes in `__SYSTEM__` before adopting or
+  cleaning up a pending root.
+- `vsdb_migrate` releases exclusive and shared lockfile descriptors on drop
+  across normal returns, errors and unwinds, and `stage_universe` rejects
+  `OpenMode::ReadOnly` before creating staging directories.
+- `vsdb_migrate::dagmap` verifies `State::Root` on current `VSTYPE04` handles
+  in root converters and re-tags saved root sidecars whose composite value
+  types carry legacy `VSTYPE02`/`VSTYPE03` type hashes after an earlier
+  byte-handle DAG conversion.
+
+### Changed
+
+- The workspace depends on the published crates.io `mmdb` `5.0.1` runtime and
+  `4.3.15` offline migration reader instead of Git revisions.
+
 ## [v18.0.2]
 
 Existing v18 stores open in place.

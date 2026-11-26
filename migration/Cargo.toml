@@ -1,6 +1,6 @@
 [package]
 name = "vsdb_migrate"
-version = "18.0.2"
+version = "18.0.3"
 edition = "2024"
 license = "MIT"
 description = "Offline VSDB v17/v18 universe and MMDB v4 to v5 migration"
