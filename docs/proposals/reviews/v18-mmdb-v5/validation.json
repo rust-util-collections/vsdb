@@ -1,0 +1,60 @@
+{
+  "native": "x86_64-unknown-linux-gnu",
+  "revision": "9733c19ac1e780826f4ac4d6a5b083cda807ad9a",
+  "compiler": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+  "commands": [
+    {
+      "command": "cargo +stable fmt --all -- --check",
+      "exit": 0,
+      "seconds": 0.41
+    },
+    {
+      "command": "cargo +stable clippy --workspace",
+      "exit": 0,
+      "seconds": 5.11
+    },
+    {
+      "command": "cargo +stable check --workspace --tests",
+      "exit": 0,
+      "seconds": 3.74
+    },
+    {
+      "command": "cargo +stable check --workspace --benches",
+      "exit": 0,
+      "seconds": 0.2
+    },
+    {
+      "command": "cargo +stable test --workspace --tests",
+      "exit": 0,
+      "seconds": 67.22,
+      "top_level_harnesses": 45,
+      "passed": 845,
+      "ignored": 5,
+      "nested_and_top_level_passed": 846
+    },
+    {
+      "command": "cargo +stable test --workspace --release --tests",
+      "exit": 0,
+      "seconds": 55.09,
+      "top_level_harnesses": 45,
+      "passed": 845,
+      "ignored": 5,
+      "nested_and_top_level_passed": 846
+    },
+    {
+      "command": "cargo +stable test --workspace --doc",
+      "exit": 0,
+      "seconds": 1.56,
+      "top_level_harnesses": 5,
+      "passed": 26,
+      "ignored": 4,
+      "nested_and_top_level_passed": 26
+    }
+  ],
+  "mmdb_runtime": "255015ad0f488f09c7985736a903d3171876bcaf",
+  "mmdb_offline_reader": "4.3.15",
+  "host": "Linux-7.0.0-44-generic-x86_64-with-glibc2.43",
+  "architecture": "x86_64 Linux native",
+  "arm_macos": "Maintainer native run pending",
+  "counting": "Runtime counts use the final summary of each top-level Cargo harness, excluding re-executed child probes. Rustdoc runs separate ordinary and compile-fail suites. Debug and release exercise overlapping tests."
+}
