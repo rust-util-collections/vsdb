@@ -14,8 +14,9 @@
 //!
 //! A/B protocol (two builds, criterion baselines):
 //!   1. replace `.with_block_cache(Some(Arc::clone(pool)))` in `mmdb_open` with
-//!      `.with_block_cache(None).with_block_cache_capacity((sizing.pool_store_capacity() / shards as u64) as usize)`
-//!      (equal private split), then run
+//!      `.with_block_cache(None).with_block_cache_capacity(sizing.pool_store_capacity() / shards as u64)`
+//!      (equal private split) and add `let _ = pool;` to its body so the
+//!      unused parameter still builds under `deny(warnings)`, then run
 //!      `cargo bench -p vsdb_core --bench cache_pool -- --save-baseline private`
 //!   2. restore `.with_block_cache(Some(Arc::clone(pool)))`, then run
 //!      `cargo bench -p vsdb_core --bench cache_pool -- --baseline private`

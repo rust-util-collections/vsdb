@@ -11,16 +11,6 @@
 
 ## Open
 
-### [LOW] benches: two bench programs cannot run as documented
-- **Where**: `core/benches/cache_pool.rs` (A/B protocol in the module doc), `strata/benches/thread_overhead_demo.rs`, `strata/benches/thread_spawn_test.rs`, `strata/Cargo.toml`
-- **What**:
-  - Step 1 of the cache-pool A/B protocol passes a value cast `as usize` to `with_block_cache_capacity`, which takes a `u64`. It also leaves the `pool` parameter of `mmdb_open` unused, which `deny(warnings)` rejects.
-  - The two thread demos define `fn main()` but have no `[[bench]]` entry with `harness = false`, so Cargo runs them under libtest and their `main` never executes.
-- **Why**: The documented private-split baseline doesn't build. `cargo bench --bench thread_overhead_demo` runs nothing, yet both targets still compile under `make lint`.
-- **Suggested fix**: In the control-build instructions, drop the cast and keep `pool` referenced. Declare the demos with `harness = false`, move them to `examples/`, or delete them.
-
----
-
 ### [LOW] review guides: the SlotDex checklist names a removed helper
 - **Where**: `docs/ai/patterns/slotdex.md` (checklist)
 - **What**: The checklist asks for a pure `floor_base_of`, which cc2f41c removed. The current functions are `SlotType::tier_stride` and `floor_align`, applied through `aligned`.

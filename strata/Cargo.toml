@@ -58,3 +58,11 @@ harness = false
 [[bench]]
 name = "dagmap"
 harness = false
+
+[[bench]]
+name = "thread_overhead_demo"
+harness = false
+
+[[bench]]
+name = "thread_spawn_test"
+harness = false
