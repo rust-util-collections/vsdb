@@ -123,3 +123,16 @@ in the build manifest. The v5 `contains_key` measurements used `d9f00f4`
 and the memory timing binary used `b5f3153`. The reproduction instructions
 build the later v5 allocation executable separately. These revisions represent
 different measured source paths. [Binary and driver fingerprints](../../../evaluations/v18-adapter/builds.json)
+
+## Working-read page validation
+
+[Four independent confirmations](leaf-confirmation.json.gz) cover the
+final leaf-class correction at `2ae6149`. Shared validation derives the
+page class from its actual slots. The fallible leased lookup checks that
+class against the persisted ID, returns `Corrupt` on invalid references,
+and distinguishes missing objects from absent keys. The tests changed
+a real leaf to reference a valid older blob under an inline-only ID and
+also corrupted a slot offset while leaving the header valid. Returning
+either error from a callback leaves its prior staged edits unpublished.
+The four reviewers found the correction satisfactory.
+[Regression tests](../../../../strata/src/versioned/test.rs) · [Checked-path measurements](../../../evaluations/v18-publication/results/verified-leaf/summary.csv)
