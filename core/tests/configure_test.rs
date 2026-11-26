@@ -211,3 +211,112 @@ fn get_base_dir_freezes_subsequent_configure() {
         String::from_utf8_lossy(&output.stderr),
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_environment_paths_select_requested_directories() {
+    use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+
+    const CHILD_CASE: &str = "VSDB_NON_UTF8_ENV_CASE";
+    const CHILD_EXPECTED: &str = "VSDB_NON_UTF8_ENV_EXPECTED";
+
+    if let Some(case) = env::var_os(CHILD_CASE) {
+        let base = vsdb_get_base_dir();
+        if case == "tmpdir" {
+            let parent = PathBuf::from(env::var_os(CHILD_EXPECTED).unwrap());
+            assert_eq!(base.parent(), Some(parent.as_path()));
+            let mut map = MapxRaw::new();
+            map.insert(b"k", b"v");
+            assert_eq!(map.get(b"k"), Some(b"v".to_vec()));
+            return;
+        }
+        let expected = PathBuf::from(env::var_os(CHILD_EXPECTED).unwrap());
+        assert_eq!(base, expected);
+        let mut map = MapxRaw::new();
+        map.insert(b"k", b"v");
+        assert_eq!(map.get(b"k"), Some(b"v".to_vec()));
+        return;
+    }
+
+    let scratch =
+        env::temp_dir().join(format!("vsdb_non_utf8_{}", rand::random::<u128>()));
+    fs::create_dir_all(&scratch).unwrap();
+
+    let non_utf8_base = scratch.join(OsStr::from_bytes(b"base-\xff-dir"));
+    let utf8_home = scratch.join("home");
+    fs::create_dir_all(&utf8_home).unwrap();
+    let out = Command::new(env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "non_utf8_environment_paths_select_requested_directories",
+            "--nocapture",
+        ])
+        .env(CHILD_CASE, "base")
+        .env(CHILD_EXPECTED, &non_utf8_base)
+        .env("VSDB_BASE_DIR", &non_utf8_base)
+        .env("HOME", &utf8_home)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "non-UTF-8 VSDB_BASE_DIR failed:\n{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(
+        !utf8_home.join(".vsdb").exists(),
+        "non-UTF-8 VSDB_BASE_DIR silently fell back to $HOME/.vsdb"
+    );
+    assert!(non_utf8_base.join("__SYSTEM__/universe_header").is_file());
+
+    let non_utf8_home = scratch.join(OsStr::from_bytes(b"home-\xfe-dir"));
+    fs::create_dir_all(&non_utf8_home).unwrap();
+    let expected_home_db = non_utf8_home.join(".vsdb");
+    let out = Command::new(env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "non_utf8_environment_paths_select_requested_directories",
+            "--nocapture",
+        ])
+        .env(CHILD_CASE, "home")
+        .env(CHILD_EXPECTED, &expected_home_db)
+        .env_remove("VSDB_BASE_DIR")
+        .env("HOME", &non_utf8_home)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "non-UTF-8 HOME failed:\n{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(
+        expected_home_db
+            .join("__SYSTEM__/universe_header")
+            .is_file()
+    );
+
+    let non_utf8_tmp = scratch.join(OsStr::from_bytes(b"tmp-\xfd-dir"));
+    fs::create_dir_all(&non_utf8_tmp).unwrap();
+    let out = Command::new(env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "non_utf8_environment_paths_select_requested_directories",
+            "--nocapture",
+        ])
+        .env(CHILD_CASE, "tmpdir")
+        .env(CHILD_EXPECTED, &non_utf8_tmp)
+        .env_remove("VSDB_BASE_DIR")
+        .env_remove("HOME")
+        .env("TMPDIR", &non_utf8_tmp)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "non-UTF-8 TMPDIR failed:\n{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+
+    fs::remove_dir_all(&scratch).unwrap();
+}

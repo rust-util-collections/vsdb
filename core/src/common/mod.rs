@@ -253,20 +253,20 @@ pub(crate) use parse_prefix;
 #[inline(always)]
 fn gen_data_dir() -> PathBuf {
     // Compatible with Windows OS?
-    let d = env::var(BASE_DIR_VAR)
-        .or_else(|_| env::var("HOME").map(|h| format!("{h}/.vsdb")))
-        .unwrap_or_else(|_| {
+    let d = env::var_os(BASE_DIR_VAR)
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|h| PathBuf::from(h).join(".vsdb")))
+        .unwrap_or_else(|| {
             let mut p = env::temp_dir();
             p.push(format!(".vsdb_{}", std::process::id()));
-            let s = p.to_string_lossy().into_owned();
             eprintln!(
                 "vsdb: neither VSDB_BASE_DIR nor HOME is set; \
-                 using temporary directory {s} (data will not persist across restarts)"
+                 using temporary directory {} (data will not persist across restarts)",
+                p.display()
             );
-            s
+            p
         });
-    absolute_base_dir(Path::new(&d))
-        .expect("vsdb: cannot resolve the default base directory")
+    absolute_base_dir(&d).expect("vsdb: cannot resolve the default base directory")
 }
 
 fn absolute_base_dir(path: &Path) -> io::Result<PathBuf> {
