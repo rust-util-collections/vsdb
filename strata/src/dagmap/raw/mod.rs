@@ -272,12 +272,13 @@ impl DagMapRaw {
             }
         }
     }
-    /// Creates a root in this namespace, or attaches a child to its parent.
+    /// Creates a root in `ns`. With a parent, the child inherits the parent's
+    /// namespace and shard; `ns` only selects placement for new roots.
     pub fn new_in(ns: &Namespace, parent: Option<&mut Self>) -> Self {
-        if let Some(p) = parent.as_ref() {
-            debug_assert_eq!(ns.id(), p.namespace().id());
+        match parent {
+            Some(parent) => Self::new(Some(parent)),
+            None => ns.scope(|| Self::new(None)),
         }
-        ns.scope(|| Self::new(parent))
     }
     /// Owning namespace.
     pub fn namespace(&self) -> Namespace {

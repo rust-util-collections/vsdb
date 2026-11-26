@@ -98,22 +98,12 @@ impl<V> DagMapRawKey<V>
 where
     V: ValueEnDe,
 {
-    /// [`new`](Self::new) placed in `ns` — every internal component
-    /// lands in the same namespace (a composite never spans namespaces).
-    ///
-    /// With a parent, the child ALWAYS inherits the parent's namespace
-    /// (see [`DagMapRaw::new`]); a mismatched `ns` is a caller bug
-    /// (`debug_assert`ed, ignored in release).
+    /// Places a root in `ns`. A child inherits its parent's namespace and shard.
     pub fn new_in(ns: &crate::common::Namespace, parent: Option<&mut Self>) -> Self {
-        if let Some(p) = &parent {
-            debug_assert_eq!(
-                ns.id(),
-                p.namespace().id(),
-                "a DAG never spans namespaces: child must live in its \
-                 parent's namespace"
-            );
+        Self {
+            inner: DagMapRaw::new_in(ns, parent.map(|p| &mut p.inner)),
+            _p: PhantomData,
         }
-        ns.scope(|| Self::new(parent))
     }
 
     /// The namespace this structure lives in.

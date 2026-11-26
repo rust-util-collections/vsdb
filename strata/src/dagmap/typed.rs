@@ -46,6 +46,7 @@ impl<K: KeyEnDe, V: ValueEnDe> DagMap<K, V> {
         Self::wrap(DagMapRawKey::new(parent.map(|p| &mut p.inner)))
     }
     /// Creates the root in a specified namespace.
+    /// With a parent, the child always inherits its namespace and shard.
     pub fn new_in(ns: &Namespace, parent: Option<&mut Self>) -> Self {
         Self::wrap(DagMapRawKey::new_in(ns, parent.map(|p| &mut p.inner)))
     }
