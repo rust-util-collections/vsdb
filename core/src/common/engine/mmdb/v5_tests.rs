@@ -105,8 +105,8 @@ fn native_shard_fence_and_admission_preserve_wal_and_sequence() {
 #[test]
 fn namespace_budget_counts_all_five_possible_generations_and_both_stores() {
     let normal = EngineSizing::from_budget_mb(2048);
-    assert_eq!(normal.write_buffer_size(16), 6 << 20);
-    assert_eq!(normal.write_buffer_size(1), 96 << 20);
+    assert_eq!(normal.write_buffer_size(16), 16 << 20);
+    assert_eq!(normal.write_buffer_size(1), 256 << 20);
     assert_eq!(normal.pool_store_capacity(), 256 << 20);
     for mb in [0, 1, 7, 8] {
         let named = EngineSizing::from_budget_mb(mb);
@@ -118,7 +118,7 @@ fn namespace_budget_counts_all_five_possible_generations_and_both_stores() {
     }
     let small = EngineSizing::from_budget_mb(1);
     assert_eq!(small.pool_store_capacity(), 1 << 20);
-    assert_eq!(small.write_buffer_size(1), 384 << 10);
+    assert_eq!(small.write_buffer_size(1), 1 << 20);
     assert_eq!(small.write_buffer_size(16), 64 << 10);
     assert_eq!(
         EngineSizing::from_budget_mb(usize::MAX).write_buffer_size(1),

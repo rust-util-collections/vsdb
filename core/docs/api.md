@@ -47,10 +47,15 @@ and L0 pin payload. These observations exclude caller-held pins, retired
 views and collection page caches. They do not sum to process RSS.
 
 With namespace budget `B` bytes and `S` shards, each pool store has capacity
-`B / 8`. A shard's write buffer uses `3 × floor(B / 64) / S`, clamped
+`B / 8`. A shard's write buffer uses `B / 8 / S`, clamped
 between 64 KiB and 512 MiB. Four immutable buffers plus one active buffer are
-possible on each shard. Thus 2 GiB and 16 shards gives 6 MiB per buffer and
-256 MiB per evictable store. Large batches can overshoot the thresholds and
+possible on each shard. Thus 2 GiB and 16 shards gives 16 MiB per buffer and
+256 MiB per evictable store. Full active and immutable generations on all
+shards would total 1,280 MiB of nominal thresholds before either cache,
+application memory or oversized batches. The actual write and mixed-read
+trials measured lower RSS. [Measured resource use](../../docs/evaluations/v18-adapter/README.md)
+
+Large batches can overshoot these thresholds and
 the minimum buffer size can dominate a small budget.
 
 ## MapxRaw

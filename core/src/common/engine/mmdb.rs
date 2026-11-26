@@ -1517,9 +1517,9 @@ impl EngineSizing {
     }
 
     fn write_buffer_size(&self, shards: usize) -> usize {
-        // Five generations per shard reserve 15/64 of the process budget.
-        // The 64 KiB floor keeps tiny budgets usable and can exceed that fraction.
-        (self.mem_budget / 64 * 3 / shards).clamp(64 * 1024, 512 * 1024 * 1024)
+        // Hold the active-buffer budget to one eighth across all shards,
+        // subject to the floor for tiny deployments and the 512 MiB cap.
+        (self.mem_budget / 8 / shards).clamp(64 * 1024, 512 * 1024 * 1024)
     }
 }
 

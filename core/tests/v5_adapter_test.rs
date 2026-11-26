@@ -117,7 +117,7 @@ fn namespace_reports_one_pool_and_each_members_own_memtables() {
     assert_eq!(first.shards.len(), 2);
     assert_eq!(first.pool.segmented_capacity_bytes, 4 << 20);
     assert_eq!(first.pool.overflow_capacity_bytes, 4 << 20);
-    assert_eq!(first.write_buffer_bytes_per_shard, 768 << 10);
+    assert_eq!(first.write_buffer_bytes_per_shard, 2 << 20);
     assert_eq!(first.immutable_limit_per_shard, 4);
     let mut map = MapxRaw::new_in(&ns);
     map.insert(b"test", vec![1; 128 << 10]);
@@ -163,7 +163,7 @@ fn fence_and_geometry_child() {
             .parse::<vsdb_core::InstanceId>()
             .unwrap();
         let map = MapxRaw::from_meta(saved).unwrap();
-        for i in [0u64, 511, 1023, 1535] {
+        for i in [0u64, 511, 1023, 2047, 3071] {
             assert_eq!(map.get(i.to_be_bytes()).unwrap(), vec![i as u8; 8192]);
         }
         assert_eq!(map.get(b"residual"), Some(b"after rotation".to_vec()));
@@ -174,7 +174,7 @@ fn fence_and_geometry_child() {
     let id = map.save_meta().unwrap();
     let ns = map.namespace();
     let shard = id.map_id as usize % 16;
-    for i in 0..1536u64 {
+    for i in 0..3072u64 {
         map.insert(i.to_be_bytes(), vec![i as u8; 8192]);
     }
     let start = std::time::Instant::now();
