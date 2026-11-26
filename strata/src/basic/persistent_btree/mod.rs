@@ -467,6 +467,11 @@ impl RootLease {
         if id == EMPTY_ROOT {
             return Ok(None);
         }
+        if id & CLASS_MASK == BLOB {
+            return Err(VsdbError::Corrupt {
+                detail: format!("tree root {id} is a value blob"),
+            });
+        }
         loop {
             let probe = self
                 .nodes
@@ -475,8 +480,7 @@ impl RootLease {
                         return decode(bytes).map(|v| Found::Value(Some(v)));
                     }
                     let page = NodeView::open(bytes)?;
-                    page.validate()?;
-                    if page.leaf != (id & CLASS_MASK != 0) {
+                    if page.validated_class()? != id & CLASS_MASK {
                         return Err(VsdbError::Corrupt {
                             detail: format!("incorrect tree page class for {id}"),
                         });
@@ -1622,15 +1626,8 @@ impl PersistentBTree {
                 Some(_) if id & CLASS_MASK == BLOB => Vec::new(),
                 Some(bytes) => {
                     let page = NodeView::open(&bytes)?;
-                    page.validate()?;
+                    let class = page.validated_class()?;
                     let children = page.edges();
-                    let class = if !page.leaf {
-                        0
-                    } else if children.is_empty() {
-                        LEAF
-                    } else {
-                        BLOB_LEAF
-                    };
                     if class != id & CLASS_MASK
                         || children.iter().any(|&c| {
                             c & !CLASS_MASK >= id & !CLASS_MASK || c & !CLASS_MASK == 0

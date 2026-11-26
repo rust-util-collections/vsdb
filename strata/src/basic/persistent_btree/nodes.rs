@@ -79,6 +79,11 @@ impl<'a> NodeView<'a> {
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
+        self.validated_class().map(|_| ())
+    }
+
+    pub(super) fn validated_class(&self) -> Result<u64> {
+        let mut class = if self.leaf { LEAF } else { 0 };
         let invalid = || VsdbError::Corrupt {
             detail: "invalid B+ tree slot offset, key order or child".into(),
         };
@@ -89,8 +94,12 @@ impl<'a> NodeView<'a> {
                 return Err(invalid());
             }
             let desc = self.desc(i);
-            if self.leaf && desc & CLASS_MASK != BLOB && u32::try_from(desc).is_err() {
-                return Err(invalid());
+            if self.leaf {
+                if desc & CLASS_MASK == BLOB {
+                    class = BLOB_LEAF;
+                } else if u32::try_from(desc).is_err() {
+                    return Err(invalid());
+                }
             }
             let end = self.end(i);
             if end < key_end
@@ -108,7 +117,7 @@ impl<'a> NodeView<'a> {
         {
             return Err(invalid());
         }
-        Ok(())
+        Ok(class)
     }
 
     fn payload_start(&self) -> usize {

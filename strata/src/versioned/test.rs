@@ -5484,3 +5484,38 @@ fn working_edit_checks_leaf_bounds_and_reads_overflow_at_the_captured_root() {
     assert!(matches!(err, crate::VsdbError::Corrupt { .. }));
     assert_eq!(map.get_branch(branch).unwrap(), head);
 }
+
+#[test]
+fn working_read_detects_wrong_leaf_class_and_an_out_of_bounds_slot() {
+    use crate::basic::persistent_btree::{
+        BLOB, CLASS_MASK, LEAF, LeafVal, Node, NodeView, object_key,
+    };
+    let mut map = VerMap::<u64, Vec<u8>>::new();
+    let branch = map.main_branch();
+    map.insert(branch, &1, &vec![0x68; 4096]).unwrap();
+    map.commit(branch).unwrap();
+    let old = map.get_branch(branch).unwrap().dirty_root;
+    let raw = map.tree.nodes.get(object_key(old)).unwrap();
+    let blob = NodeView::open(&raw).unwrap().edges()[0];
+    assert_eq!(blob & CLASS_MASK, BLOB);
+    map.insert(branch, &1, &vec![9]).unwrap();
+    let head = map.get_branch(branch).unwrap();
+    assert_eq!(head.dirty_root & CLASS_MASK, LEAF);
+    let key = object_key(head.dirty_root);
+    let mut invalid_slot = map.tree.nodes.get(key).unwrap();
+    invalid_slot[2..6].copy_from_slice(&u32::MAX.to_le_bytes());
+    let contradictory = Node::Leaf {
+        keys: vec![1u64.to_be_bytes().to_vec()],
+        values: vec![LeafVal::Blob(blob)],
+    }
+    .encode();
+    for damaged in [invalid_slot, contradictory] {
+        map.tree.nodes.insert(key, damaged);
+        let result = map.edit_working(branch, 512, |edit| {
+            edit.insert(&20, &vec![0])?;
+            edit.get(&1)
+        });
+        assert!(matches!(result, Err(crate::VsdbError::Corrupt { .. })));
+        assert_eq!(map.get_branch(branch).unwrap(), head);
+    }
+}
