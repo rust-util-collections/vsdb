@@ -1484,12 +1484,19 @@ impl Namespace {
             return Ok(());
         };
         let _keep_lease = root_lease;
-        for entry in fs::read_dir(&target)? {
+        #[cfg(test)]
+        tests::before_root_wipe(&target);
+        let entries = match fs::read_dir(&target) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e.into()),
+        };
+        for entry in entries {
             let entry = entry?;
-            let removed = if entry.file_type()?.is_dir() {
-                fs::remove_dir_all(entry.path())
-            } else {
-                fs::remove_file(entry.path())
+            let removed = match entry.file_type() {
+                Ok(kind) if kind.is_dir() => fs::remove_dir_all(entry.path()),
+                Ok(_) => fs::remove_file(entry.path()),
+                Err(e) => Err(e),
             };
             match removed {
                 Ok(()) => {}
@@ -1734,6 +1741,26 @@ mod tests {
         static OCCUPY_PENDING_ROOT: RefCell<Option<PathBuf>> = const {RefCell::new(None)};
         static INTERRUPT_AFTER_PENDING: Cell<bool> = const { Cell::new(false) };
         static INTERRUPTED_ID: Cell<Option<NsId>> = const { Cell::new(None) };
+        static REMOVE_ROOT_BEFORE_WIPE: Cell<bool> = const { Cell::new(false) };
+    }
+
+    pub(super) fn before_root_wipe(root: &Path) {
+        if REMOVE_ROOT_BEFORE_WIPE.with(|flag| flag.replace(false)) {
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn destroy_succeeds_when_the_root_disappears_after_unregistering() {
+        let ns = Namespace::create().unwrap();
+        let id = ns.id();
+        let root = ns.path().to_path_buf();
+        ns.close().unwrap();
+        // Another actor removes the root after the registry update.
+        REMOVE_ROOT_BEFORE_WIPE.with(|flag| flag.set(true));
+        Namespace::destroy(id).unwrap();
+        assert!(!Namespace::list().unwrap().iter().any(|info| info.id == id));
+        assert!(!root.exists());
     }
 
     pub(super) fn interrupt_creation_after_pending(id: NsId) {
