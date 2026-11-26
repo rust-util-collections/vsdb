@@ -5668,6 +5668,44 @@ fn rejected_final_publication_reclaims_spilled_stage_markers_and_blobs() {
 }
 
 #[test]
+fn failed_sibling_read_discards_the_replacement_leaf_and_allows_retry() {
+    use crate::basic::persistent_btree::{LEAF, MAX_KEYS, MIN_KEYS, Node, object_key};
+
+    let mut map = VerMap::<u32, u32>::new();
+    let branch = map.main_branch();
+    for k in 0..=MAX_KEYS as u32 {
+        map.insert(branch, &k, &k).unwrap();
+    }
+    let commit = map.commit(branch).unwrap();
+    let head = map.get_branch(branch).unwrap();
+    let Node::Internal { children, .. } = map.tree.node(head.dirty_root) else {
+        panic!("expected two leaves");
+    };
+    assert_eq!(children.len(), 2);
+    assert_eq!(map.tree.node(children[0]).key_count(), MIN_KEYS);
+    let sibling = object_key(children[1]);
+    let saved = map.tree.nodes.get(sibling).unwrap();
+    let serial = map.tree.next_id();
+    map.tree.nodes.remove(sibling);
+    assert!(matches!(
+        map.remove(branch, &0),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    assert!(map.tree.next_id() > serial);
+    assert_eq!(map.get_branch(branch).unwrap(), head);
+    assert!(map.tree.nodes.get(object_key(LEAF | serial)).is_none());
+
+    map.tree.nodes.insert(sibling, saved);
+    assert_eq!(map.at(commit).unwrap().get(&0), Some(0));
+    map.remove(branch, &0).unwrap();
+    map.commit(branch).unwrap();
+    assert_eq!(map.get(branch, &0).unwrap(), None);
+    assert_eq!(map.at(commit).unwrap().get(&0), Some(0));
+    assert!(map.tree.nodes.get(object_key(LEAF | serial)).is_none());
+    map.verify_and_gc().unwrap();
+}
+
+#[test]
 fn verify_and_gc_propagates_sst_corruption_without_panicking() {
     use std::fs;
 
@@ -5714,6 +5752,7 @@ fn verify_and_gc_propagates_sst_corruption_without_panicking() {
     fs::write(&files[0], contents).unwrap();
 
     for result in [
+        map.remove(main, &2_500),
         map.verify_and_gc().map(|_| ()),
         VerMap::<u64, Vec<u8>>::from_meta_verified(id).map(|_| ()),
     ] {

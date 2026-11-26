@@ -866,6 +866,8 @@ where
     }
 
     /// Removes a key from the working state of `branch`.
+    /// An unreadable or malformed tree page returns an error before the
+    /// replacement working root is published.
     pub fn remove<Q>(&mut self, branch: BranchId, key: &Q) -> Result<()>
     where
         K: OrderedKeyLookup<Q>,
@@ -874,10 +876,10 @@ where
         self.ensure_writable("versioned map remove")?;
         let state = self.get_branch(branch)?;
         let root = self.build_root(|tree| {
-            Ok(K::with_ordered_lookup(key, |bytes| {
-                tree.remove_buffered(state.dirty_root, bytes)
+            K::with_ordered_lookup(key, |bytes| {
+                tree.try_remove_buffered(state.dirty_root, bytes)
             })
-            .unwrap_or(state.dirty_root))
+            .unwrap_or(Ok(state.dirty_root))
         })?;
         self.publish_working(branch, state, root)
     }

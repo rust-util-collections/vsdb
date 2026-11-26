@@ -82,6 +82,20 @@ impl<'a> NodeView<'a> {
         self.validated_class().map(|_| ())
     }
 
+    pub(super) fn check_id(&self, id: NodeId) -> Result<()> {
+        if self.validated_class()? != id & CLASS_MASK
+            || self.edge_ids().any(|child| {
+                let serial = child & !CLASS_MASK;
+                serial == 0 || serial >= id & !CLASS_MASK
+            })
+        {
+            return Err(VsdbError::Corrupt {
+                detail: format!("invalid child or class on page {id}"),
+            });
+        }
+        Ok(())
+    }
+
     pub(super) fn validated_class(&self) -> Result<u64> {
         let mut class = if self.leaf { LEAF } else { 0 };
         let invalid = || VsdbError::Corrupt {
@@ -188,15 +202,20 @@ impl<'a> NodeView<'a> {
         }
         lo
     }
+    fn edge_ids(&self) -> impl Iterator<Item = NodeId> + '_ {
+        (0..self.len + usize::from(!self.leaf)).filter_map(|i| {
+            if self.leaf {
+                let id = self.desc(i);
+                (id & CLASS_MASK == BLOB).then_some(id)
+            } else {
+                Some(self.child(i))
+            }
+        })
+    }
     pub(crate) fn edges(&self) -> Vec<NodeId> {
-        if self.leaf {
-            (0..self.len)
-                .map(|i| self.desc(i))
-                .filter(|&id| id & CLASS_MASK == BLOB)
-                .collect()
-        } else {
-            (0..=self.len).map(|i| self.child(i)).collect()
-        }
+        let mut edges = Vec::with_capacity(if self.leaf { 0 } else { self.len + 1 });
+        edges.extend(self.edge_ids());
+        edges
     }
     pub(crate) fn leaf_val(&self, i: usize) -> LeafVal {
         let desc = self.desc(i);
@@ -206,7 +225,7 @@ impl<'a> NodeView<'a> {
             LeafVal::Bytes(self.raw[self.key_end(i)..self.end(i)].to_vec())
         }
     }
-    fn materialize(&self) -> Node {
+    pub(super) fn materialize(&self) -> Node {
         let keys = (0..self.len).map(|i| self.key(i).to_vec()).collect();
         if self.leaf {
             Node::Leaf {

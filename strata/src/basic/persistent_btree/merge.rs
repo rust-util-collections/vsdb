@@ -184,7 +184,7 @@ impl PersistentBTree {
         let mut root = target_root;
         let mut changes = changes.into_iter().peekable();
         while changes.peek().is_some() {
-            let next = self.apply_leaf_run(root, &mut changes);
+            let next = self.apply_leaf_run(root, &mut changes)?;
             if next == root {
                 continue;
             }
@@ -213,7 +213,7 @@ impl PersistentBTree {
         changes: &mut std::iter::Peekable<
             impl Iterator<Item = (Vec<u8>, Option<Vec<u8>>)>,
         >,
-    ) -> NodeId {
+    ) -> Result<NodeId> {
         let first = &changes.peek().unwrap().0;
         let mut path = Vec::new();
         let mut upper = None;
@@ -222,7 +222,7 @@ impl PersistentBTree {
             if id == EMPTY_ROOT {
                 break (Vec::new(), Vec::new());
             }
-            match self.node(id) {
+            match self.try_node(id)? {
                 Node::Leaf { keys, values } => break (keys, values),
                 Node::Internal { keys, children } => {
                     let ci = Self::child_index(&keys, first);
@@ -243,7 +243,7 @@ impl PersistentBTree {
             };
             let at = keys.binary_search(&key);
             match (at, value) {
-                (Ok(i), Some(v)) if !self.leaf_val_eq(&values[i], &v) => {
+                (Ok(i), Some(v)) if !self.try_leaf_val_eq(&values[i], &v)? => {
                     values[i] = super::LeafVal::Bytes(v);
                     changed = true;
                 }
@@ -264,10 +264,10 @@ impl PersistentBTree {
             }
         }
         if !changed {
-            return root;
+            return Ok(root);
         }
         if keys.is_empty() && path.is_empty() {
-            return EMPTY_ROOT;
+            return Ok(EMPTY_ROOT);
         }
         let mut underfull = keys.len() < MIN_KEYS;
         let mut change = if keys.len() > MAX_KEYS {
@@ -281,11 +281,12 @@ impl PersistentBTree {
                 InsertResult::Updated(child) => {
                     children[ci] = child;
                     if underfull {
-                        let (nid, short) = match self.fix_underflow(keys, children, ci) {
-                            RemoveResult::Underflow(nid) => (nid, true),
-                            RemoveResult::Done(nid) => (nid, false),
-                            RemoveResult::NotFound => unreachable!(),
-                        };
+                        let (nid, short) =
+                            match self.fix_underflow(keys, children, ci)? {
+                                RemoveResult::Underflow(nid) => (nid, true),
+                                RemoveResult::Done(nid) => (nid, false),
+                                RemoveResult::NotFound => unreachable!(),
+                            };
                         underfull = short;
                         change = InsertResult::Updated(nid);
                         continue;
@@ -306,11 +307,13 @@ impl PersistentBTree {
         }
         match change {
             InsertResult::Updated(id) if underfull => self.shrink_root(id),
-            InsertResult::Updated(id) => id,
-            InsertResult::Split { left, sep, right } => self.alloc(&Node::Internal {
-                keys: vec![sep],
-                children: vec![left, right],
-            }),
+            InsertResult::Updated(id) => Ok(id),
+            InsertResult::Split { left, sep, right } => {
+                Ok(self.alloc(&Node::Internal {
+                    keys: vec![sep],
+                    children: vec![left, right],
+                }))
+            }
             InsertResult::Unchanged => unreachable!(),
         }
     }

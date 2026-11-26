@@ -21,6 +21,9 @@ see the [collection guide](api.md#vermap).
 
 Updating a leaf allocates new pages along its path and keeps unaffected
 subtrees shared. Splits and underflow repair can also touch neighboring pages.
+A single-key removal that encounters an unreadable page returns the storage
+error and preserves the branch's working root. A missing or malformed
+referenced page returns `VsdbError::Corrupt`.
 A branch is clean when its stored keys and values match its head. Editing a
 value and then restoring its original bytes makes the branch clean again.
 `BranchId` and `CommitId` are distinct serde-transparent `u64` types with
