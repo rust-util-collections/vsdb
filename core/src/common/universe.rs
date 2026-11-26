@@ -252,6 +252,7 @@ pub(super) fn validate_pending_root(
     }
     // A crash can leave the empty system directory or a staging sibling
     // before the initializer's atomic rename. No other files are ours yet.
+    let expected = engine_bytes(id, ns, shards);
     for entry in fs::read_dir(root)? {
         let entry = entry?;
         if entry.file_name() != "__SYSTEM__" || !entry.file_type()?.is_dir() {
@@ -273,6 +274,12 @@ pub(super) fn validate_pending_root(
                 });
             if !is_stage || !file.file_type()?.is_file() {
                 return Err(corrupt("foreign file in pending namespace root"));
+            }
+            let staged = fs::read(file.path())?;
+            if staged.len() > expected.len() || !expected.starts_with(&staged) {
+                return Err(corrupt(
+                    "foreign initializer staging file in pending namespace root",
+                ));
             }
         }
     }

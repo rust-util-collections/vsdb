@@ -82,6 +82,26 @@ fn registry_directory_sync_retries(root: &Path) {
     created.close().unwrap();
 }
 
+fn registry_pending_directory_sync_retries(root: &Path) {
+    let arm = root.join("arm");
+    fs::write(&arm, b"1").unwrap();
+    assert!(
+        matches!(Namespace::create(), Err(VsdbError::Io(e)) if e.raw_os_error() == Some(EIO))
+    );
+    assert!(
+        matches!(Namespace::list(), Err(VsdbError::Io(e)) if e.raw_os_error() == Some(EIO))
+    );
+    fs::remove_file(&arm).unwrap();
+    assert!(
+        Namespace::list().unwrap().is_empty(),
+        "failed Pending registry sync must not strand a phantom namespace"
+    );
+    let ns = Namespace::create().unwrap();
+    let id = ns.id();
+    ns.close().unwrap();
+    Namespace::destroy(id).unwrap();
+}
+
 fn prefix_directory_sync_retries(root: &Path) {
     let mut map = MapxRaw::new();
     let path = root.join("__SYSTEM__/__prefix_ceiling__");
@@ -155,6 +175,7 @@ fn directory_sync_failure_prevents_metadata_publication() {
             "engine_init" => return engine_init_directory_sync_retries(&root),
             "engine_ready" => return engine_ready_directory_sync_retries(&root),
             "registry" => return registry_directory_sync_retries(&root),
+            "registry_pending" => return registry_pending_directory_sync_retries(&root),
             "metadata" => {}
             case => panic!("unknown directory sync case: {case}"),
         }
@@ -245,6 +266,7 @@ int fsync(int fd) {
         "engine_init",
         "engine_ready",
         "registry",
+        "registry_pending",
     ] {
         let data = root.join(case);
         let target = if case == "marker" {

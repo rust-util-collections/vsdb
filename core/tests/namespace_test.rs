@@ -631,3 +631,36 @@ fn verify_retired_namespace_backup_preserved() {
 
     fs::remove_dir_all(&scratch).unwrap();
 }
+
+#[cfg(unix)]
+#[test]
+fn failed_create_on_uncreatable_explicit_root_clears_pending_record() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let scratch = std::env::temp_dir()
+        .join(format!("vsdb_pending_tmp_{}", rand::random::<u128>()));
+    let ro_parent = scratch.join("ro_parent");
+    fs::create_dir_all(&ro_parent).unwrap();
+    let contested = ro_parent.join("contested");
+    fs::set_permissions(&ro_parent, fs::Permissions::from_mode(0o555)).unwrap();
+
+    if fs::create_dir(&contested).is_err() {
+        assert!(
+            Namespace::create_with(NamespaceOpts {
+                path: Some(contested),
+                shards: 1,
+                mem_budget_mb: Some(16),
+            })
+            .is_err()
+        );
+        let pending_file = vsdb_core::vsdb_get_system_dir().join("__pending_create__");
+        assert_eq!(
+            fs::read(&pending_file).unwrap(),
+            b"VSNPCR01\x00",
+            "failed explicit root creation leaked a PendingCreate record"
+        );
+    }
+
+    fs::set_permissions(&ro_parent, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::remove_dir_all(&scratch).unwrap();
+}

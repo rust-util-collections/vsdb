@@ -341,6 +341,14 @@ fn save_pending_creates(base: &Path, entries: &[PendingCreate]) -> Result<()> {
     Ok(())
 }
 
+fn has_nonempty_dir(path: &Path) -> bool {
+    match fs::read_dir(path) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => false,
+        Ok(mut entries) => entries.next().is_some(),
+        Err(_) => true,
+    }
+}
+
 fn record_pending_create(
     base: &Path,
     reg: &RegistryFile,
@@ -354,6 +362,8 @@ fn record_pending_create(
                 .entries
                 .iter()
                 .any(|r| r.id == e.id && r.state == NsLifecycleState::Established)
+            && (reg.entries.iter().any(|r| r.id == e.id)
+                || has_nonempty_dir(Path::new(&e.path)))
     });
     list.push(pending);
     save_pending_creates(base, &list)
@@ -762,16 +772,27 @@ fn is_unpopulated_failed_root(
                     }
                     "LOCK" => {}
                     other
-                        if [
-                            "engine_header.",
-                            "__initializing__.",
-                            ".shards_ready.",
-                            "format_version.",
-                        ]
-                        .iter()
-                        .any(|p| is_atomic_tmp_for(other, p)) =>
+                        if is_atomic_tmp_for(other, "engine_header.")
+                            || is_atomic_tmp_for(other, "__initializing__.") =>
                     {
-                        saw_owned_artifact = true;
+                        let staged = fs::read(sys.path())?;
+                        if staged.len() > expected_identity.len()
+                            || !expected_identity.starts_with(&staged)
+                        {
+                            return Ok(false);
+                        }
+                        if staged == expected_identity {
+                            saw_owned_artifact = true;
+                        }
+                    }
+                    other
+                        if is_atomic_tmp_for(other, ".shards_ready.")
+                            || is_atomic_tmp_for(other, "format_version.") =>
+                    {
+                        let staged = fs::read(sys.path())?;
+                        if staged.len() > 2 || !b"18".starts_with(&staged) {
+                            return Ok(false);
+                        }
                     }
                     _ => return Ok(false),
                 }
@@ -1014,7 +1035,8 @@ impl Namespace {
             )?;
         }
         if let Err(err) = save_registry(&reg) {
-            if rec.path.is_some() {
+            reg.entries.retain(|r| r.id != rec.id);
+            if save_registry(&reg).is_ok() && rec.path.is_some() {
                 let _ = clear_pending_create(&base, id);
             }
             return Err(err);
@@ -1042,21 +1064,33 @@ impl Namespace {
                 // Delete the root only after the rollback registry write AND its
                 // parent-directory fsync succeed. If that fence fails, keep the
                 // root intact until a later registry load completes the fence.
-                if save_registry(&reg).is_ok()
-                    && let Ok(_guard) = super::universe::lock_root_dir(&root)
-                    && super::universe::validate_pending_root(
-                        &root,
-                        super::universe::active()?.id,
-                        id,
-                        shards,
-                    )
-                    .is_ok()
-                {
-                    // A second universe can race for the same explicit root.
-                    // Only reclaim empty residue or our own initializer/header.
-                    cleanup_failed_root(&root, root_preexisted);
-                    if rec.path.is_some() {
-                        let _ = clear_pending_create(&base, id);
+                if save_registry(&reg).is_ok() {
+                    match super::universe::lock_root_dir(&root) {
+                        Ok(_guard) => {
+                            if super::universe::validate_pending_root(
+                                &root,
+                                super::universe::active()?.id,
+                                id,
+                                shards,
+                            )
+                            .is_ok()
+                            {
+                                // A second universe can race for the same explicit root.
+                                // Only reclaim empty residue or our own initializer/header.
+                                cleanup_failed_root(&root, root_preexisted);
+                                if rec.path.is_some() {
+                                    let _ = clear_pending_create(&base, id);
+                                }
+                            }
+                        }
+                        Err(VsdbError::Io(io_err))
+                            if io_err.kind() == io::ErrorKind::NotFound =>
+                        {
+                            if rec.path.is_some() {
+                                let _ = clear_pending_create(&base, id);
+                            }
+                        }
+                        Err(_) => {}
                     }
                 }
                 Err(e)
@@ -1709,8 +1743,54 @@ mod tests {
         assert!(Namespace::open(id).is_err());
         assert!(Namespace::destroy(id).is_err());
         fs::remove_file(system.join("__initializing__")).unwrap();
+        let foreign_tmp = system.join("__initializing__.4242.0.tmp");
+        fs::write(&foreign_tmp, super::super::universe::engine_bytes(0, id, 1)).unwrap();
+        assert!(Namespace::open(id).is_err());
+        assert!(Namespace::destroy(id).is_err());
+        assert!(foreign_tmp.is_file());
+        fs::remove_file(&foreign_tmp).unwrap();
         Namespace::destroy(id).unwrap();
         assert!(!root.exists());
+
+        // Also check `reclaim_unregistered_owned_root` against a foreign `.tmp`
+        // left behind after a rolled-back explicit creation.
+        fs::create_dir_all(&system).unwrap();
+        let burnt_id = {
+            let _g = REGISTRY_LOCK.lock();
+            let reg = load_registry().unwrap();
+            let uid = super::super::universe::active().unwrap().id;
+            let burnt = id;
+            save_pending_creates(
+                &vsdb_get_base_dir(),
+                &[PendingCreate {
+                    universe: uid,
+                    id: burnt,
+                    shards: 1,
+                    path: root.to_str().unwrap().to_owned(),
+                }],
+            )
+            .unwrap();
+            assert!(!reg.entries.iter().any(|r| r.id == burnt));
+            burnt
+        };
+        fs::write(
+            &foreign_tmp,
+            super::super::universe::engine_bytes(0, burnt_id, 1),
+        )
+        .unwrap();
+        assert!(
+            Namespace::create_with(NamespaceOpts {
+                path: Some(root.clone()),
+                shards: 1,
+                ..Default::default()
+            })
+            .is_err()
+        );
+        assert!(
+            foreign_tmp.is_file(),
+            "foreign staging .tmp was wiped by reclaim_unregistered_owned_root"
+        );
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
