@@ -48,3 +48,10 @@ external namespace paths, allocator floor and writable v5 reopen.
 A failed sync after exclusive rename can leave a visible complete
 destination. The application selector stays on the protected source until
 durability is acknowledged. [Generation fixture](../../../migration/tests/staged_generation.rs)
+
+Before generation publication, the exclusive allocator ceiling must exceed
+each visible physical map prefix and each authoritative instance metadata
+filename, including empty maps and populated pending shards. Treat unknown
+application payloads as opaque when checking an existing ceiling. The
+missing-ceiling reconstruction and schema-aware handle conversion have
+different evidence available. [Floor tests](../../../migration/tests/staged_generation.rs)

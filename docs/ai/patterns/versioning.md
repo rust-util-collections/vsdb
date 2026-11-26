@@ -68,5 +68,7 @@ Trace `edit_working` from its leased working root through the overlay,
 budget and commit. Replacing a staged value releases its previous charge.
 Callback error or panic discards the overlay. Drop the private lease before
 publishing; a genuine external snapshot retains the necessary old nodes.
-Count engine submissions and root generations separately. Reopen saved
+A working-edit fallback read checks page bounds, referenced objects and
+blob visibility, returning corruption for a missing reachable object while
+an absent key yields `None`. Count engine submissions and root generations separately. Reopen saved
 metadata and check that working edits leave the history head intact.

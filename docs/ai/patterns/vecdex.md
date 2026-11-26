@@ -49,6 +49,10 @@ and visit caps on exactly the same graph. Separate logical block acquisitions,
 distinct retained data allocations, process RSS and verified storage requests.
 [Query protocol and evidence](../../evaluations/v18-vecdex-v5/README.md)
 
+Staged insertion and pruning share adjacency parsing with search. On a
+missing or malformed row, trace the typed error to the mutation's public
+caller and verify the current staged chunk has published no partial edits.
+
 ## Checklist
 
 - [ ] Entry at global max_layer
