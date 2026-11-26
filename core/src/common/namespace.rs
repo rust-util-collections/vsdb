@@ -341,6 +341,16 @@ fn save_pending_creates(base: &Path, entries: &[PendingCreate]) -> Result<()> {
     Ok(())
 }
 
+/// Make a directory entry change durable. Unlink and rename survive power
+/// loss only after their parent directory is synchronized.
+fn sync_parent(path: &Path) -> io::Result<()> {
+    let parent = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    fs::File::open(parent)?.sync_all()
+}
+
 /// Fence an empty root or its absence before dropping the last recovery record.
 fn durably_empty_root(path: &Path) -> io::Result<bool> {
     match fs::read_dir(path) {
@@ -1475,7 +1485,7 @@ impl Namespace {
         save_registry(&reg)?;
         if link_meta.is_some_and(|m| m.file_type().is_symlink()) {
             match fs::remove_file(&root) {
-                Ok(()) => {}
+                Ok(()) => sync_parent(&root)?,
                 Err(e) if e.kind() == io::ErrorKind::NotFound => {}
                 Err(e) => return Err(e.into()),
             }
@@ -1488,7 +1498,10 @@ impl Namespace {
         tests::before_root_wipe(&target);
         let entries = match fs::read_dir(&target) {
             Ok(entries) => entries,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                sync_parent(&target)?;
+                return Ok(());
+            }
             Err(e) => return Err(e.into()),
         };
         for entry in entries {
@@ -1505,8 +1518,14 @@ impl Namespace {
             }
         }
         match fs::remove_dir(&target) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Ok(()) => {
+                sync_parent(&target)?;
+                Ok(())
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                sync_parent(&target)?;
+                Ok(())
+            }
             // An adopted root, such as a mount point or a directory under a
             // parent the process cannot modify, stays behind empty.
             Err(e)

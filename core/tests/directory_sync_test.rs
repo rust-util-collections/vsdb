@@ -102,6 +102,21 @@ fn registry_pending_directory_sync_retries(root: &Path) {
     Namespace::destroy(id).unwrap();
 }
 
+fn destroy_directory_sync_retries(root: &Path) {
+    let ns = Namespace::create().unwrap();
+    let id = ns.id();
+    ns.close().unwrap();
+    let arm = root.join("arm");
+    fs::write(&arm, b"1").unwrap();
+    assert!(matches!(
+        Namespace::destroy(id),
+        Err(VsdbError::Io(e)) if e.raw_os_error() == Some(EIO)
+    ));
+    fs::remove_file(&arm).unwrap();
+    // The registry entry is already gone. Remove whatever tree remains.
+    let _ = Namespace::destroy(id);
+}
+
 fn failed_root_cleanup_retries(root: &Path) {
     let explicit = root.parent().unwrap().join("cleanup_ns");
     fs::create_dir(&explicit).unwrap();
@@ -204,6 +219,7 @@ fn directory_sync_failure_prevents_metadata_publication() {
             "registry" => return registry_directory_sync_retries(&root),
             "registry_pending" => return registry_pending_directory_sync_retries(&root),
             "cleanup" => return failed_root_cleanup_retries(&root),
+            "destroy" => return destroy_directory_sync_retries(&root),
             "metadata" => {}
             case => panic!("unknown directory sync case: {case}"),
         }
@@ -296,12 +312,15 @@ int fsync(int fd) {
         "registry",
         "registry_pending",
         "cleanup",
+        "destroy",
     ] {
         let data = root.join(case);
         let target = if case == "marker" {
             data.join("__NAMESPACES__/0000000000000001/__SYSTEM__")
         } else if case == "cleanup" {
             root.join("cleanup_ns/__SYSTEM__")
+        } else if case == "destroy" {
+            data.join("__NAMESPACES__")
         } else {
             data.join("__SYSTEM__")
         };
