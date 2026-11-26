@@ -1397,7 +1397,9 @@ impl Namespace {
 
     /// Destroys a namespace: removes its registry entry, then deletes its
     /// whole directory tree without per-key traversal. Filesystem work scales
-    /// with the number of files and directories.
+    /// with the number of files and directories. A root that cannot itself be
+    /// removed, such as a mount point adopted by [`Namespace::create_with`],
+    /// is emptied and kept.
     ///
     /// The target must not be open in this process ([`Namespace::close_by_id`] it
     /// first). A crash between the registry update and the tree removal
@@ -1475,9 +1477,33 @@ impl Namespace {
             return Ok(());
         };
         let _keep_lease = root_lease;
-        match fs::remove_dir_all(&target) {
+        for entry in fs::read_dir(&target)? {
+            let entry = entry?;
+            let removed = if entry.file_type()?.is_dir() {
+                fs::remove_dir_all(entry.path())
+            } else {
+                fs::remove_file(entry.path())
+            };
+            match removed {
+                Ok(()) => {}
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        match fs::remove_dir(&target) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            // An adopted root, such as a mount point or a directory under a
+            // parent the process cannot modify, stays behind empty.
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::PermissionDenied | io::ErrorKind::ResourceBusy
+                ) =>
+            {
+                fs::File::open(&target)?.sync_all()?;
+                Ok(())
+            }
             Err(e) => Err(e.into()),
         }
     }

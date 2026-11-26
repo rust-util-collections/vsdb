@@ -11,14 +11,6 @@
 
 ## Open
 
-### [MEDIUM] namespace lifecycle: destroy fails after deleting an adopted root's contents
-- **Where**: `core/src/common/namespace.rs` (`Namespace::destroy`)
-- **What**: `create_with` adopts an existing empty root, and mount points are a documented case. `destroy` removes the registry entry, then calls `remove_dir_all` on the root itself. When the root can't be removed (`EBUSY` on a mount point, `EACCES` under a non-writable parent), the namespace is already unregistered and empty, yet `destroy` returns the error.
-- **Why**: Every destroy of such a namespace reports failure after it has completed, and a retry returns "not registered". Reproduced with a root under a 0o555 parent: `Err(PermissionDenied)`, with the entry gone and the root empty. Failed-create cleanup keeps pre-existing roots instead. An earlier review rejected rolling the registry back on this error; this fix needs no rollback.
-- **Suggested fix**: Remove the root's children, then call `remove_dir`. For an emptied root, treat `PermissionDenied` or `ResourceBusy` from that final removal as success, sync the root, and document the behavior. Regression test: the 0o555-parent scenario returns `Ok` and leaves an empty root. No format change.
-
----
-
 ### [MEDIUM] configuration: a failed first initialization poisons the derived-directory getters
 - **Where**: `core/src/common/mod.rs` (`VSDB_SYSTEM_DIR`, `VSDB_CUSTOM_DIR`, `vsdb_get_system_dir`, `vsdb_get_custom_dir`)
 - **What**: Both statics are `LazyLock`s whose initializers `expect` a successful `universe::active()`. A transient initialization error panics inside the initializer and poisons it. One example is another writer holding `__SYSTEM__/LOCK`.
