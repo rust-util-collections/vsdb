@@ -107,6 +107,15 @@ fn working_lock(path: &Path) -> io::Result<File> {
         .open(path)
 }
 
+fn with_exclusive_lock(file: File, operation: impl FnOnce() -> Result<()>) -> Result<()> {
+    file.try_lock().map_err(io::Error::from)?;
+    let result = operation();
+    // A concurrently spawned child may still hold a copy of this descriptor.
+    // Unlock before returning so an immediate migration retry can acquire it.
+    file.unlock()?;
+    result
+}
+
 fn registry(base: &Path, converted: bool, upgrading: bool) -> Result<Plan> {
     let bytes = match read_metadata(base.join(REG)) {
         Ok(b) => b,
@@ -686,14 +695,16 @@ pub fn migrate_universe(base: impl AsRef<Path>) -> Result<()> {
     }
     let system = base.join("__SYSTEM__");
     if !system.try_exists()? {
-        let adoption = File::open(&base)?;
-        adoption.try_lock().map_err(io::Error::from)?;
-        let result = ensure_bootstrap_system(&base, &system);
-        adoption.unlock()?;
-        result?;
+        with_exclusive_lock(File::open(&base)?, || {
+            ensure_bootstrap_system(&base, &system)
+        })?;
     }
-    let lock = working_lock(&system.join("LOCK"))?;
-    lock.try_lock().map_err(io::Error::from)?;
+    with_exclusive_lock(working_lock(&system.join("LOCK"))?, || {
+        migrate_locked(&base, &system)
+    })
+}
+
+fn migrate_locked(base: &Path, system: &Path) -> Result<()> {
     let committed = read_id(&base.join(HEADER))?;
     let journal = read_id(&base.join(PROGRESS))?;
     let current = committed.is_some() && journal.is_none();
@@ -701,9 +712,9 @@ pub fn migrate_universe(base: impl AsRef<Path>) -> Result<()> {
         return Err(corrupt("upgrade journal identifies a different universe"));
     }
     let id = committed.or(journal).unwrap_or_else(rand::random);
-    let plan = registry(&base, committed.is_some(), journal.is_some())?;
+    let plan = registry(base, committed.is_some(), journal.is_some())?;
     let mut engines = Vec::new();
-    if let Some(engine) = Engine::discover(base.clone(), 0, 16, false, current, journal)? {
+    if let Some(engine) = Engine::discover(base.to_owned(), 0, 16, false, current, journal)? {
         engines.push(engine);
     }
     if engines.is_empty() && !base.join(REG).try_exists()? {
@@ -759,9 +770,12 @@ pub fn migrate_universe(base: impl AsRef<Path>) -> Result<()> {
     }
     let protection = system.join("format_version");
     if current {
-        for root in
-            std::iter::once(&base).chain(engines.iter().filter(|e| e.ns != 0).map(|e| &e.root))
-        {
+        for root in std::iter::once(base).chain(
+            engines
+                .iter()
+                .filter(|e| e.ns != 0)
+                .map(|e| e.root.as_path()),
+        ) {
             let marker = root.join("__SYSTEM__/format_version");
             if marker.try_exists()? {
                 // A previous rename may have succeeded while its directory
@@ -795,4 +809,35 @@ pub fn migrate_universe(base: impl AsRef<Path>) -> Result<()> {
     fs::remove_file(base.join(PROGRESS))?;
     File::open(system)?.sync_all()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migration_unlocks_while_a_duplicate_descriptor_is_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("LOCK");
+        let file = working_lock(&path).unwrap();
+        let contender = working_lock(&path).unwrap();
+
+        for fail in [true, false] {
+            // try_clone shares the open file description just as fork does.
+            let result = with_exclusive_lock(file.try_clone().unwrap(), || {
+                assert!(matches!(
+                    contender.try_lock(),
+                    Err(fs::TryLockError::WouldBlock)
+                ));
+                if fail {
+                    Err(corrupt("migration failed"))
+                } else {
+                    Ok(())
+                }
+            });
+            assert_eq!(result.is_err(), fail);
+            contender.try_lock().unwrap();
+            contender.unlock().unwrap();
+        }
+    }
 }
