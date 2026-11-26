@@ -45,6 +45,11 @@ pub(crate) enum Node {
     },
 }
 
+pub(super) enum LeafValueRef<'a> {
+    Inline(&'a [u8]),
+    Blob(NodeId),
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct NodeView<'a> {
     raw: &'a [u8],
@@ -141,15 +146,23 @@ impl<'a> NodeView<'a> {
             u64::from_le_bytes(self.raw[p..p + 8].try_into().unwrap())
         }
     }
+    /// Returns borrowed inline bytes or the stored blob ID.
+    pub(super) fn value_ref(&self, i: usize) -> LeafValueRef<'a> {
+        let desc = self.desc(i);
+        if desc & CLASS_MASK == BLOB {
+            LeafValueRef::Blob(desc)
+        } else {
+            LeafValueRef::Inline(&self.raw[self.key_end(i)..self.end(i)])
+        }
+    }
     pub(crate) fn value(
         &self,
         i: usize,
         blob: impl FnOnce(NodeId) -> Vec<u8>,
     ) -> Vec<u8> {
-        if self.desc(i) & CLASS_MASK == BLOB {
-            blob(self.desc(i))
-        } else {
-            self.raw[self.key_end(i)..self.end(i)].to_vec()
+        match self.value_ref(i) {
+            LeafValueRef::Inline(bytes) => bytes.to_vec(),
+            LeafValueRef::Blob(id) => blob(id),
         }
     }
     pub(crate) fn lower_bound(&self, key: &[u8], exclusive: bool) -> usize {

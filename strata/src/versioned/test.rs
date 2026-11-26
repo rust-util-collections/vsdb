@@ -5426,3 +5426,61 @@ fn working_edit_releases_its_temporary_read_lease_before_root_publication() {
     assert_eq!(pinned.get(&1), Some(8));
     assert_eq!(map.get(branch, &1).unwrap(), Some(9));
 }
+
+#[test]
+fn failed_read_from_leased_root_does_not_publish_staged_edits() {
+    use crate::basic::persistent_btree::object_key;
+    let mut map = VerMap::<u64, u64>::new();
+    let branch = map.main_branch();
+    map.insert(branch, &1, &7).unwrap();
+    let saved = map.save_meta().unwrap();
+    drop(map);
+    let mut restored = VerMap::<u64, u64>::from_meta(saved).unwrap();
+    let generation = super::store::Header::get(&restored.tree.nodes)
+        .unwrap()
+        .generation;
+    let head = restored.get_branch(branch).unwrap();
+    restored.tree.nodes.remove(object_key(head.dirty_root));
+    let err = restored
+        .edit_working(branch, 512, |edit| {
+            edit.insert(&2, &12)?;
+            edit.get(&1)
+        })
+        .unwrap_err();
+    assert!(matches!(err, crate::VsdbError::Corrupt { .. }));
+    assert_eq!(restored.get_branch(branch).unwrap(), head);
+    assert_eq!(
+        super::store::Header::get(&restored.tree.nodes)
+            .unwrap()
+            .generation,
+        generation
+    );
+}
+
+#[test]
+fn working_edit_checks_leaf_bounds_and_reads_overflow_at_the_captured_root() {
+    use crate::basic::persistent_btree::object_key;
+    let mut map = VerMap::<u64, Vec<u8>>::new();
+    let branch = map.main_branch();
+    let payload = vec![0x52; 4096];
+    map.write_batch(branch, (0..80).map(|key| (key, Some(payload.clone()))))
+        .unwrap();
+    map.edit_working(branch, 0, |edit| {
+        assert_eq!(edit.get(&42)?, Some(payload.clone()));
+        assert_eq!(edit.get(&81)?, None);
+        Ok(())
+    })
+    .unwrap();
+    let head = map.get_branch(branch).unwrap();
+    map.tree
+        .nodes
+        .insert(object_key(head.dirty_root), [0x19, 255, 0, 0]);
+    let err = map
+        .edit_working(branch, 128, |edit| {
+            edit.remove(&12)?;
+            edit.get(&42)
+        })
+        .unwrap_err();
+    assert!(matches!(err, crate::VsdbError::Corrupt { .. }));
+    assert_eq!(map.get_branch(branch).unwrap(), head);
+}

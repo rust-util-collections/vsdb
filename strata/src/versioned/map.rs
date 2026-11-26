@@ -165,12 +165,7 @@ impl<K: KeyEnDeOrdered, V: ValueEnDe> WorkingEdit<'_, K, V> {
     pub fn get(&self, key: &K) -> Result<Option<V>> {
         key.with_ordered_bytes(|bytes| match self.changes.get(bytes) {
             Some(value) => value.as_deref().map(V::decode_value).transpose(),
-            None => self
-                .base
-                .get(bytes)
-                .as_deref()
-                .map(V::decode_value)
-                .transpose(),
+            None => self.base.try_get_with(bytes, V::decode_value),
         })
     }
 

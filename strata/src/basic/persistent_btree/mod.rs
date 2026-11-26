@@ -449,6 +449,70 @@ pub(crate) struct RootLease {
 }
 
 impl RootLease {
+    /// Look up a working-edit fallback without turning a damaged page into a
+    /// missing user key. Decode inline bytes while the immutable object is pinned.
+    pub(crate) fn try_get_with<T>(
+        &self,
+        key: &[u8],
+        decode: impl Fn(&[u8]) -> Result<T>,
+    ) -> Result<Option<T>> {
+        use nodes::LeafValueRef;
+
+        enum Found<T> {
+            Object(NodeId),
+            Value(Option<T>),
+        }
+
+        let mut id = self.root;
+        if id == EMPTY_ROOT {
+            return Ok(None);
+        }
+        loop {
+            let probe = self
+                .nodes
+                .try_get_with(object_key(id), |bytes| {
+                    if id & CLASS_MASK == BLOB {
+                        return decode(bytes).map(|v| Found::Value(Some(v)));
+                    }
+                    let page = NodeView::open(bytes)?;
+                    page.validate()?;
+                    if page.leaf != (id & CLASS_MASK != 0) {
+                        return Err(VsdbError::Corrupt {
+                            detail: format!("incorrect tree page class for {id}"),
+                        });
+                    }
+                    let slot = page.lower_bound(key, !page.leaf);
+                    if !page.leaf {
+                        return Ok(Found::Object(page.child(slot)));
+                    }
+                    if slot == page.len || page.key(slot) != key {
+                        return Ok(Found::Value(None));
+                    }
+                    match page.value_ref(slot) {
+                        LeafValueRef::Inline(value) => {
+                            decode(value).map(|v| Found::Value(Some(v)))
+                        }
+                        LeafValueRef::Blob(blob) => Ok(Found::Object(blob)),
+                    }
+                })?
+                .ok_or_else(|| VsdbError::Corrupt {
+                    detail: format!("missing reachable tree object {id}"),
+                })?;
+            match probe {
+                Found::Object(child) => {
+                    let serial = child & !CLASS_MASK;
+                    if serial == 0 || serial >= id & !CLASS_MASK {
+                        return Err(VsdbError::Corrupt {
+                            detail: format!("invalid tree child {child} in {id}"),
+                        });
+                    }
+                    id = child;
+                }
+                Found::Value(value) => return Ok(value),
+            }
+        }
+    }
+
     pub(crate) fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
         lookup(self.root, key, |id| {
             read_cached_reader(&self.runtime, &self.nodes, id)
