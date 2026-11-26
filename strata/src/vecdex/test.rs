@@ -33,8 +33,8 @@ where
 {
     for (node, node_max) in idx.node_layers() {
         for layer in 0..=node_max {
-            for neighbor in hnsw::get_neighbors(&idx.store, layer, node) {
-                let reverse = hnsw::get_neighbors(&idx.store, layer, neighbor);
+            for neighbor in hnsw::get_neighbors(&idx.store, layer, node).unwrap() {
+                let reverse = hnsw::get_neighbors(&idx.store, layer, neighbor).unwrap();
                 assert!(
                     reverse.contains(&node),
                     "missing reverse edge layer {layer}: {neighbor} -> {node}"
@@ -189,7 +189,7 @@ fn replacement_is_staged_without_mutating_committed_state() {
     );
 
     let mut txn = Txn::new(&idx.store, idx.state());
-    assert!(VecDex::<u32, L2>::stage_remove(&L2, &mut txn, &cfg, &7));
+    assert!(VecDex::<u32, L2>::stage_remove(&L2, &mut txn, &cfg, &7).unwrap());
     VecDex::<u32, L2>::stage_insert(&L2, &mut txn, &cfg, 7u32.encode_key(), &[9.0, 9.0])
         .unwrap();
 
@@ -422,14 +422,15 @@ fn filtered_search_layer_caps_visits() {
         false
     };
 
-    let results = hnsw::search_layer(
-        |id| get_vec(id).map(|v| L2.distance(&[0.0], &v)),
+    let results = hnsw::search_scored_layer(
+        |id| Ok(get_vec(id).map(|v| L2.distance(&[0.0], &v))),
         &[0],
         8,
         0,
         &adjacency,
-        Some(&reject_all),
-    );
+        Some(&|id| Ok(reject_all(id))),
+    )
+    .unwrap();
 
     assert!(results.is_empty());
     assert!(calls.get() <= cap, "visited {} nodes", calls.get());
@@ -743,7 +744,7 @@ fn remove_entry_point_reconnects_isolated_true_max_node() {
         "max_layer must reflect the true global max"
     );
     assert_eq!(idx.state().entry_point, Some(0));
-    assert!(!hnsw::get_neighbors(&idx.store, 0, 0).is_empty());
+    assert!(!hnsw::get_neighbors(&idx.store, 0, 0).unwrap().is_empty());
     assert_bidirectional(&idx);
     assert_eq!(idx.search(&[1.0, 0.0], 3).unwrap().len(), 3);
 }
@@ -797,7 +798,7 @@ fn saturated_neighbor_pruning_keeps_new_entry_point_reachable() {
     );
     txn.state.node_count += 1;
     txn.state.next_node_id += 1;
-    VecDex::<u32, L2>::link_node(&L2, &mut txn, &cfg, new_id, &new_vec, 1);
+    VecDex::<u32, L2>::link_node(&L2, &mut txn, &cfg, new_id, &new_vec, 1).unwrap();
 
     let rows = txn.finish();
     rows.commit(&mut idx.store).unwrap();
@@ -805,7 +806,9 @@ fn saturated_neighbor_pruning_keeps_new_entry_point_reachable() {
     assert_eq!(idx.state().entry_point, Some(new_id));
     assert_eq!(idx.state().max_layer, 1);
     assert!(
-        !hnsw::get_neighbors(&idx.store, 0, new_id).is_empty(),
+        !hnsw::get_neighbors(&idx.store, 0, new_id)
+            .unwrap()
+            .is_empty(),
         "the promoted node must retain a reciprocal base-layer edge"
     );
     assert_bidirectional(&idx);
@@ -1110,7 +1113,7 @@ fn graph_connectivity_after_deletions() {
     queue.push_back(ep);
     visited.insert(ep);
     while let Some(node) = queue.pop_front() {
-        let neighbors = hnsw::get_neighbors(&idx.store, 0, node);
+        let neighbors = hnsw::get_neighbors(&idx.store, 0, node).unwrap();
         for n in neighbors {
             if visited.insert(n) {
                 queue.push_back(n);
@@ -1932,7 +1935,7 @@ fn insert_at_layer(idx: &mut VecDex<u64, L2>, id: u64, vector: &[f32], layer: u8
         .put(node_key(TAG_INFO, id).to_vec(), encode_value(&layer));
     txn.state.next_node_id = id + 1;
     txn.state.node_count += 1;
-    VecDex::<u64, L2>::link_node(&L2, &mut txn, &idx.config, id, vector, layer);
+    VecDex::<u64, L2>::link_node(&L2, &mut txn, &idx.config, id, vector, layer).unwrap();
     let rows = txn.finish();
     rows.commit(&mut idx.store).unwrap();
 }
@@ -1962,7 +1965,7 @@ fn exhaustive_search_restarts_disconnected_components() {
     let mut todo = vec![idx.state().entry_point.unwrap()];
     while let Some(id) = todo.pop() {
         if visited.insert(id) {
-            todo.extend(hnsw::get_neighbors(&idx.store, 0, id));
+            todo.extend(hnsw::get_neighbors(&idx.store, 0, id).unwrap());
         }
     }
     assert_eq!(
@@ -2526,4 +2529,31 @@ fn scored_vectors_require_their_reverse_key_for_results_and_filters() {
     ] {
         assert!(matches!(result, Err(VsdbError::Corrupt { .. })));
     }
+}
+
+#[test]
+fn corrupt_adjacency_aborts_staged_insert_before_publishing_rows() {
+    let mut idx: VecDex<u64, L2> = VecDex::new(HnswConfig {
+        dim: 2,
+        ..Default::default()
+    })
+    .unwrap();
+    insert_at_layer(&mut idx, 0, &[0., 0.], 0);
+    idx.store.insert(adj_key(0, 0), [1, 2, 3]);
+    let before = idx.store.iter().collect::<Vec<_>>();
+    for result in [
+        idx.insert(&50, &[0.5, 0.5]),
+        idx.insert_batch(&[(50, vec![0.5, 0.5]), (51, vec![1., 1.])]),
+    ] {
+        assert!(matches!(result, Err(VsdbError::Corrupt { .. })));
+    }
+    assert!(matches!(idx.remove(&0), Err(VsdbError::Corrupt { .. })));
+    assert!(matches!(
+        idx.insert(&0, &[1., 1.]),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    assert_eq!(idx.len(), 1);
+    assert!(idx.get(&50).is_none());
+    assert!(idx.get(&51).is_none());
+    assert_eq!(idx.store.iter().collect::<Vec<_>>(), before);
 }

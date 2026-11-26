@@ -71,7 +71,7 @@ use crate::common::{
 use distance::{DistanceMetric, MetricSearch, Scalar};
 use hnsw::{
     AdjRead, adj_key, decode_neighbors, encode_neighbors, get_neighbors,
-    prune_neighbors, prune_selection, random_layer, search_layer, search_scored_layer,
+    prune_neighbors, prune_selection, random_layer, search_scored_layer,
     select_neighbors_heuristic,
 };
 use serde::{Deserialize, Serialize};
@@ -333,6 +333,15 @@ impl AdjRead for SearchRows<'_, '_> {
 }
 
 impl<S> AdjRead for Txn<'_, S> {
+    fn neighbors_into(&self, layer: u8, id: u64, out: &mut Vec<u64>) -> Result<()> {
+        out.clear();
+        self.rows
+            .try_get_with(self.store, &adj_key(layer, id), |raw| {
+                hnsw::extend_neighbors(raw, out)
+            })?;
+        Ok(())
+    }
+
     #[inline]
     fn adj_row(&self, key: &[u8]) -> Option<Vec<u8>> {
         self.rows.get_over(self.store, key)
@@ -413,7 +422,7 @@ impl<'a, S: Scalar> Txn<'a, S> {
         mut pruned: Vec<u64>,
         mut evicted: Vec<u64>,
         keep: Option<u64>,
-    ) -> bool {
+    ) -> Result<bool> {
         if let Some(keep_id) = keep
             && evicted.contains(&keep_id)
             && let Some(pos) = pruned.iter().rposition(|&id| id != keep_id)
@@ -427,11 +436,11 @@ impl<'a, S: Scalar> Txn<'a, S> {
         self.set_neighbors(layer, node_id, &pruned);
         let kept = keep.is_none_or(|k| !evicted.contains(&k));
         for evicted_id in evicted {
-            let mut e_list = get_neighbors(self, layer, evicted_id);
+            let mut e_list = get_neighbors(self, layer, evicted_id)?;
             e_list.retain(|&x| x != node_id);
             self.set_neighbors(layer, evicted_id, &e_list);
         }
-        kept
+        Ok(kept)
     }
 
     /// Applies the pruning result of
@@ -446,13 +455,13 @@ impl<'a, S: Scalar> Txn<'a, S> {
         layer: u8,
         m_max: usize,
         keep: Option<u64>,
-    ) -> bool {
+    ) -> Result<bool> {
         let pruned = {
             let gv = |id: u64| self.read_vec(id);
-            prune_selection::<S, D, Self>(metric, node_id, layer, m_max, self, &gv)
+            prune_selection::<S, D, Self>(metric, node_id, layer, m_max, self, &gv)?
         };
         let Some((pruned, evicted)) = pruned else {
-            return true;
+            return Ok(true);
         };
         self.apply_pruned_selection(node_id, layer, pruned, evicted, keep)
     }
@@ -467,13 +476,21 @@ impl<'a, S: Scalar> Txn<'a, S> {
         layer: u8,
         m_max: usize,
         keep: Option<u64>,
-    ) {
+    ) -> Result<()> {
         let key = adj_key(layer, neighbor);
-        let mut raw = self.adj_row(&key).unwrap_or_default();
+        let mut raw = self
+            .rows
+            .try_get_with(self.store, &key, |bytes| {
+                if !bytes.len().is_multiple_of(8) {
+                    return Err(corrupt("invalid VecDex neighbor row width"));
+                }
+                Ok(bytes.to_vec())
+            })?
+            .unwrap_or_default();
         if raw.len() / 8 < m_max {
             raw.extend_from_slice(&added.to_le_bytes());
             self.rows.put(key.to_vec(), raw);
-            return;
+            return Ok(());
         }
         let mut neighbors = decode_neighbors(&raw);
         neighbors.push(added);
@@ -482,10 +499,11 @@ impl<'a, S: Scalar> Txn<'a, S> {
             prune_neighbors::<S, D>(metric, neighbor, &neighbors, m_max, &gv)
         };
         if let Some((pruned, evicted)) = pruned {
-            self.apply_pruned_selection(neighbor, layer, pruned, evicted, keep);
+            self.apply_pruned_selection(neighbor, layer, pruned, evicted, keep)?;
         } else {
             self.set_neighbors(layer, neighbor, &neighbors);
         }
+        Ok(())
     }
 
     /// Stages the state row and hands back `(rows, vec_cache)` for chunked batching.
@@ -870,7 +888,7 @@ where
 
         let mut txn =
             Txn::new(&self.store, GraphState::read(self.store.get(STATE_KEY))?);
-        Self::stage_remove(&self.metric, &mut txn, &self.config, key);
+        Self::stage_remove(&self.metric, &mut txn, &self.config, key)?;
         Self::stage_insert(
             &self.metric,
             &mut txn,
@@ -909,8 +927,7 @@ where
             .ok_or_else(|| corrupt("VecDex node ID exhausted"))?;
         txn.state.node_count += 1;
 
-        Self::link_node(metric, txn, config, node_id, vector, node_layer);
-        Ok(())
+        Self::link_node(metric, txn, config, node_id, vector, node_layer)
     }
 
     /// Inserts a batch of (key, vector) pairs.
@@ -952,7 +969,7 @@ where
                 vec_cache,
             );
             for (key, vec) in chunk {
-                Self::stage_remove(&self.metric, &mut txn, &self.config, key);
+                Self::stage_remove(&self.metric, &mut txn, &self.config, key)?;
                 Self::stage_insert(
                     &self.metric,
                     &mut txn,
@@ -982,14 +999,14 @@ where
         node_id: u64,
         vector: &[S],
         node_layer: u8,
-    ) {
+    ) -> Result<()> {
         let Some(ep) = txn.state.entry_point else {
             txn.state.entry_point = Some(node_id);
             txn.state.max_layer = node_layer;
-            return;
+            return Ok(());
         };
         if ep == node_id {
-            return;
+            return Ok(());
         }
 
         let cur_max = txn.state.max_layer;
@@ -998,8 +1015,9 @@ where
         let mut cur_ep = vec![ep];
         for l in (node_layer.saturating_add(1)..=cur_max).rev() {
             let res = {
-                let dist = |id| txn.read_vec(id).map(|v| metric.distance(vector, &v));
-                search_layer(dist, &cur_ep, 1, l, txn, None)
+                let dist =
+                    |id| Ok(txn.read_vec(id).map(|v| metric.distance(vector, &v)));
+                search_scored_layer(dist, &cur_ep, 1, l, txn, None)?
             };
             if let Some(&(_, id)) = res.iter().find(|&&(_, id)| id != node_id) {
                 cur_ep = vec![id];
@@ -1012,8 +1030,9 @@ where
             let m_max = if l == 0 { config.m_max0 } else { config.m };
 
             let candidates = {
-                let dist = |id| txn.read_vec(id).map(|v| metric.distance(vector, &v));
-                search_layer(dist, &cur_ep, config.ef_construction, l, txn, None)
+                let dist =
+                    |id| Ok(txn.read_vec(id).map(|v| metric.distance(vector, &v)));
+                search_scored_layer(dist, &cur_ep, config.ef_construction, l, txn, None)?
             };
             let neighbor_pool: Vec<(S, u64)> = candidates
                 .iter()
@@ -1033,7 +1052,9 @@ where
                 // survive pruning; otherwise every neighbor can evict the
                 // new node and commit an unreachable entry point.
                 let keep = (i == 0).then_some(node_id);
-                txn.append_neighbor_and_prune(metric, neighbor, node_id, l, m_max, keep);
+                txn.append_neighbor_and_prune(
+                    metric, neighbor, node_id, l, m_max, keep,
+                )?;
             }
 
             cur_ep = neighbor_pool.iter().map(|&(_, id)| id).collect();
@@ -1046,6 +1067,7 @@ where
             txn.state.entry_point = Some(node_id);
             txn.state.max_layer = node_layer;
         }
+        Ok(())
     }
 
     /// Searches for the `k` nearest neighbors of the query vector.
@@ -1174,7 +1196,7 @@ where
         ensure_writable(&self.namespace(), "vector index remove")?;
         let mut txn =
             Txn::new(&self.store, GraphState::read(self.store.get(STATE_KEY))?);
-        if !Self::stage_remove(&self.metric, &mut txn, &self.config, key) {
+        if !Self::stage_remove(&self.metric, &mut txn, &self.config, key)? {
             return Ok(false);
         }
         let rows = txn.finish();
@@ -1187,10 +1209,10 @@ where
         txn: &mut Txn<'_, S>,
         config: &HnswConfig,
         key: &K,
-    ) -> bool {
+    ) -> Result<bool> {
         let encoded_key = key.encode_key();
         let Some(raw) = txn.get(&user_key(&encoded_key)) else {
-            return false;
+            return Ok(false);
         };
         let node_id = decode_node_id(&raw);
         let max_layer = txn
@@ -1202,9 +1224,9 @@ where
         let mut former_neighbors: Vec<Vec<u64>> =
             Vec::with_capacity(max_layer as usize + 1);
         for l in 0..=max_layer {
-            let neighbors = get_neighbors(&*txn, l, node_id);
+            let neighbors = get_neighbors(&*txn, l, node_id)?;
             for &n in &neighbors {
-                let mut n_list = get_neighbors(&*txn, l, n);
+                let mut n_list = get_neighbors(&*txn, l, n)?;
                 n_list.retain(|&x| x != node_id);
                 txn.set_neighbors(l, n, &n_list);
             }
@@ -1219,7 +1241,7 @@ where
             let m_max = if l == 0 { config.m_max0 } else { config.m };
             let fns = &former_neighbors[l as usize];
             for &n in fns {
-                let cur = get_neighbors(&*txn, l, n);
+                let cur = get_neighbors(&*txn, l, n)?;
                 if cur.len() >= m_max {
                     continue;
                 }
@@ -1234,21 +1256,21 @@ where
                     if candidate == n || cur_set.contains(&candidate) {
                         continue;
                     }
-                    let mut n_list = get_neighbors(&*txn, l, n);
+                    let mut n_list = get_neighbors(&*txn, l, n)?;
                     n_list.push(candidate);
                     txn.set_neighbors(l, n, &n_list);
 
-                    let mut c_list = get_neighbors(&*txn, l, candidate);
+                    let mut c_list = get_neighbors(&*txn, l, candidate)?;
                     c_list.push(n);
                     txn.set_neighbors(l, candidate, &c_list);
 
-                    if txn.prune_and_detach(metric, candidate, l, m_max, Some(n)) {
+                    if txn.prune_and_detach(metric, candidate, l, m_max, Some(n))? {
                         keep.get_or_insert(candidate);
                         added += 1;
                     }
                 }
                 if added > 0 {
-                    txn.prune_and_detach(metric, n, l, m_max, keep);
+                    txn.prune_and_detach(metric, n, l, m_max, keep)?;
                 }
             }
         }
@@ -1261,10 +1283,10 @@ where
 
         txn.state.node_count = txn.state.node_count.saturating_sub(1);
 
-        if Self::entry_point_needs_repair(txn, node_id) {
-            Self::repair_entry_point(metric, txn, config);
+        if Self::entry_point_needs_repair(txn, node_id)? {
+            Self::repair_entry_point(metric, txn, config)?;
         }
-        true
+        Ok(true)
     }
 
     /// Whether removing `removed` can invalidate the entry point.
@@ -1273,31 +1295,35 @@ where
     /// re-election, and removing another top-layer node cannot lower the
     /// maximum. Only a lost, missing/mismatched, or base-disconnected entry
     /// point requires the full scan in [`Self::repair_entry_point`].
-    fn entry_point_needs_repair(txn: &Txn<'_, S>, removed: u64) -> bool {
+    fn entry_point_needs_repair(txn: &Txn<'_, S>, removed: u64) -> Result<bool> {
         let Some(entry) = txn.state.entry_point else {
-            return true;
+            return Ok(true);
         };
         if entry == removed {
-            return true;
+            return Ok(true);
         }
         if txn.get(&node_key(TAG_VEC, entry)).is_none() {
-            return true;
+            return Ok(true);
         }
         let layer = txn
             .get(&node_key(TAG_INFO, entry))
             .map(|raw| decode_value::<u8>(&raw));
         if layer != Some(txn.state.max_layer) {
-            return true;
+            return Ok(true);
         }
         if txn.state.node_count <= 1 {
-            return false;
+            return Ok(false);
         }
-        !get_neighbors(txn, 0, entry)
+        Ok(!get_neighbors(txn, 0, entry)?
             .into_iter()
-            .any(|neighbor| txn.get(&node_key(TAG_VEC, neighbor)).is_some())
+            .any(|neighbor| txn.get(&node_key(TAG_VEC, neighbor)).is_some()))
     }
 
-    fn repair_entry_point(metric: &D, txn: &mut Txn<'_, S>, config: &HnswConfig) {
+    fn repair_entry_point(
+        metric: &D,
+        txn: &mut Txn<'_, S>,
+        config: &HnswConfig,
+    ) -> Result<()> {
         #[cfg(test)]
         ENTRY_REPAIRS.with(|count| count.set(count.get() + 1));
         let live: Vec<(u64, u8)> = txn
@@ -1315,22 +1341,24 @@ where
         let Some(true_max) = live.iter().map(|(_, layer)| *layer).max() else {
             txn.state.entry_point = None;
             txn.state.max_layer = 0;
-            return;
+            return Ok(());
         };
 
-        let has_live_base_edge = |id: u64| {
-            get_neighbors(txn, 0, id)
+        let mut best: Option<(u64, bool)> = None;
+        for &(id, layer) in &live {
+            if layer != true_max {
+                continue;
+            }
+            let connected = get_neighbors(txn, 0, id)?
                 .into_iter()
-                .any(|neighbor| txn.get(&node_key(TAG_VEC, neighbor)).is_some())
-        };
-        let new_ep = live
-            .iter()
-            .filter(|(_, layer)| *layer == true_max)
-            .max_by_key(|(id, _)| has_live_base_edge(*id))
-            .map(|(id, _)| *id)
-            .expect("true maximum came from a live node");
-
-        if live.len() > 1 && !has_live_base_edge(new_ep) {
+                .any(|neighbor| txn.get(&node_key(TAG_VEC, neighbor)).is_some());
+            // max_by_key previously chose the last equally ranked candidate.
+            if best.is_none_or(|(_, old)| connected || !old) {
+                best = Some((id, connected));
+            }
+        }
+        let (new_ep, connected) = best.expect("true maximum came from a live node");
+        if live.len() > 1 && !connected {
             let ep_vec = txn
                 .read_vec(new_ep)
                 .expect("live entry-point candidate has a vector");
@@ -1345,17 +1373,18 @@ where
                 .map(|(_, id)| id);
             if let Some(neighbor) = nearest {
                 txn.set_neighbors(0, new_ep, &[neighbor]);
-                let mut reverse = get_neighbors(txn, 0, neighbor);
+                let mut reverse = get_neighbors(txn, 0, neighbor)?;
                 if !reverse.contains(&new_ep) {
                     reverse.push(new_ep);
                     txn.set_neighbors(0, neighbor, &reverse);
                 }
-                txn.prune_and_detach(metric, neighbor, 0, config.m_max0, Some(new_ep));
+                txn.prune_and_detach(metric, neighbor, 0, config.m_max0, Some(new_ep))?;
             }
         }
 
         txn.state.entry_point = Some(new_ep);
         txn.state.max_layer = true_max;
+        Ok(())
     }
 
     /// Rebuilds the HNSW graph from the existing vectors.

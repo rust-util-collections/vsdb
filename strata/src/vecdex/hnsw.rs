@@ -107,11 +107,10 @@ pub(crate) fn get_neighbors<A: AdjRead + ?Sized>(
     adj: &A,
     layer: u8,
     node_id: u64,
-) -> Vec<u64> {
-    let key = adj_key(layer, node_id);
-    adj.adj_row(&key)
-        .map(|v| decode_neighbors(&v))
-        .unwrap_or_default()
+) -> Result<Vec<u64>> {
+    let mut neighbors = Vec::new();
+    adj.neighbors_into(layer, node_id, &mut neighbors)?;
+    Ok(neighbors)
 }
 
 /// Appends complete little-endian neighbor IDs to reusable query scratch.
@@ -148,26 +147,6 @@ pub(crate) fn filter_visit_cap(ef: usize) -> usize {
 /// Public base-layer searches can supply lazy fallback seeds: an exhausted
 /// component resumes from an unvisited node while the result set is underfull.
 /// Restarts share the visited set and filter budget with ordinary traversal.
-pub(crate) fn search_layer<S: Scalar, A: AdjRead + ?Sized>(
-    mut distance_to: impl FnMut(u64) -> Option<S>,
-    entry_points: &[u64],
-    ef: usize,
-    layer: u8,
-    adj: &A,
-    filter: Option<&dyn Fn(u64) -> bool>,
-) -> Vec<(S, u64)> {
-    let check = |id| Ok(filter.is_none_or(|f| f(id)));
-    search_scored_layer(
-        |id| Ok(distance_to(id)),
-        entry_points,
-        ef,
-        layer,
-        adj,
-        filter.map(|_| &check as &dyn Fn(u64) -> Result<bool>),
-    )
-    .expect("VecDex: invalid graph during staged traversal")
-}
-
 pub(super) fn search_scored_layer<S: Scalar, A: AdjRead + ?Sized>(
     mut distance_to: impl FnMut(u64) -> Result<Option<S>>,
     entry_points: &[u64],
@@ -403,9 +382,11 @@ pub(crate) fn prune_selection<S: Scalar, D: DistanceMetric<S>, A: AdjRead + ?Siz
     m_max: usize,
     adj: &A,
     get_vector: &dyn Fn(u64) -> Option<Rc<Vec<S>>>,
-) -> Option<(Vec<u64>, Vec<u64>)> {
-    let neighbors = get_neighbors(adj, layer, node_id);
-    prune_neighbors(metric, node_id, &neighbors, m_max, get_vector)
+) -> Result<Option<(Vec<u64>, Vec<u64>)>> {
+    let neighbors = get_neighbors(adj, layer, node_id)?;
+    Ok(prune_neighbors(
+        metric, node_id, &neighbors, m_max, get_vector,
+    ))
 }
 
 #[cfg(test)]

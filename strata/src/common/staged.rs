@@ -66,6 +66,21 @@ impl StagedRows {
         }
     }
 
+    /// Projects an overlay value or a pinned backing row. A missing or wiped
+    /// key stays absent and storage/decoding failures reach the staged caller.
+    pub(crate) fn try_get_with<T>(
+        &self,
+        store: &MapxRaw,
+        key: &[u8],
+        decode: impl FnOnce(&[u8]) -> Result<T>,
+    ) -> Result<Option<T>> {
+        match self.rows.get(key) {
+            Some(value) => value.as_deref().map(decode).transpose(),
+            None if self.wiped => Ok(None),
+            None => store.try_get_with(key, decode),
+        }
+    }
+
     /// Read-your-writes prefix scan: merges the committed rows with the
     /// overlay (staged inserts appear, staged deletes disappear), in key
     /// order.
