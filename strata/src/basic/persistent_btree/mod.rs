@@ -1470,23 +1470,53 @@ impl PersistentBTree {
         }
     }
 
-    /// Drops buffered nodes that belong only to `dead` when ref tracking
-    /// is off. `release_buffered` cannot see those nodes yet: a restored
-    /// tree stays `ready == false` until `rebuild_ref_counts`, and acquire
-    /// / release are no-ops in that mode. On-disk nodes are left in place
-    /// because, without counts, they may still belong to the pre-merge tree.
-    fn drop_untracked_pending(&mut self, dead: NodeId, survivor: NodeId) {
+    /// Reclaim pages private to a cold merge. Older allocations may belong to
+    /// caller-owned roots. Every subtree shared with the new root is either
+    /// buffered or reachable through an unchanged durable child on its frontier.
+    fn drop_untracked_intermediate(
+        &mut self,
+        dead: NodeId,
+        survivor: NodeId,
+        first_private: NodeId,
+    ) -> Result<()> {
         if self.runtime.refs.lock().ready {
-            return;
+            return Ok(());
         }
-        let keep = self.pending_closure(survivor);
-        for id in self.pending_closure(dead) {
-            if !keep.contains(&id)
-                && let Some(raw) = self.pending.remove(&id)
-            {
+        let mut seen = self.pending_closure(survivor);
+        let mut stack = vec![dead];
+        let mut durable = Vec::new();
+        while let Some(id) = stack.pop() {
+            if id & !CLASS_MASK < first_private || !seen.insert(id) {
+                continue;
+            }
+            if let Some(raw) = self.pending.remove(&id) {
                 self.pending_bytes -= raw.len() + 9;
+                if id & CLASS_MASK != BLOB {
+                    stack.extend(Node::decode_children(&raw));
+                }
+            } else {
+                let key = object_key(id);
+                // Rebalancing can already have discarded a buffered sibling.
+                if let Some(children) = self
+                    .nodes
+                    .try_get_with(key, |raw| Self::checked_edges(id, raw))?
+                {
+                    stack.extend(children);
+                    durable.push(key);
+                    if id & CLASS_MASK == 0 {
+                        self.runtime.page_cache.remove(id);
+                    }
+                }
             }
         }
+        if !durable.is_empty() {
+            let mut batch = self.nodes.batch();
+            for key in durable {
+                batch.remove(key);
+            }
+            batch.commit()?;
+        }
+        Ok(())
     }
 
     /// Pending node ids reachable from `root`. An id that is not buffered
@@ -1608,6 +1638,27 @@ impl PersistentBTree {
         refs.install(counts);
         Ok(())
     }
+
+    /// Validate persisted edges before using them to count or retire pages.
+    fn checked_edges(id: NodeId, bytes: &[u8]) -> Result<Vec<NodeId>> {
+        if id & CLASS_MASK == BLOB {
+            return Ok(Vec::new());
+        }
+        let page = NodeView::open(bytes)?;
+        let class = page.validated_class()?;
+        let children = page.edges();
+        if class != id & CLASS_MASK
+            || children
+                .iter()
+                .any(|&c| c & !CLASS_MASK >= id & !CLASS_MASK || c & !CLASS_MASK == 0)
+        {
+            return Err(VsdbError::Corrupt {
+                detail: format!("invalid child or class on page {id}"),
+            });
+        }
+        Ok(children)
+    }
+
     fn count_nodes(
         &self,
         counts: &mut HashMap<NodeId, NodeRef>,
@@ -1624,29 +1675,12 @@ impl PersistentBTree {
                     })?;
                 continue;
             }
-            let children = match self.nodes.get(object_key(id)) {
-                Some(_) if id & CLASS_MASK == BLOB => Vec::new(),
-                Some(bytes) => {
-                    let page = NodeView::open(&bytes)?;
-                    let class = page.validated_class()?;
-                    let children = page.edges();
-                    if class != id & CLASS_MASK
-                        || children.iter().any(|&c| {
-                            c & !CLASS_MASK >= id & !CLASS_MASK || c & !CLASS_MASK == 0
-                        })
-                    {
-                        return Err(VsdbError::Corrupt {
-                            detail: format!("invalid child or class on page {id}"),
-                        });
-                    }
-                    children
-                }
-                None => {
-                    return Err(VsdbError::Corrupt {
-                        detail: format!("missing reachable B+ tree node {id}"),
-                    });
-                }
-            };
+            let children = self
+                .nodes
+                .try_get_with(object_key(id), |raw| Self::checked_edges(id, raw))?
+                .ok_or_else(|| VsdbError::Corrupt {
+                    detail: format!("missing reachable B+ tree node {id}"),
+                })?;
             queue.extend(children.iter().map(|&child| (child, 1)));
             counts.insert(
                 id,

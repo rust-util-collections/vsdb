@@ -24,10 +24,11 @@ key-wise. Shared NodeIds enable pruning; independently built equal-content
 trees may require a full walk. Delta-sized cost depends on structural sharing;
 results must equal a full-scan diff.
 
-**BT8 Merge replay** — result = target + ∪ `diff(base_i, source)` source states (the whole
-source-wins matrix); each step acquires the new root and `release_buffered`s the previous
-**intermediate** (never the target); the final root is `disown_node`d → returned unowned;
-dead intermediates drop from `pending` before reaching the engine.
+**BT8 Merge replay** — apply the union of the source deltas to the target.
+Each step acquires the new root and releases the previous intermediate. The
+caller retains the target. A newly built result root is unowned. On cold standalone
+trees, reclaim superseded pages allocated by the merge, including pages flushed
+in earlier chunks. Preserve shared subtrees and every pre-merge root.
 
 **BT9 Retired roots** — a shared version store writes retirement markers before releasing its prior owners. Last-pin release queues object keys and marker removal for the next batch. Standalone pools retain their lazy-delete behavior.
 

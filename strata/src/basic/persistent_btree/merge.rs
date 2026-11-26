@@ -171,10 +171,8 @@ fn source_changes(
 /// resulting root (unowned when newly built; `target_root` itself when
 /// nothing changed).
 ///
-/// All steps share one write buffer: each intermediate version is held
-/// only until the next one exists, and its superseded nodes are dropped
-/// from the buffer before they reach the engine — only nodes reachable
-/// from the final root are written.
+/// Each intermediate root is retained until the next one exists. Reclaim
+/// superseded pages even when an earlier chunk has already been flushed.
 impl PersistentBTree {
     pub(crate) fn apply_changes(
         &mut self,
@@ -182,6 +180,7 @@ impl PersistentBTree {
         changes: impl IntoIterator<Item = (Vec<u8>, Option<Vec<u8>>)>,
         chunked: bool,
     ) -> Result<NodeId> {
+        let first_private = self.next_id();
         let mut root = target_root;
         let mut changes = changes.into_iter().peekable();
         while changes.peek().is_some() {
@@ -192,9 +191,7 @@ impl PersistentBTree {
             self.acquire_node(next);
             if root != target_root {
                 self.release_buffered(root);
-                // Restored trees have no ref counts yet. Drop this intermediate
-                // from the buffer anyway so the flush writes only `next`.
-                self.drop_untracked_pending(root, next);
+                self.drop_untracked_intermediate(root, next, first_private)?;
             }
             root = next;
             if chunked {

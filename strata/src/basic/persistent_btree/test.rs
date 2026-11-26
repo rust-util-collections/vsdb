@@ -1260,6 +1260,57 @@ fn restored_merge_drops_dead_intermediates() {
     );
 }
 
+#[test]
+fn cold_merge_reclaims_private_pages_across_chunk_flushes() {
+    for count in [96u32, 2048] {
+        let mut tree = PersistentBTree::new();
+        let base =
+            tree.bulk_load((0..count).map(|i| (i.to_be_bytes().to_vec(), vec![0])));
+        let source =
+            tree.bulk_load((0..count).filter(|i| *i < count / 2 || i % 3 == 0).map(
+                |i| {
+                    // Cross the byte threshold in one leaf, or the object threshold
+                    // across many leaves. Later removals also rebalance siblings.
+                    let len = if count == 96 && i < 32 {
+                        512 << 10
+                    } else {
+                        1025
+                    };
+                    (i.to_be_bytes().to_vec(), vec![1; len])
+                },
+            ));
+        let target = tree.insert(base, &count.to_be_bytes(), b"target");
+        let other = tree.insert(target, b"other", b"outside merge");
+        let id = tree.save_meta().unwrap();
+        let bytes = postcard::to_allocvec(&tree).unwrap();
+        drop(tree);
+        let mut restored: PersistentBTree = if count == 96 {
+            PersistentBTree::from_meta(id).unwrap()
+        } else {
+            postcard::from_bytes(&bytes).unwrap()
+        };
+        assert!(!restored.runtime.refs.lock().ready);
+        let first_private = restored.next_id();
+        let merged = restored.merge(&[base], source, target);
+        let expected = restored.iter(source).chain(std::iter::once((
+            count.to_be_bytes().to_vec(),
+            b"target".to_vec(),
+        )));
+        assert!(restored.iter(merged).eq(expected));
+        assert_eq!(restored.get(other, b"other").unwrap(), b"outside merge");
+        let live = restored
+            .required_node_refs(&[merged, base, source, target, other])
+            .unwrap();
+        for (key, _) in restored.nodes.iter() {
+            if let Some(id) = object_id(&key)
+                && id & !CLASS_MASK >= first_private
+            {
+                assert!(live.contains_key(&id), "unreachable merge object {id}");
+            }
+        }
+    }
+}
+
 /// Postcard serde roundtrip for PersistentBTree (hand-written tuple serde).
 #[test]
 fn test_serde_roundtrip() {
