@@ -11,14 +11,6 @@
 
 ## Open
 
-### [LOW] configuration: vsdb_configure cannot be retried after initialization fails
-- **Where**: `core/src/common/mod.rs` (`vsdb_configure`)
-- **What**: The selection is frozen and stored before `universe::initialize` runs. If initialization fails, for example with `Io(WouldBlock)` from another writer, a second `vsdb_configure` returns `BaseDirFrozen`. Other APIs meanwhile retry initialization with the frozen selection.
-- **Why**: The `# Errors` section mentions only `BaseDirFrozen`. A retry loop around `vsdb_configure` therefore never succeeds, and nothing tells the caller that the selection remains in effect. Reproduced in the same fixture as the getter finding.
-- **Suggested fix**: Document the initialization errors and that later API calls retry with the frozen selection. Alternatively, let an identical selection retry while no universe is open. Regression test: release the lock and retry.
-
----
-
 ### [LOW] engine: flush panics on shard errors without documenting it
 - **Where**: `core/src/common/engine/mmdb.rs` (`MmDB::flush`), `core/src/common/namespace.rs` (`Namespace::flush`, `flush_all_open`), `core/src/common/mod.rs` (`vsdb_flush`)
 - **What**: `MmDB::flush` calls `db.flush().expect(..)`. mmdb returns an error when a fail-stop error has latched, when a shard is closed, or when flush I/O fails.

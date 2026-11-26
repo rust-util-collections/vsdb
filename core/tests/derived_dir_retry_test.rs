@@ -1,11 +1,12 @@
-//! Path getters recover once a failed universe initialization succeeds.
+//! A failed universe initialization keeps the configured selection, and path
+//! getters recover once a later API opens the universe with it.
 #[path = "common/scratch.rs"]
 mod scratch;
 
 use std::{fs, panic::catch_unwind};
 use vsdb_core::{
-    Namespace, VsdbError, VsdbOptions, vsdb_configure, vsdb_get_custom_dir,
-    vsdb_get_system_dir,
+    Namespace, VsdbError, VsdbOptions, vsdb_configure, vsdb_get_base_dir,
+    vsdb_get_custom_dir, vsdb_get_system_dir,
 };
 
 #[test]
@@ -28,6 +29,12 @@ fn derived_dir_getters_retry_after_lock_contention() {
     ));
     assert!(catch_unwind(vsdb_get_custom_dir).is_err());
     assert!(catch_unwind(vsdb_get_system_dir).is_err());
+    // The selection stays in effect, so configuring again is refused.
+    assert!(matches!(
+        vsdb_configure(VsdbOptions::new(&root)),
+        Err(VsdbError::BaseDirFrozen)
+    ));
+    assert_eq!(vsdb_get_base_dir(), root);
 
     drop(other_writer);
     assert!(Namespace::list().unwrap().is_empty());

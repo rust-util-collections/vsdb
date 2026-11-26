@@ -510,6 +510,13 @@ pub(crate) fn vsdb_freeze_base_dir() {
 ///
 /// Returns [`VsdbError::BaseDirFrozen`] if configuration was already selected
 /// or any API that materializes/freezes a VSDB path was used first.
+///
+/// Returns the error from opening the universe, such as [`VsdbError::Io`]
+/// while another process holds its writer lock, or [`VsdbError::Corrupt`]
+/// for an invalid root. The selection stays in effect after such an error:
+/// calling `vsdb_configure` again returns [`VsdbError::BaseDirFrozen`], and
+/// the next API that needs the universe retries opening it with the
+/// selected options.
 pub fn vsdb_configure(options: VsdbOptions) -> Result<()> {
     // Publish all options while holding the lock used by path readers.
     // A first use either freezes configuration before this swap, or waits
