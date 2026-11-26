@@ -23,8 +23,8 @@
 
 ### [LOW] engine: lazy-delete auto-sweep threshold stays disabled
 - **Where**: `core/src/common/engine/mmdb.rs` (`mmdb_open`), mmdb `DbOptions::lazy_delete_compaction_threshold`
-- **What**: keys registered via `lazy_delete` are physically dropped only when organic compaction rewrites their level; registrations resting in cold levels can outlive the process (registrations are memory-only and documented best-effort).
-- **Reason**: mmdb documents the auto-sweep as holding the DB mutex for each level's full rewrite, stalling readers and writers; administrative `compact()` additionally holds the write queue for its full call. Enabling it by default trades unbounded stalls for space reclaim. Correctness never depends on physical removal (dead B+ tree nodes are unreachable by id), and administrative `compact()` remains available.
+- **What**: The default threshold is zero. Ordinary compaction or an explicit `compact()` can reclaim registered keys. A restart loses registrations for rows that compaction has yet to rewrite.
+- **Reason**: Enabling automatic sweeps rewrites populated levels and consumes I/O even on a store with no organic compaction debt. MMDB releases the DB mutex while building SSTs. Unreachable B+ tree pages do not affect reads, and operators can request compaction. [MMDB sweep semantics](https://github.com/rust-util-collections/mmdb/blob/e61902fd5c89510a86e42414ae14bc2d54f0af0c/src/db.rs#L2545-L2569)
 
 ---
 
