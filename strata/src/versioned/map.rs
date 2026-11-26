@@ -439,28 +439,38 @@ impl<K, V> VerMap<K, V> {
                 self.get_commit_inner(to)?.root,
             ])
         })?;
-        Ok(self.diff_roots(&from_root, &to_root))
+        self.diff_roots(&from_root, &to_root)
     }
 
     /// [`diff_uncommitted`](VerMap::diff_uncommitted) as stored bytes (see
     /// [`raw_diff_commits`](VerMap::raw_diff_commits)).
     pub fn raw_diff_uncommitted(&self, branch: BranchId) -> Result<Vec<TreeDiff>> {
         let roots = self.branch_roots(branch)?;
-        Ok(self.diff_roots(&roots.committed, &roots.working))
+        self.diff_roots(&roots.committed, &roots.working)
     }
 
-    pub(crate) fn diff_roots(&self, from: &RootLease, to: &RootLease) -> Vec<TreeDiff> {
-        self.diff_roots_iter(from, to).collect()
+    pub(crate) fn diff_roots(
+        &self,
+        from: &RootLease,
+        to: &RootLease,
+    ) -> Result<Vec<TreeDiff>> {
+        let mut diff = self.diff_roots_iter(from, to)?;
+        let mut entries = Vec::new();
+        while let Some(entry) = diff.try_next()? {
+            entries.push(entry);
+        }
+        Ok(entries)
     }
 
+    /// Step the returned stream with `try_next` to surface page errors.
     pub(crate) fn diff_roots_iter(
         &self,
         from: &RootLease,
         to: &RootLease,
-    ) -> crate::basic::persistent_btree::BTreeDiffIter<'_> {
+    ) -> Result<crate::basic::persistent_btree::BTreeDiffIter<'_>> {
         #[cfg(test)]
         super::test::before_read_traversal();
-        self.tree.diff_iter(from.root, to.root)
+        self.tree.try_diff_iter(from.root, to.root)
     }
 
     pub(crate) fn iter_leased_root(
@@ -744,7 +754,7 @@ where
     /// Reverting all edits to their committed bytes leaves the branch clean.
     pub fn has_uncommitted(&self, branch: BranchId) -> Result<bool> {
         let roots = self.branch_roots(branch)?;
-        Ok(self.tree.differs(roots.committed.root, roots.working.root))
+        self.tree.differs(roots.committed.root, roots.working.root)
     }
 
     // Write (working state)
@@ -821,8 +831,9 @@ where
         state: BranchHead,
         changes: BTreeMap<Vec<u8>, Option<Vec<u8>>>,
     ) -> Result<()> {
-        let root = self
-            .build_root(|tree| tree.apply_changes(state.dirty_root, changes, false))?;
+        let root = self.build_root(|tree| {
+            tree.apply_changes(state.dirty_root, changes.into_iter().map(Ok), false)
+        })?;
         self.publish_working(branch, state, root)
     }
 

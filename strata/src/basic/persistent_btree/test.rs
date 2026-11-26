@@ -1702,7 +1702,7 @@ mod diff_merge {
         let mut rng = Rng(7);
         let mut tree = PersistentBTree::new();
         let base = derive(&mut tree, EMPTY_ROOT, 20_000, 1 << 30, &mut rng);
-        assert!(tree.height(base) >= 2);
+        assert!(tree.height(base).unwrap() >= 2);
         let changed = tree.insert(base, &key(12_345), b"new");
         tree.acquire_node(changed);
 
@@ -1713,7 +1713,7 @@ mod diff_merge {
         // Two root-to-leaf paths plus the height probes — not a full scan
         // of the ~1000 leaves.
         assert!(
-            reads <= 4 * (tree.height(base) as u64 + 2),
+            reads <= 4 * (tree.height(base).unwrap() as u64 + 2),
             "read {reads} nodes"
         );
     }
@@ -1774,7 +1774,7 @@ mod diff_merge {
         assert_eq!(tree.get(merged, &key(u32::MAX as u64)).unwrap(), b"t");
         // One path copy, not a rebuilt tree.
         assert!(
-            written <= u64::from(tree.height(merged)) + 1,
+            written <= u64::from(tree.height(merged).unwrap()) + 1,
             "wrote {written} nodes"
         );
         tree.assert_refs_match_recount(&[base, src, tgt, merged]);
@@ -1788,7 +1788,7 @@ mod diff_merge {
             .collect();
         let base = tree.bulk_load(entries);
         tree.acquire_node(base);
-        let h = tree.height(base);
+        let h = tree.height(base).unwrap();
         assert!(h >= 2);
 
         // Overwriting 1 key in a 32-key BLOB_LEAF must allocate only 1 new BLOB
@@ -1825,7 +1825,7 @@ mod diff_merge {
         tree.acquire_node(reverted);
         assert_ne!(reverted, base);
         assert!(tree.diff(base, reverted).is_empty());
-        assert!(!tree.differs(base, reverted));
+        assert!(!tree.differs(base, reverted).unwrap());
         tree.assert_refs_match_recount(&[base, updated, reverted]);
     }
 
@@ -1856,7 +1856,7 @@ mod diff_merge {
             Some(43u32.to_be_bytes().to_vec())
         );
         let second_hits = PAGE_CACHE_HITS.with(|c| c.get());
-        let h = tree.height(root);
+        let h = tree.height(root).unwrap();
         assert!(h >= 2);
         assert_eq!(second_hits, u64::from(h));
 

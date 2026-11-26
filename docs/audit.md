@@ -11,19 +11,6 @@
 
 ## Open
 
-### [MEDIUM] versioning: history and diff operations panic on unreadable tree pages
-- **Where**: `strata/src/versioned/map.rs` (`has_uncommitted`, `rollback_to`, `merge`, `raw_diff_commits`, `raw_diff_uncommitted`), `strata/src/basic/persistent_btree/diff.rs` (`differs`, `Cursor`, `materialize_val`), `strata/src/basic/persistent_btree/mod.rs` (`object`, `height`), `strata/src/basic/persistent_btree/merge.rs` (`source_changes`)
-- **What**: These `Result`-returning APIs compare trees through the infallible `BTreeDiffIter`, whose page reads `expect` success. A missing, malformed or unreadable page under either compared root causes a panic. `VerMapWithProof` streams the same iterator when it updates a root.
-- **Why**: Callers get a panic instead of `VsdbError::Corrupt` or the storage error. AGENTS.md requires fallible storage APIs to use `VsdbError`, and the v18.0.3 notes say VerMap's fallible operations propagate engine read errors. Reproduced by deleting a commit root page: `merge`, `has_uncommitted`, `rollback_to` and `raw_diff_commits` each panic in `PersistentBTree::object`. `build_root` restores state before re-raising, so persisted data stays intact. The rustdoc for these methods documents decode panics only.
-- **Suggested fix**:
-  - Add a fallible diff traversal with checked page reads, and make `differs` return `Result<bool>`.
-  - Propagate those errors from `source_changes` and the raw diffs.
-  - Keep the panicking iterator for standalone callers.
-
-  Regression test: after removing a commit root page, each API returns `Corrupt` and the branch is unchanged. No format change.
-
----
-
 ### [MEDIUM] dagmap: partial prunes left by earlier releases can still lose later edits
 - **Where**: `strata/src/dagmap/raw/mod.rs` (`prune`, `collect_marked_below_head`, `mark`)
 - **What**: Releases before the single-batch prune publication wrote the fold, each reparented child and each clearing marker in separate batches, so a crash could stop between them. Two such on-disk states still lose data:

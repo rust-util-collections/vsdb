@@ -55,10 +55,14 @@
 //!
 
 use super::{
-    EMPTY_ROOT, InsertResult, MAX_KEYS, MIN_KEYS, Node, NodeId, PersistentBTree,
-    RemoveResult, diff::TreeDiff,
+    BTreeDiffIter, EMPTY_ROOT, InsertResult, MAX_KEYS, MIN_KEYS, Node, NodeId,
+    PersistentBTree, RemoveResult, diff::TreeDiff,
 };
 use crate::Result;
+use std::iter::Peekable;
+
+/// A key and its new state (`None` = absent).
+type Change = (Vec<u8>, Option<Vec<u8>>);
 
 /// Performs a three-way merge.
 ///
@@ -91,7 +95,7 @@ fn three_way_merge(
         return Ok(source_root);
     }
 
-    let changes = source_changes(tree, &[ancestor_root], source_root);
+    let changes = source_changes(tree, &[ancestor_root], source_root)?;
     tree.apply_changes(target_root, changes, true)
 }
 
@@ -123,48 +127,65 @@ fn three_way_merge_many_bases(
         return Ok(source_root);
     }
 
-    let changes = source_changes(tree, ancestor_roots, source_root);
+    let changes = source_changes(tree, ancestor_roots, source_root)?;
     tree.apply_changes(target_root, changes, true)
 }
 
+/// One base's diff stream and its next unconsumed change.
+type SourceStream = (BTreeDiffIter<'static>, Option<Change>);
+
 /// Every key where `source` differs from any of `bases`, mapped to the
-/// source state (`None` = absent), in ascending key order.
+/// source state, in ascending key order. A page read error ends the stream.
 fn source_changes(
     tree: &PersistentBTree,
     bases: &[NodeId],
     source: NodeId,
-) -> impl Iterator<Item = (Vec<u8>, Option<Vec<u8>>)> + use<> {
-    let mut streams: Vec<_> = bases
+) -> Result<impl Iterator<Item = Result<Change>> + use<>> {
+    let mut streams = bases
         .iter()
-        .map(|&base| {
-            tree.owned_diff(base, source)
-                .map(|entry| match entry {
-                    TreeDiff::Added { key, value }
-                    | TreeDiff::Modified {
-                        key,
-                        new_value: value,
-                        ..
-                    } => (key, Some(value)),
-                    TreeDiff::Removed { key, .. } => (key, None),
-                })
-                .peekable()
-        })
-        .collect();
-    std::iter::from_fn(move || {
-        let index = streams
-            .iter_mut()
-            .enumerate()
-            .filter_map(|(i, s)| s.peek().map(|(k, _)| (i, k)))
-            .min_by(|(_, a), (_, b)| a.cmp(b))
-            .map(|(i, _)| i)?;
-        let edit = streams[index].next().unwrap();
-        for (i, s) in streams.iter_mut().enumerate() {
-            if i != index {
-                s.next_if(|(k, _)| k == &edit.0);
-            }
+        .map(|&base| Ok((tree.owned_diff(base, source)?, None)))
+        .collect::<Result<Vec<SourceStream>>>()?;
+    let mut failed = false;
+    Ok(std::iter::from_fn(move || {
+        if failed {
+            return None;
         }
-        Some(edit)
-    })
+        let next = next_source_change(&mut streams);
+        failed = next.is_err();
+        next.transpose()
+    }))
+}
+
+fn next_source_change(streams: &mut [SourceStream]) -> Result<Option<Change>> {
+    for (diff, peeked) in streams.iter_mut() {
+        if peeked.is_none() {
+            *peeked = diff.try_next()?.map(|entry| match entry {
+                TreeDiff::Added { key, value }
+                | TreeDiff::Modified {
+                    key,
+                    new_value: value,
+                    ..
+                } => (key, Some(value)),
+                TreeDiff::Removed { key, .. } => (key, None),
+            });
+        }
+    }
+    let Some(index) = streams
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (_, peeked))| peeked.as_ref().map(|(k, _)| (i, k)))
+        .min_by(|(_, a), (_, b)| a.cmp(b))
+        .map(|(i, _)| i)
+    else {
+        return Ok(None);
+    };
+    let edit = streams[index].1.take().expect("peeked source change");
+    for (_, peeked) in streams.iter_mut() {
+        if peeked.as_ref().is_some_and(|(k, _)| *k == edit.0) {
+            *peeked = None;
+        }
+    }
+    Ok(Some(edit))
 }
 
 /// Applies `changes` to `target_root` by copy-on-write and returns the
@@ -177,14 +198,15 @@ impl PersistentBTree {
     pub(crate) fn apply_changes(
         &mut self,
         target_root: NodeId,
-        changes: impl IntoIterator<Item = (Vec<u8>, Option<Vec<u8>>)>,
+        changes: impl IntoIterator<Item = Result<Change>>,
         chunked: bool,
     ) -> Result<NodeId> {
         let first_private = self.next_id();
         let mut root = target_root;
         let mut changes = changes.into_iter().peekable();
-        while changes.peek().is_some() {
-            let next = self.apply_leaf_run(root, &mut changes)?;
+        while let Some(Ok((first, _))) = changes.peek() {
+            let first = first.clone();
+            let next = self.apply_leaf_run(root, &first, &mut changes)?;
             if next == root {
                 continue;
             }
@@ -198,6 +220,10 @@ impl PersistentBTree {
                 self.flush_pending_if_large()?;
             }
         }
+        // A failed source read ends the stream before the result is flushed.
+        if let Some(Err(err)) = changes.next() {
+            return Err(err);
+        }
         self.flush_pending();
         if root != target_root {
             self.disown_node(root);
@@ -210,11 +236,9 @@ impl PersistentBTree {
     fn apply_leaf_run(
         &mut self,
         root: NodeId,
-        changes: &mut std::iter::Peekable<
-            impl Iterator<Item = (Vec<u8>, Option<Vec<u8>>)>,
-        >,
+        first: &[u8],
+        changes: &mut Peekable<impl Iterator<Item = Result<Change>>>,
     ) -> Result<NodeId> {
-        let first = &changes.peek().unwrap().0;
         let mut path = Vec::new();
         let mut upper = None;
         let mut id = root;
@@ -236,9 +260,9 @@ impl PersistentBTree {
         };
         let mut changed = false;
         for _ in 0..MAX_KEYS {
-            let Some((key, value)) =
-                changes.next_if(|(k, _)| upper.as_ref().is_none_or(|end| k < end))
-            else {
+            let Some(Ok((key, value))) = changes.next_if(|change| {
+                matches!(change, Ok((k, _)) if upper.as_ref().is_none_or(|end| k < end))
+            }) else {
                 break;
             };
             let at = keys.binary_search(&key);

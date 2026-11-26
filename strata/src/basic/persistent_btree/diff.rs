@@ -3,8 +3,9 @@
 
 use super::{
     CLASS_MASK, EMPTY_ROOT, LeafVal, MapxRawReader, NodeId, NodeView, PersistentBTree,
-    TreeRuntime, read_cached_reader_arc, read_object,
+    TreeRuntime, try_read_cached_reader_arc, try_read_object,
 };
+use crate::common::error::{Result, VsdbError};
 use std::{cmp::Ordering, marker::PhantomData, sync::Arc};
 
 /// A single difference between two tree versions, as stored bytes
@@ -38,31 +39,45 @@ impl PersistentBTree {
     /// Streams the differences in ascending key order while pruning shared subtrees.
     /// Traversal retains at most a page of keys per level on each side.
     pub fn diff_iter(&self, old: NodeId, new: NodeId) -> BTreeDiffIter<'_> {
+        self.try_diff_iter(old, new).expect("B+ tree diff failed")
+    }
+
+    /// Like [`diff_iter`](Self::diff_iter), but a missing or malformed page
+    /// is returned as an error here and from [`BTreeDiffIter::try_next`].
+    pub(crate) fn try_diff_iter(
+        &self,
+        old: NodeId,
+        new: NodeId,
+    ) -> Result<BTreeDiffIter<'_>> {
         self.owned_diff(old, new)
     }
 
     // Internal merge keeps all source roots live while it builds its result.
-    pub(super) fn owned_diff(&self, old: NodeId, new: NodeId) -> BTreeDiffIter<'static> {
+    pub(super) fn owned_diff(
+        &self,
+        old: NodeId,
+        new: NodeId,
+    ) -> Result<BTreeDiffIter<'static>> {
         let (old, new) = if old == new {
             (EMPTY_ROOT, EMPTY_ROOT)
         } else {
             (old, new)
         };
-        BTreeDiffIter {
+        Ok(BTreeDiffIter {
             nodes: self.nodes.reader(),
             runtime: Arc::clone(&self.runtime),
             borrow: PhantomData,
-            old: Cursor::new(self, old),
-            new: Cursor::new(self, new),
-        }
+            old: Cursor::new(self, old)?,
+            new: Cursor::new(self, new)?,
+        })
     }
 
     /// Shared roots compare in constant time. Stop at the first changed entry.
-    pub(crate) fn differs(&self, old: NodeId, new: NodeId) -> bool {
+    pub(crate) fn differs(&self, old: NodeId, new: NodeId) -> Result<bool> {
         if old == EMPTY_ROOT || new == EMPTY_ROOT {
-            return old != new;
+            return Ok(old != new);
         }
-        self.diff_iter(old, new).next().is_some()
+        Ok(self.owned_diff(old, new)?.try_next()?.is_some())
     }
 }
 
@@ -77,38 +92,36 @@ enum Item {
 struct Cursor(Vec<Item>);
 
 impl Cursor {
-    fn new(tree: &PersistentBTree, root: NodeId) -> Self {
-        if root == EMPTY_ROOT {
+    fn new(tree: &PersistentBTree, root: NodeId) -> Result<Self> {
+        Ok(if root == EMPTY_ROOT {
             Self(Vec::new())
         } else {
-            Self(vec![Item::Node(root, tree.height(root))])
-        }
+            Self(vec![Item::Node(root, tree.height(root)?)])
+        })
     }
 
     /// Replaces the front node with its children (or a leaf's entries).
-    fn expand(&mut self, runtime: &TreeRuntime, nodes: &MapxRawReader) {
+    fn expand(&mut self, runtime: &TreeRuntime, nodes: &MapxRawReader) -> Result<()> {
         let Some(Item::Node(id, h)) = self.0.pop() else {
             unreachable!("expand called on a non-node front");
         };
         if id & CLASS_MASK == 0 {
-            let raw = read_cached_reader_arc(runtime, nodes, id);
-            let page = NodeView::open(&raw).expect("invalid B+ tree page");
-            page.validate().expect("invalid B+ tree page");
-            debug_assert!(!page.leaf);
+            let raw = try_read_cached_reader_arc(runtime, nodes, id)?;
+            let page = committed_page(&raw, id)
+                .inspect_err(|_| runtime.page_cache.remove(id))?;
             let ch = h.saturating_sub(1);
             self.0
                 .extend((0..=page.len).rev().map(|i| Item::Node(page.child(i), ch)));
         } else {
-            let raw = read_object(nodes, id);
-            let page = NodeView::open(&raw).expect("invalid B+ tree page");
-            page.validate().expect("invalid B+ tree page");
-            debug_assert!(page.leaf);
+            let raw = try_read_object(nodes, id)?;
+            let page = committed_page(&raw, id)?;
             self.0.extend(
                 (0..page.len)
                     .rev()
                     .map(|i| Item::Entry(page.key(i).to_vec(), page.leaf_val(i))),
             );
         }
+        Ok(())
     }
 
     fn pop_entry(&mut self) -> (Vec<u8>, LeafVal) {
@@ -119,10 +132,23 @@ impl Cursor {
     }
 }
 
-fn materialize_val(val: LeafVal, nodes: &MapxRawReader) -> Vec<u8> {
+// A compared root is published, so every page has the class its ID names
+// and at least one slot.
+fn committed_page(raw: &[u8], id: NodeId) -> Result<NodeView<'_>> {
+    let page = NodeView::open(raw)?;
+    page.check_id(id)?;
+    if page.len == 0 {
+        return Err(VsdbError::Corrupt {
+            detail: format!("empty committed B+ tree page {id}"),
+        });
+    }
+    Ok(page)
+}
+
+fn materialize_val(val: LeafVal, nodes: &MapxRawReader) -> Result<Vec<u8>> {
     match val {
-        LeafVal::Bytes(bytes) => bytes,
-        LeafVal::Blob(id) => read_object(nodes, id),
+        LeafVal::Bytes(bytes) => Ok(bytes),
+        LeafVal::Blob(id) => try_read_object(nodes, id),
     }
 }
 
@@ -149,6 +175,14 @@ pub struct BTreeDiffIter<'a> {
 impl Iterator for BTreeDiffIter<'_> {
     type Item = TreeDiff;
     fn next(&mut self) -> Option<TreeDiff> {
+        self.try_next().expect("B+ tree diff failed")
+    }
+}
+
+impl BTreeDiffIter<'_> {
+    /// Advances like [`Iterator::next`], but returns a missing or malformed
+    /// page or blob as an error. Do not resume the iterator after an error.
+    pub(crate) fn try_next(&mut self) -> Result<Option<TreeDiff>> {
         let old = &mut self.old;
         let new = &mut self.new;
         let tree = &self.nodes;
@@ -177,30 +211,30 @@ impl Iterator for BTreeDiffIter<'_> {
                 }
             };
             match step {
-                Step::Done => return None,
+                Step::Done => return Ok(None),
                 Step::SkipShared => {
                     old.0.pop();
                     new.0.pop();
                 }
-                Step::ExpandOld => old.expand(runtime, tree),
-                Step::ExpandNew => new.expand(runtime, tree),
+                Step::ExpandOld => old.expand(runtime, tree)?,
+                Step::ExpandNew => new.expand(runtime, tree)?,
                 Step::ExpandBoth => {
-                    old.expand(runtime, tree);
-                    new.expand(runtime, tree);
+                    old.expand(runtime, tree)?;
+                    new.expand(runtime, tree)?;
                 }
                 Step::Removed | Step::Compare(Ordering::Less) => {
                     let (key, val) = old.pop_entry();
-                    return Some(TreeDiff::Removed {
+                    return Ok(Some(TreeDiff::Removed {
                         key,
-                        value: materialize_val(val, tree),
-                    });
+                        value: materialize_val(val, tree)?,
+                    }));
                 }
                 Step::Added | Step::Compare(Ordering::Greater) => {
                     let (key, val) = new.pop_entry();
-                    return Some(TreeDiff::Added {
+                    return Ok(Some(TreeDiff::Added {
                         key,
-                        value: materialize_val(val, tree),
-                    });
+                        value: materialize_val(val, tree)?,
+                    }));
                 }
                 Step::Compare(Ordering::Equal) => {
                     let (key, old_val) = old.pop_entry();
@@ -210,14 +244,14 @@ impl Iterator for BTreeDiffIter<'_> {
                     {
                         continue;
                     }
-                    let old_value = materialize_val(old_val, tree);
-                    let new_value = materialize_val(new_val, tree);
+                    let old_value = materialize_val(old_val, tree)?;
+                    let new_value = materialize_val(new_val, tree)?;
                     if old_value != new_value {
-                        return Some(TreeDiff::Modified {
+                        return Ok(Some(TreeDiff::Modified {
                             key,
                             old_value,
                             new_value,
-                        });
+                        }));
                     }
                 }
             }

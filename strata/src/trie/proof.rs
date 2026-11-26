@@ -348,13 +348,15 @@ where
             return T::from_entries(self.map.iter_leased_root(to));
         }
         let rebuild_threshold = (self.map.tree.estimate_entries(to.root) / 2).max(512);
-        let mut iter = self.map.diff_roots_iter(from, to);
+        let mut iter = self.map.diff_roots_iter(from, to)?;
         let mut candidate = base.clone();
         let mut total_diffs = 0usize;
         let mut chunk = Vec::with_capacity(DIFF_STREAM_CHUNK.min(256));
         loop {
             chunk.clear();
-            for entry in iter.by_ref().take(DIFF_STREAM_CHUNK) {
+            while chunk.len() < DIFF_STREAM_CHUNK
+                && let Some(entry) = iter.try_next()?
+            {
                 chunk.push(entry);
             }
             if chunk.is_empty() {

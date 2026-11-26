@@ -6014,3 +6014,142 @@ fn insert_propagates_working_page_and_blob_read_errors() {
     map.insert(branch, &2, &value).unwrap();
     assert_eq!(map.get(branch, &2).unwrap(), Some(value));
 }
+
+#[test]
+fn history_and_diff_operations_return_errors_for_unreadable_tree_pages() {
+    use crate::basic::persistent_btree::object_key;
+
+    // A missing source root fails the merge before anything is published.
+    let mut map = VerMap::<u32, u32>::new();
+    let main = map.main_branch();
+    map.insert(main, &1, &10).unwrap();
+    map.commit(main).unwrap();
+    let feat = map.create_branch("feat", main).unwrap();
+    map.insert(feat, &2, &20).unwrap();
+    let tip = map.commit(feat).unwrap();
+    map.insert(main, &3, &30).unwrap();
+    map.commit(main).unwrap();
+    let head = map.get_branch(main).unwrap();
+    let page = object_key(map.get_commit(tip).unwrap().root);
+    let saved = map.tree.nodes.get(page).unwrap();
+    map.tree.nodes.remove(page);
+    assert!(matches!(
+        map.merge(feat, main),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    assert_eq!(map.get_branch(main).unwrap(), head);
+    map.tree.nodes.insert(page, &saved);
+    let merged = map.merge(feat, main).unwrap();
+    assert_eq!(map.at(merged).unwrap().get(&2), Some(20));
+
+    // A clean branch whose working root is not its head root compares pages.
+    let mut map = VerMap::<u32, u32>::new();
+    let main = map.main_branch();
+    map.insert(main, &1, &10).unwrap();
+    let base = map.commit(main).unwrap();
+    map.insert(main, &2, &20).unwrap();
+    let tip = map.commit(main).unwrap();
+    map.insert(main, &2, &21).unwrap();
+    map.insert(main, &2, &20).unwrap();
+    map.tree
+        .nodes
+        .remove(object_key(map.get_commit(tip).unwrap().root));
+    assert!(matches!(
+        map.has_uncommitted(main),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    assert!(matches!(
+        map.rollback_to(main, base),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    assert!(matches!(
+        map.raw_diff_commits(base, tip),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    assert!(matches!(
+        map.raw_diff_uncommitted(main),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    assert!(matches!(
+        map.diff_commits(base, tip),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    assert_eq!(map.get_branch(main).unwrap().head, tip);
+}
+
+#[test]
+fn merge_stops_at_an_unreadable_source_page_without_publishing() {
+    use crate::basic::persistent_btree::{Node, object_key};
+
+    let mut map = VerMap::<u32, u32>::new();
+    let main = map.main_branch();
+    map.bulk_load(main, (0..2000u32).map(|k| (k, k))).unwrap();
+    map.commit(main).unwrap();
+    let feat = map.create_branch("feat", main).unwrap();
+    for k in [0u32, 1000, 1999] {
+        map.insert(feat, &k, &(k + 1)).unwrap();
+    }
+    let tip = map.commit(feat).unwrap();
+    map.insert(main, &5000, &5000).unwrap();
+    map.commit(main).unwrap();
+    let head = map.get_branch(main).unwrap();
+
+    // The source diff yields the change to key 0 before it reaches the
+    // missing leaf that holds key 1000.
+    let key = 1000u32.to_be_bytes();
+    let mut id = map.get_commit(tip).unwrap().root;
+    while let Node::Internal { keys, children } = map.tree.node(id) {
+        id = children[keys.partition_point(|k| k.as_slice() <= key.as_slice())];
+    }
+    let page = object_key(id);
+    let saved = map.tree.nodes.get(page).unwrap();
+    map.tree.nodes.remove(page);
+    assert!(matches!(
+        map.merge(feat, main),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    assert_eq!(map.get_branch(main).unwrap(), head);
+
+    map.tree.nodes.insert(page, &saved);
+    let merged = map.merge(feat, main).unwrap();
+    let view = map.at(merged).unwrap();
+    for k in [0u32, 1000, 1999] {
+        assert_eq!(view.get(&k), Some(k + 1));
+    }
+    assert_eq!(view.get(&5000), Some(5000));
+    map.verify_and_gc().unwrap();
+}
+
+#[test]
+fn merkle_root_returns_an_error_for_an_unreadable_changed_page() {
+    use crate::{
+        basic::persistent_btree::{Node, object_key},
+        trie::{MptCalc, VerMapWithProof},
+    };
+
+    let mut vp = VerMapWithProof::<u32, u32, MptCalc>::new();
+    let main = vp.map().main_branch();
+    vp.map_mut()
+        .bulk_load(main, (0..2000u32).map(|k| (k, k)))
+        .unwrap();
+    vp.map_mut().commit(main).unwrap();
+    vp.map_mut().insert(main, &1999, &1).unwrap();
+    let before = vp.merkle_root(main).unwrap();
+
+    // The incremental update diffs the previous working root against a new
+    // one whose changed rightmost leaf is missing.
+    vp.map_mut().insert(main, &1998, &2).unwrap();
+    let mut id = vp.map().get_branch(main).unwrap().dirty_root;
+    while let Node::Internal { children, .. } = vp.map().tree.node(id) {
+        id = *children.last().unwrap();
+    }
+    let page = object_key(id);
+    let saved = vp.map().tree.nodes.get(page).unwrap();
+    vp.map_mut().tree.nodes.remove(page);
+    assert!(matches!(
+        vp.merkle_root(main),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    vp.map_mut().tree.nodes.insert(page, &saved);
+    assert_ne!(vp.merkle_root(main).unwrap(), before);
+}

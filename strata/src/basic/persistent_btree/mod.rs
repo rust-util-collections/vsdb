@@ -647,6 +647,38 @@ fn read_object(nodes: &MapxRawReader, id: NodeId) -> Vec<u8> {
         .unwrap_or_else(|| panic!("PersistentBTree: missing object {id}"))
 }
 
+fn missing_object(id: NodeId) -> VsdbError {
+    VsdbError::Corrupt {
+        detail: format!("missing B+ tree object {id}"),
+    }
+}
+
+fn try_read_object(nodes: &MapxRawReader, id: NodeId) -> Result<Vec<u8>> {
+    #[cfg(test)]
+    NODE_READS.with(|c| c.set(c.get() + 1));
+    nodes
+        .try_get_with(object_key(id), |bytes| Ok(bytes.to_vec()))?
+        .ok_or_else(|| missing_object(id))
+}
+
+fn try_read_cached_reader_arc(
+    runtime: &TreeRuntime,
+    nodes: &MapxRawReader,
+    id: NodeId,
+) -> Result<Arc<[u8]>> {
+    debug_assert_eq!(id & CLASS_MASK, 0);
+    #[cfg(test)]
+    NODE_READS.with(|c| c.set(c.get() + 1));
+    if let Some(cached) = runtime.page_cache.get(id) {
+        return Ok(cached);
+    }
+    let raw: Arc<[u8]> = nodes
+        .try_get_with(object_key(id), |bytes| Ok(Arc::from(bytes)))?
+        .ok_or_else(|| missing_object(id))?;
+    runtime.page_cache.insert(id, Arc::clone(&raw));
+    Ok(raw)
+}
+
 pub(crate) fn read_cached_reader_arc(
     runtime: &TreeRuntime,
     nodes: &MapxRawReader,
@@ -1679,19 +1711,19 @@ impl PersistentBTree {
     }
 
     /// Number of internal levels above the leaves (0 for a leaf root).
-    pub(crate) fn height(&self, root: NodeId) -> u32 {
+    pub(crate) fn height(&self, root: NodeId) -> Result<u32> {
         let mut h = 0;
         let mut cur = root;
         while cur != EMPTY_ROOT {
-            let raw = self.object(cur);
-            let page = NodeView::open(&raw).expect("invalid B+ tree page");
-            if page.leaf {
+            let Some(child) =
+                self.with_checked_page(cur, |page| (!page.leaf).then(|| page.child(0)))?
+            else {
                 break;
-            }
+            };
             h += 1;
-            cur = page.child(0);
+            cur = child;
         }
-        h
+        Ok(h)
     }
 
     /// Estimates entry count in `O(height)` leftmost-spine page-header reads
