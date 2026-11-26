@@ -6,6 +6,37 @@ Compiler requirements below are historical release notes. Current development
 uses the official latest stable Rust, without a declared compatible version
 range or minimum compiler; see [the toolchain policy](docs/ai/compatibility-policy.md#rust-toolchain).
 
+## [v18.0.2]
+
+Existing v18 stores open in place.
+
+### Fixed
+
+- `Namespace::create_with` requires a matching pending-creation record and an
+  unpopulated failed-creation layout before reclaiming an unregistered explicit
+  directory, preserving retired namespace backups and application files.
+- Default base-directory selection reads `VSDB_BASE_DIR`, `HOME` and temp
+  environment variables as OS paths so valid non-UTF-8 Unix paths are honored.
+- `MapxRaw::update`, typed map and `Orphan` updates, and `DagMap` updates
+  propagate prefix-allocation, storage-read and value-decoding errors before
+  invoking the caller's callback instead of panicking.
+- Fallible edits on `Mapx`, `DagMap` and `VecDex` propagate key-encoding errors
+  instead of panicking, and `VecDex::insert_batch` validates key encodings
+  before committing any chunk.
+- `VecDex` entry-point repair validates node-info IDs against `next_node_id`
+  and reconciles the live node-info count against `node_count` before
+  publishing a replacement entry point.
+- `VerMap::clone_in`, `VecDex::clone_in` and `SlotDex::clone_in` wipe the
+  copied destination prefix on post-copy validation or initialization errors.
+- `VerMap` tracks staged page allocations through final publication,
+  reclaiming spilled `[0x06]` markers and unpublished objects when publication
+  is rejected or deferring unowned objects after an ambiguous WAL I/O failure.
+- `VerMap` verification/recovery, `PersistentBTree` ceiling/recount checks, and
+  `vsdb_migrate` logical value and collection converters use fallible engine
+  reads and preserve `VsdbError::Storage` classifications and sources.
+- `vsdb_migrate::stage_universe` checks both regular-file type and `u64`
+  numeric bounds before classifying shard entries as disposable engine files.
+
 ## [v18.0.1]
 
 Existing v18 stores open in place.
