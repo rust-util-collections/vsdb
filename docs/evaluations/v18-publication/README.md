@@ -9,7 +9,8 @@ directory into earlier revisions. Enable `--features working-edit` for
 the candidate. Name the saved executables `v4`, `v5-previous` and
 `v5-pinned`. Build the last two again with the additional `counters`
 feature, saving them as `diag-previous` and `diag-pinned`.
-Diagnostic runs count engine submissions on the issuing thread. The ordinary
+Diagnostic runs count write and fence submissions on the issuing thread.
+They exclude reads. The ordinary
 latency binaries use the regular dependency feature set.
 
 The child case creates 10,000 children on one existing parent. The
@@ -109,8 +110,8 @@ and pass `--default-dag` to both the runner and summarizer to reproduce
 this repeat. [Default-namespace runs](results/default-namespace/trials.csv) · [Matched summary](results/default-namespace/summary.csv) · [Binary digests](results/default-namespace/host.txt)
 
 The separate `empty` diagnostic ran 1,000 read-only working callbacks on a
-nonempty branch and recorded **zero** native engine submissions, including
-fences. The test in the versioned suite checks that an empty successful
+nonempty branch and recorded **zero native write or fence submissions**.
+Each callback performed one checked point read. The write counter excludes reads. The test in the versioned suite checks that an empty successful
 callback leaves the branch generation unchanged. To repeat the diagnostic,
 build the candidate with `--features working-edit,counters` and run
 `publication-profile empty 1000 20261127` with a fresh `VSDB_BASE_DIR`.

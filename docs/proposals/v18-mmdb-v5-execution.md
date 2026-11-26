@@ -25,9 +25,9 @@ adapter checks the selected v5 geometry for every anchored shard before
 recovering any writable shard. [Adapter contracts](../../core/tests/v5_adapter_test.rs) · [Admission and fence proofs](../../core/src/common/engine/mmdb/v5_tests.rs)
 
 On the default 16 shards, DagMap child creation dropped from two engine
-submissions to one and improved full-operation p99 by 31.05% against the
+write submissions to one and improved full-operation p99 by 31.05% against the
 earlier native v5 path and 33.38% against v4-backed v18. Four dependent
-VerMap updates became one submission. After adding checked working-root
+VerMap updates became one write submission. After adding checked working-root
 reads and validating the encoded leaf class, the five-pair repeat at
 `2ae6149` showed p99 improving by 52.51%. For
 operations whose final values are already known, `write_batch` remains the
