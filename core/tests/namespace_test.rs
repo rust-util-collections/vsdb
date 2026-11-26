@@ -510,6 +510,8 @@ fn namespace_lifecycle() {
     Namespace::destroy(pid).unwrap();
 
     verify_retired_namespace_backup_preserved();
+    #[cfg(unix)]
+    verify_failed_create_on_uncreatable_root_clears_pending_record();
 
     fs::remove_dir_all(&dir).ok();
     // Sibling scratch dirs created by the sub-scenarios above.
@@ -632,9 +634,16 @@ fn verify_retired_namespace_backup_preserved() {
 }
 
 #[cfg(unix)]
-#[test]
-fn failed_create_on_uncreatable_explicit_root_clears_pending_record() {
+fn verify_failed_create_on_uncreatable_root_clears_pending_record() {
     use std::os::unix::fs::PermissionsExt;
+
+    // Makes the parent writable again even if an assertion fails.
+    struct Writable(PathBuf);
+    impl Drop for Writable {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+        }
+    }
 
     let scratch = std::env::temp_dir()
         .join(format!("vsdb_pending_tmp_{}", rand::random::<u128>()));
@@ -642,24 +651,28 @@ fn failed_create_on_uncreatable_explicit_root_clears_pending_record() {
     fs::create_dir_all(&ro_parent).unwrap();
     let contested = ro_parent.join("contested");
     fs::set_permissions(&ro_parent, fs::Permissions::from_mode(0o555)).unwrap();
+    let restore = Writable(ro_parent.clone());
 
+    // Skip when running with DAC bypass (e.g. root).
     if fs::create_dir(&contested).is_err() {
         assert!(
             Namespace::create_with(NamespaceOpts {
-                path: Some(contested),
+                path: Some(contested.clone()),
                 shards: 1,
                 mem_budget_mb: Some(16),
             })
             .is_err()
         );
-        let pending_file = vsdb_core::vsdb_get_system_dir().join("__pending_create__");
-        assert_eq!(
-            fs::read(&pending_file).unwrap(),
-            b"VSNPCR01\x00",
+        let pending =
+            fs::read(vsdb_core::vsdb_get_system_dir().join("__pending_create__"))
+                .unwrap();
+        let path = contested.to_str().unwrap().as_bytes();
+        assert!(
+            !pending.windows(path.len()).any(|window| window == path),
             "failed explicit root creation leaked a PendingCreate record"
         );
     }
 
-    fs::set_permissions(&ro_parent, fs::Permissions::from_mode(0o755)).unwrap();
+    drop(restore);
     fs::remove_dir_all(&scratch).unwrap();
 }

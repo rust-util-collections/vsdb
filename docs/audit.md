@@ -19,14 +19,6 @@
 
 ---
 
-### [LOW] tests: a second namespace test breaks the binary's single-configuration rule
-- **Where**: `core/tests/namespace_test.rs` (`failed_create_on_uncreatable_explicit_root_clears_pending_record`)
-- **What**: The file documents a single `#[test]` because `namespace_lifecycle` must call `vsdb_configure` first. The added test calls `Namespace::create_with` without configuring, which freezes the base at `VSDB_BASE_DIR` or `$HOME/.vsdb`. It sorts first, so with `--test-threads=1` `namespace_lifecycle` fails with `BaseDirFrozen` (reproduced); parallel runs race. Its exact-bytes check of the shared pending-create file also races the other test's creations.
-- **Why**: Failures depend on test order, and a run without `VSDB_BASE_DIR` can bootstrap or write to `$HOME/.vsdb`.
-- **Suggested fix**: Move the scenario into `namespace_lifecycle`, or into its own binary with a scratch configuration. Check only that no record names the failed path.
-
----
-
 ### [LOW] collections: keys() copies every value
 - **Where**: `strata/src/basic/mapx_ord_rawkey/mod.rs` (`keys`), `strata/src/basic/mapx/mod.rs` (`keys`), `strata/src/basic/mapx_ord/mod.rs` (`keys`), `core/src/common/engine/mmdb.rs` (`MmdbIter::next`)
 - **What**: The rustdoc says value bytes are skipped entirely. In fact `keys()` maps the owned `(key, value)` iterator, and `MmdbIter::next` copies each lent value with `to_vec()` before dropping it.
