@@ -1175,6 +1175,65 @@ pub(super) fn before_meta_read(id: u64) -> Result<()> {
 }
 
 #[test]
+fn damaged_metadata_is_not_treated_as_an_absent_node() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let mut root = DagMapRaw::new(None);
+    root.insert("k", "from-root");
+    let mut child = DagMapRaw::new(Some(&mut root));
+    child.insert("local", "from-child");
+    let grandchild = DagMapRaw::new(Some(&mut child));
+    let token = root.child_id(&child).expect("child is registered");
+    assert_eq!(
+        grandchild.get("k").as_deref(),
+        Some(b"from-root".as_slice())
+    );
+
+    // A truncated metadata row is damage, not a foreign node.
+    child.store.insert(META, [0xff]);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| grandchild.get("k"))).is_err(),
+        "undecodable ancestor metadata hid an inherited value"
+    );
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| root.child_id(&child))).is_err(),
+        "undecodable child metadata looked unowned"
+    );
+    let edges = root.try_links().unwrap();
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            root.prune_children_include(&[token]);
+        }))
+        .is_err(),
+        "prune treated undecodable metadata as a stale edge"
+    );
+    assert_eq!(
+        root.try_links().unwrap(),
+        edges,
+        "failed prune unlinked a child whose metadata did not decode"
+    );
+
+    // Identity mismatch still ends a fallback read. Extra trailing bytes do not.
+    let mut root = DagMapRaw::new(None);
+    root.insert("k", "from-root");
+    let mut child = DagMapRaw::new(Some(&mut root));
+    let grandchild = DagMapRaw::new(Some(&mut child));
+    let original = child.meta().unwrap();
+    let mut foreign = original;
+    foreign.magic = *b"NOTDAG01";
+    child.set_meta(foreign).unwrap();
+    assert!(grandchild.get("k").is_none());
+
+    let mut bytes = original.bytes();
+    bytes.push(0);
+    child.store.insert(META, bytes);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| grandchild.get("k"))).is_err(),
+        "trailing metadata bytes were treated as failed authentication"
+    );
+}
+
+#[test]
 fn fallback_reads_treat_metadata_storage_failures_as_fatal() {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 

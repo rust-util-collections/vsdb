@@ -122,15 +122,27 @@ fn try_value(bytes: &[u8]) -> Result<Option<&[u8]>> {
     }
 }
 
-// Infallible reads treat a node that fails authentication as absent and a
-// storage failure as fatal.
+// A foreign magic, dag id, missing record, or other shard is not this node.
+// Undecodable metadata is damage and must not look like absence.
+fn authentication_failure(err: &VsdbError) -> bool {
+    match err {
+        VsdbError::Corrupt { detail } => matches!(
+            detail.as_str(),
+            "DAG node identity mismatch"
+                | "missing DAG node metadata"
+                | "DAG node routes to another shard"
+        ),
+        _ => false,
+    }
+}
+
+// Infallible reads treat a node that fails authentication as absent.
+// Storage failures and metadata that does not decode are fatal.
 fn authenticated<T>(read: Result<T>) -> Option<T> {
     match read {
         Ok(value) => Some(value),
-        Err(err @ (VsdbError::Storage { .. } | VsdbError::Io(_))) => {
-            panic!("vsdb: DAG metadata read failed: {err}")
-        }
-        Err(_) => None,
+        Err(err) if authentication_failure(&err) => None,
+        Err(err) => panic!("vsdb: DAG metadata read failed: {err}"),
     }
 }
 
@@ -192,8 +204,10 @@ impl DagMapRaw {
         self.store
             .try_get_with(META, |raw| {
                 let (meta, rest) = postcard::take_from_bytes::<NodeMeta>(raw)?;
-                if !rest.is_empty() || meta.magic != MAGIC || meta.dag_id != self.dag_id
-                {
+                if !rest.is_empty() {
+                    return Err(corrupt("trailing DAG metadata"));
+                }
+                if meta.magic != MAGIC || meta.dag_id != self.dag_id {
                     return Err(corrupt("DAG node identity mismatch"));
                 }
                 Ok(meta)
@@ -272,10 +286,8 @@ impl DagMapRaw {
     fn try_owned(&self, edge: u64, id: u64) -> Result<Option<Self>> {
         let (child, meta) = match self.open_with_meta(id) {
             Ok(pair) => pair,
-            Err(err @ (VsdbError::Storage { .. } | VsdbError::Io(_))) => {
-                return Err(err);
-            }
-            Err(_) => return Ok(None),
+            Err(err) if authentication_failure(&err) => return Ok(None),
+            Err(err) => return Err(err),
         };
         Ok((meta.state.owner()
             == Some(Parent {
@@ -388,7 +400,9 @@ impl DagMapRaw {
     ///
     /// # Panics
     ///
-    /// Panics if reading the child's metadata fails in storage.
+    /// Panics if reading the child's metadata fails in storage or the
+    /// metadata row does not decode. A child that fails authentication is
+    /// absent.
     pub fn child_id(&self, child: &Self) -> Option<RawBytes> {
         if self.dag_id != child.dag_id || !self.store.is_colocated_with(&child.store) {
             return None;
@@ -401,8 +415,8 @@ impl DagMapRaw {
     ///
     /// # Panics
     ///
-    /// Panics on a storage read failure. A parent that fails authentication
-    /// ends the lookup instead.
+    /// Panics on a storage read failure or metadata that does not decode.
+    /// A parent that fails authentication ends the lookup instead.
     pub fn get(&self, key: impl AsRef<[u8]>) -> Option<RawBytes> {
         let key = data_key(key.as_ref());
         if let Some(v) = self.store.get(&key) {
@@ -514,10 +528,8 @@ impl DagMapRaw {
                         p.unlink(link.edge)?;
                     }
                 }
-                Err(err @ (VsdbError::Storage { .. } | VsdbError::Io(_))) => {
-                    return Err(err);
-                }
-                Err(_) => {}
+                Err(err) if authentication_failure(&err) => {}
+                Err(err) => return Err(err),
             }
         }
         self.finish_destroy()
@@ -838,8 +850,8 @@ impl DagMapRaw {
                 meta.state,
                 State::Child(Parent { map, .. }) if map == genesis
             )),
-            Err(err @ (VsdbError::Storage { .. } | VsdbError::Io(_))) => Err(err),
-            Err(_) => Ok(false),
+            Err(err) if authentication_failure(&err) => Ok(false),
+            Err(err) => Err(err),
         }
     }
     // Looks below a live prune entry for the state an interrupted prune by

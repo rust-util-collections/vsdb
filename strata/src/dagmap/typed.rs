@@ -54,7 +54,8 @@ impl<K: KeyEnDe, V: ValueEnDe> DagMap<K, V> {
     ///
     /// # Panics
     ///
-    /// Panics on a storage read failure or a value that cannot be decoded.
+    /// Panics on a storage read failure, metadata that does not decode, or a
+    /// value that cannot be decoded.
     pub fn get(&self, key: &K) -> Option<V> {
         key.with_encoded_key(|k| self.inner.get(k))
     }
