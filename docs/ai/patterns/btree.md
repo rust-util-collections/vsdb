@@ -42,6 +42,15 @@ cache across handles to one tree. Pending pages take precedence. Cache only
 committed internal pages, keyed by their immutable node ID. Check eviction on
 reclamation and isolation across trees with overlapping node IDs.
 
+**BT12 Fallible leased reads** — Trace `WorkingEdit::get` on an overlay
+miss through `RootLease::try_get_with`. `EMPTY_ROOT` or an absent user key
+yields `None`. A referenced page must exist, have at least one slot, and
+match the class derived by `NodeView::validated_class`. Check inline
+versus external-blob leaves, slot bounds, missing blobs and descending
+child serials. A corrupt row must return an error from the edit callback
+without publishing edits already staged. Test the panic-based standalone
+API against its own contract. [Tree lookup](../../../strata/src/basic/persistent_btree/mod.rs) · [Working-root corruption fixtures](../../../strata/src/versioned/test.rs)
+
 ## Bugs
 
 **Split median** — internal sep parent-only; leaf sep stays as right first key. At split `left.max < sep == right.min`, no data key in both leaves (after deletes only `sep ≤ right.min`).

@@ -65,7 +65,10 @@ selection with `allow_implicit_invocation: false`.
 ### Shared skill guidance
 
 - Start with the [workflow policy](docs/ai/workflow-policy.md) for preflight and worktree ownership and the [maintenance scope](docs/ai/pragmatic-engineering.md#maintenance-scope) for scope decisions.
-- Use the [review core](docs/ai/review-core.md) for the subsystem map, evidence standard, common review guides and audit dispositions.
+- Use the [subsystem map](docs/ai/review-core.md#subsystem-map) to trace a change
+  through its v5 runtime caller, collection or v4 offline conversion path. The
+  [commit protocol](docs/ai/commit-protocol.md#per-unit-validate-and-commit)
+  names focused tests for these boundaries.
 - Use the [compatibility policy](docs/ai/compatibility-policy.md) for toolchain, public API and wire-format decisions. The [commit protocol](docs/ai/commit-protocol.md) covers per-unit checks and the final gate, lockstep bump, CHANGELOG and local annotated tag for commit-producing skills.
 
 ## Conventions

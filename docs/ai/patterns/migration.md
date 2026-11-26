@@ -9,7 +9,34 @@ memory use on real datasets. Keep legacy decoders, journals and migration-specif
 optimizations in `vsdb_migrate`. Changes to runtime collection or engine paths
 need an independent runtime requirement.
 
-## Invariants
+## MMDB v4 to v5 generation staging
+
+Use `stage_universe` (CLI `vsdb-stage-v5`) for a quiesced v17/v4 or
+v18/v4 universe. `migrate_universe` upgrades VSDB metadata on a v4 working
+copy. Application-specific v17 handle and collection conversions operate
+on the staged generation. Review the two operations at their own boundaries.
+[Physical stager](../../../migration/src/universe/staging.rs) · [Operator procedure](../../../migration/README.md)
+
+- Acquire all available universe and shard locks, recheck the registry, then
+  take the file inventory. Include canonical external placements. A closing
+  writer's final WAL or application attachment must appear on retry.
+- Validate and export the same private image. Check ordered length-framed
+  row digests and counts, including an SST-only row, replacement from a
+  residual WAL, deletion and empty value. Reopen v5 writable with the live
+  shard format. Exercise a saved collection handle through the v18 API.
+  [Shard fixture](../../../migration/tests/staged_generation.rs) · [Collection fixture](../../../migration/tests/collections_generation.rs)
+- Before publication, check the exclusive allocator ceiling against visible
+  physical prefixes and canonical instance metadata filenames, including
+  empty maps and populated pending shards. v17 reconciles a higher legacy
+  shard-zero floor. In v18 the existing file is authoritative. Application
+  payloads are opaque when validating that file. Missing-ceiling recovery
+  also searches embedded handle frames.
+- Preserve source files and any competing destination. An exclusive rename
+  followed by a failed parent directory sync can leave a complete visible
+  generation. The application keeps the previous generation selected until
+  it receives a durability acknowledgement. [Staging and interruption tests](../../../migration/src/universe/staging.rs)
+
+## Logical v17 conversion invariants
 
 **M1 Source intact until target validates** — never wipe legacy rows or retire component prefixes (`remove_old_nodes`, `batch_wiped`, `Phase::Retire`) until the target ceiling, header, and v18 handle deserialize and pass structural validation. Clear pre-publication staging keys (`[0x10]..[0x13]`, scratch prefixes) before retrying an uncommitted conversion.
 
@@ -40,18 +67,3 @@ need an independent runtime requirement.
 - [ ] Journals expose highest scratch/target prefix to ceiling recovery and verify checksums
 - [ ] `Namespace::open` used (no `default_ns()` panic); read-only rejected cleanly
 - [ ] Frozen v17 fixtures + interrupted subprocess/retry tests verify data and identity preservation
-
-
-For a physical cutover, keep all v4 operations inside the offline tool.
-Check the real SST-only key, residual WAL replacement/deletion, staged
-external namespace paths, allocator floor and writable v5 reopen.
-A failed sync after exclusive rename can leave a visible complete
-destination. The application selector stays on the protected source until
-durability is acknowledged. [Generation fixture](../../../migration/tests/staged_generation.rs)
-
-Before generation publication, the exclusive allocator ceiling must exceed
-each visible physical map prefix and each authoritative instance metadata
-filename, including empty maps and populated pending shards. Treat unknown
-application payloads as opaque when checking an existing ceiling. The
-missing-ceiling reconstruction and schema-aware handle conversion have
-different evidence available. [Floor tests](../../../migration/tests/staged_generation.rs)

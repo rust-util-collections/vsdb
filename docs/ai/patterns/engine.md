@@ -14,13 +14,26 @@
 
 **E4 Engine uniqueness** — default once; non-default id ≤ one open under REGISTRY_LOCK + OPEN re-check.
 
-**E5 Batch scope** — Ordinary batches bind one prefix. `insert_colocated` validates both engine identity and shard before appending any row. DagMap child creation publishes three rows at once. Pruning keeps recovery records until cleanup finishes.
+**E5 Batch scope** — Ordinary batches bind one prefix. `insert_colocated`
+checks engine identity and shard before either map's rows are appended. If
+both handles name the same map, its `here` puts precede its `there` puts.
+DagMap child creation uses one write for all three rows. Pruning retains its
+recovery records across phases. [Co-location tests](../../../core/tests/colocated.rs)
 
 **E6 Iter prefix bound** — stop at prefix end (incl. `u64::MAX` upper-bound care).
 
 **E7 Lifecycle exclusion** — open/create/destroy/relocate/close serialize properly; table lock released before slow teardown.
 
-**E8 Headers/shards** — `VSUNI018` `universe_header` is written last during bootstrap under exclusive `__SYSTEM__/LOCK`; once present, missing `VSNREG02` `__namespaces__` fails closed (`Corrupt`). Ready engine = matching `VSENG018` `(universe_id, ns_id, shards)` + `.shards_ready == b"18"` + exact `shard_00..shard_{N-1}` with `CURRENT` anchors. Unready engine = 0 shards, or an interrupted create with matching `VSENG018` `__initializing__` sentinel; stray `shard_*` refused.
+**E8 Headers/shards** — Bootstrap publishes `VSUNI018` after its registry and
+allocator under `__SYSTEM__/LOCK`. A ready engine has a matching `VSENG018`
+identity, a ready marker and the registered set of shards. Trace the
+`CURRENT`-selected MANIFEST in every anchored shard before writable recovery
+can touch the first one. The v5 header checksum, seven levels and eight-byte
+prefix must agree in both open modes. Exercise a bad final shard with an
+earlier recoverable WAL. For a partial initializer, preflight the anchors
+already present before backfilling metadata. A missing *required* lifecycle
+record returns `Corrupt`. Other filesystem read errors retain their I/O cause.
+[Geometry preflight](../../../core/src/common/engine/mmdb/geometry.rs) · [Lifecycle fixtures](../../../core/tests/universe_header.rs) · [Adapter fixtures](../../../core/tests/v5_adapter_test.rs)
 
 **E9 Identity** — route via owned Namespace; ns ID zero selects default; no ambient redirect of existing handles. Missing-ceiling recovery (`note_meta_bytes` + 23-byte `note_meta_stream` carry) scans keys, values, `__instance_meta__`, and `__CUSTOM__` for `VSMAPX02` (`+8..+16`) and `VSTYPE04` (`+16..+24`).
 
@@ -31,9 +44,17 @@ caches, RSS and compaction debt separately. The string property
 `block-cache-usage` measures entries and repeats the shared component on
 each shard. [Sizing and units](../../proposals/shared-mem-pool.md)
 
-**E11 clone_in** — fresh unobservable prefix; bounded independent batches; failed chunk best-effort wipe target without masking primary Err.
+**E11 Clone** — A fallible clone can hit a source error after writing
+destination chunks. Use checked cursor steps, wipe the new target on failure
+and preserve the original error even if cleanup also fails.
+[Late-corruption fixture](../../../core/src/common/engine/clone_tests.rs)
 
-**E12 Scan errors** — inspect streaming iterator errors before filter/map erases the source; both directions fail fast instead of returning successful partial data.
+**E12 Pinned reads and cursors** — `try_step_next` and `try_step_prev` lend
+a row until the next cursor operation and surface late errors. The ordinary
+iterator returns owned rows and keeps its documented panic behavior. Check
+`try_get_with` on hits, empty values and misses. A snapshot's `try_visit_many`
+keeps backing pins alive across the visit, including duplicate slots. Its
+32-key cap bounds the slot count. Retained bytes depend on the backing blocks or arenas. [Raw API](../../../core/docs/api.md)
 
 **E13 Co-location** — `new_colocated` allocates until the prefix hits the anchor's shard
 (skipped prefixes are burned, never reissued); `is_colocated_with` = same ns + same shard.
@@ -49,6 +70,14 @@ default budget = nonzero `VsdbOptions::mem_budget_mb` > `VSDB_MEM_BUDGET_MB` > 2
 no persistent repair. Acquire shared `__SYSTEM__/LOCK` (`NotFound` OK on lockless immutable copies) **before** reading `universe_header` so active writer/migrator contention returns `Io(WouldBlock)` rather than `Corrupt`. A stale initialization sentinel on a complete marked root
 is accepted untouched; a `Pending` namespace lifecycle is refused. Explicit trie checkpoints return `ReadOnly`, never silently succeed.
 
+**E16 Write admission and fences** — A nonempty `commit_no_slowdown` or
+`commit_sync_no_slowdown` can return `StorageErrorKind::Busy` under L0
+pressure or a full immutable queue. Compare WAL bytes, sequence and rows
+before and after rejection, then rebuild the consumed batch and retry. A
+malformed batch keeps its argument error. An empty sync batch does not
+fence earlier writes. The explicit shard fence covers sealed and current WAL
+generations and adds no mutation. [Public batch contract](../../../core/docs/api.md) · [Pressure and fence tests](../../../core/src/common/engine/mmdb/v5_tests.rs)
+
 ## Bugs
 
 **Collision** — ceiling/floor regress, unrecovered reserve, cursor outside window.
@@ -63,7 +92,7 @@ is accepted untouched; a `Pending` namespace lifecycle is refused. Explicit trie
 - [ ] Identical routing all paths
 - [ ] Prefixed keys + bounded iters (`u64::MAX` OK)
 - [ ] Default once; one engine per non-default id
-- [ ] Batches cover one prefix. Multi-prefix operations preserve documented ordering and retry behavior.
+- [ ] Ordinary batches stay within their prefix. Co-located writes publish both row sets together and reject mismatched placement before writing.
 - [ ] Lifecycle under documented locks
 - [ ] Marker ↔ shards ↔ CURRENT agree
 - [ ] Handle ns independent of ambient create

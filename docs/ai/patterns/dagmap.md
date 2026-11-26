@@ -6,20 +6,20 @@
 
 ## Node ownership and recovery
 
-- Child creation checks both raw handles belong to the same engine and
-  shard, then writes the parent metadata, edge, and child metadata in one
-  MMDB batch. A failed placement leaves both maps intact. Check the
-  independent shard fence and process-reopen case; a reserved unused
-  child prefix is harmless.
+- `new_in(ns, None)` places a root in `ns`. With a parent, raw and typed
+  constructors inherit the parent's namespace and shard in both debug and
+  release. One batch publishes the advanced parent edge ID, the edge and
+  the child's owner record. Check the old snapshot, then fence, exit and
+  reopen and create another child. Its edge ID must advance. A prefix reserved
+  before an interrupted registration may remain unused.
+  [Namespace fixture](../../../strata/tests/dagmap_namespace_test.rs) · [Graph recovery fixtures](../../../strata/src/dagmap/raw/test.rs)
 
 - **Consumed-node guard:** Every local mutator (`insert`, `remove`, `get_mut`, `update`, and `new(Some(parent))`) must enforce `meta.state.live()`, rejecting `Clearing | Destroying | Destroyed` nodes even when unwiped `[02..03)` rows remain from an interrupted cleanup.
 - Check node magic, `dag_id`, shard co-location and the child's recorded
   parent and edge before clearing storage reached through a registry entry.
   A stale index entry may be removed locally. Parentless roots and nodes
   owned by another parent keep their data.
-- Allocate child edges monotonically within each parent. Publish the child's
-  initial metadata, its index entry and the next edge ID in one batch. Authenticate fallback reads and
-  guard parent chains against cycles.
+- Authenticate fallback reads and guard parent chains against cycles.
 - Prune destroys side branches, folds the mainline atomically into the root
   and reparents live head children — while finishing `destroy_subtree()` on any owned `!state.live()` (`Destroying`) child of the head — before writing any clearing marker or wiping the head's `[01..02)` discovery edges. The marker
   retains the original owner and root identities. Retrying on the head

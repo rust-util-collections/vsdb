@@ -100,7 +100,7 @@ later writes is the contract. **Keep:** a snapshot that changes under it.
 
 ## FP-19: Working-state vs history durability on VerMap
 
-`insert` / `remove` / `write_batch` / `discard` commit one unsynced atomic batch; history ops and `bulk_load` end with `commit_sync()`.
+A changed working root from `insert`, `remove`, `write_batch`, `edit_working` or `discard` is published asynchronously. An empty edit can successfully read and return without submitting a write or fence. History publications and `bulk_load` use synchronous batches.
 Losing unsynced working state on power loss is by design. **Keep:** a crash
 leaving inconsistent state or stranded `[0x06]` `STAGE` anchors on aborted builds, or a history op returning before its sync.
 

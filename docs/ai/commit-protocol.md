@@ -45,17 +45,38 @@ Keep the ledger across commits. Stage only freeze set + this-invocation fix/form
    rm -rf "$scratch"
    ```
 
-   - core → `cargo test -p vsdb_core <filter>`;
-   - strata → `cargo test -p vsdb <filter>`;
-   - migration → `cargo test -p vsdb_migrate <filter>`;
-   - cross-crate / public / persisted → package suites or
-     `cargo test --workspace --tests`.
+   Select the smallest test that actually exercises the changed operation.
+   Confirm the named test ran when supplying a filter.
+
+   | Changed operation | Focused check from the repository root |
+   | --- | --- |
+   | Core read views, fences, memory gauges or shard preflight | `cargo test -p vsdb_core --test v5_adapter_test`. The internal admission fixtures run with `cargo test -p vsdb_core --lib mmdb::v5_tests`. |
+   | Co-located insert or child placement | `cargo test -p vsdb_core --test colocated` and the affected DagMap unit tests or `cargo test -p vsdb --test dagmap_namespace_test`. |
+   | VerMap working edits or VecDex traversal/publication | Use `cargo test -p vsdb --lib <filter>` on the affected root, snapshot or staged mutation case. |
+   | v4 shard export and writable v5 reopen | `cargo test -p vsdb_migrate --test staged_generation` and `cargo test -p vsdb_migrate --test collections_generation`. For logical v17 changes, select the affected collection fixture. |
+   | Other subsystem or cross-crate change | Select the relevant package suite or `cargo test --workspace --tests`. |
+
+   On MMDB dependency changes, inspect the normal dependency trees for `vsdb`
+   and `vsdb_migrate`. The runtime resolves v5. The offline tool resolves v5
+   and the separately aliased v4 reader. Compare against the workspace and
+   migration manifests. For edits to a standalone profile or its verifier,
+   run its documented entry point from the [evaluation index](../README.md#performance-evidence);
+   these programs have their own build or replay procedures.
 4. On fail: fix if unit-caused; else report pre-existing with evidence.
-5. Stage exact freeze + unit fix/format paths — never `git add -A`. Index already
-   holds baseline → do not stage; `git commit --only -F - -- <unit paths>` commits
-   exactly those paths and leaves the baseline staged.
-6. `git diff --cached` (or, with `--only`, `git diff HEAD -- <unit paths>`) =
-   exactly one unit, no baseline/post-freeze paths.
+5. Stage only the owned change. Use `git add -- <path>` for a wholly owned
+   file (including a new test or verifier), or stage just the owned hunks
+   when other changes share the file.
+6. Inspect the proposed commit before recording it. When the index contains
+   only this unit, use `git diff --cached` and commit the index. If unrelated
+   files are already staged and the unit owns the **entire working-tree
+   diff** of each selected path, inspect `git diff HEAD -- <unit paths>` and
+   use `git commit --only -F - -- <unit paths>`. This form takes whole files
+   from the working tree, including their unstaged edits. For a partial-file
+   unit with unrelated staged changes, keep both sets in the real index and
+   use a temporary index initialized from `HEAD` to apply, inspect and commit
+   only the reviewed patch. Include only this unit’s owned audit hunks where
+   applicable. Verify the resulting commit and the real staged and unstaged
+   baseline afterward.
 7. Match repo commit style; HEREDOC multi-line; no co-author/generated-by.
 8. Verify commit; compare `git status --short` to baseline.
 
@@ -79,6 +100,10 @@ After last behavior commit (once per stable code state):
 `scratch` is `mktemp -d /tmp/vsdb-test.XXXXXX`, created in the parent shell
 before step 5 and removed after step 7. Steps 1–4 do not open a database.
 One scratch directory covers steps 5–7; do not point them at `$HOME/.vsdb`.
+Record the host OS, architecture and exact code revision for the gate.
+The [CI workflow](../../.github/workflows/rust.yml) selects Ubuntu and also
+runs the [Makefile](../../Makefile) scratch-isolation check under `make lint`.
+Report native ARM macOS coverage when that host actually ran the tests.
 
 Regression → new atomic commit, then re-run affected checks. Reuse completed
 checks on the same code/manifest state; do not repeat a gate just because another

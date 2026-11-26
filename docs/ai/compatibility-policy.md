@@ -34,6 +34,16 @@ Historical CHANGELOG and evaluation baselines retain the toolchain notes
 recorded at the time. This toolchain policy does not authorize public API or
 persisted-format breaks or automatic major bumps.
 
+## Shard and collection formats
+
+Check the physical engine format and the logical VSDB format independently.
+The v18 runtime opens MMDB v5 shards. Earlier v18 development stores on
+MMDB v4 can already have the current VSDB envelopes. Their visible rows
+and handles must survive physical export and writable reopen. A v17 store
+also needs logical conversion for its saved or embedded handles. Trace
+runtime dependencies through `vsdb_core` and legacy readers through
+`vsdb_migrate`. [Operator routes](../../migration/README.md) · [Frozen v18/v4 application fixture](../../migration/tests/collections_generation.rs)
+
 ## Typed-handle tags and wire decoders
 
 The v18 runtime accepts only the current universe, engine, registry, raw, and typed envelopes (`VSUNI018`, `VSENG018`, `VSNREG02`, `VSMAPX02`, `VSTYPE04`). Put all historical decoders (`VSMAPX01`, `VSTYPE02`, `VSTYPE03`, v16/v17 layouts), encoders for migration, and resumable format converters in the independent `vsdb_migrate` crate ([migration review guide](patterns/migration.md)). Verify migration with frozen source fixtures, interrupted-retry tests, and the normal v18 reader. MPT and SMT roots and serialized proofs retain their v17 wire contract. Check them against the [frozen v17 proof fixture](../../strata/src/trie/fixtures/v17-roots-proofs.postcard) when editing hash or transport code.

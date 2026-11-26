@@ -77,8 +77,9 @@ Use the [review core](../../../docs/ai/review-core.md#1-context) for shared chec
 
 ## Phase 1 — Map
 
-Map every in-scope file to one `review-core.md` Subsystem Map row and load its
-guides.
+Assign each in-scope source or test to the operation it supports in the
+[subsystem map](../../../docs/ai/review-core.md#subsystem-map). Classify
+build files, skills and evidence using the full-repository coverage rules.
 
 - **Diff scopes:** full diff + whole changed functions, callers,
   failure/recovery paths, and tests.
@@ -88,12 +89,14 @@ guides.
 
 1. **Strategy**
    - One subsystem and a small diff: review directly.
-   - Otherwise: one read-only batch per Subsystem Map row (one owner per Rust
-     file), plus explicit seam batches — `persistent_btree/{diff,merge,persist}.rs` ↔
-     `versioned/`, `core` engine/universe/namespace ↔ `strata` handles, and `core`/`strata` wire formats ↔ `migration/` (v4 physical export, v5 writable reopen, and logical v17 handles). Run batches
-     as parallel read-only subagents when available, else sequentially. Then
-     run a cross-subsystem / `design-patterns.md` pass only for invariants no
-     batch covered.
+   - For a larger scope, assign read-only batches for the affected rows of the
+     subsystem map. Give each Rust file one owner. Trace each changed operation
+     across the relevant boundary: a VerMap edit through its leased tree root
+     and publication, a DagMap child through the checked two-prefix batch,
+     a VecDex mutation through staged adjacency and chunk commit, or a
+     generation cutover through the v4 source, v5 shard format and restored
+     collection. Run independent batches in parallel when available. Use the
+     cross-subsystem design pass for remaining gaps.
    - `cargo fmt`/`check`/`clippy` run as commands by you, never inside review
      batches.
 2. **Batch brief** — fill in and send as-is:

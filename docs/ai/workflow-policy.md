@@ -70,10 +70,14 @@ One issue / root cause / behavior change → one commit.
   wt=$(mktemp -d /tmp/vsdb-wt.XXXXXX); git worktree add --detach "$wt" HEAD
   git diff HEAD -- <unit paths> | git -C "$wt" apply --index  # copy unit's untracked files too
   scratch=$(mktemp -d /tmp/vsdb-test.XXXXXX)
-  (cd "$wt" && CARGO_TARGET_DIR="$OLDPWD/target" VSDB_BASE_DIR="$scratch" cargo test -p <pkg> <filter>)
+  (cd "$wt" && CARGO_TARGET_DIR="$wt/target" VSDB_BASE_DIR="$scratch" cargo test -p <pkg> <filter>)
   rm -rf "$scratch"
   git worktree remove --force "$wt"
   ```
+- Give independently built revisions separate Cargo target directories. The
+  v4 adapter, the selected v5 adapter and prototype patches may carry the same
+  VSDB package version. Record the executable digest when a comparison depends
+  on which code was built. [B+ tree reproduction](../evaluations/v18-tree-v5/README.md)
 - Unique prefixes separate collections inside the open root. They do not keep
   tests off `$HOME/.vsdb`. The agent uses bare Cargo (`cargo test`,
   `cargo clippy`, `cargo check`, `cargo fmt`), not make targets, unless the user

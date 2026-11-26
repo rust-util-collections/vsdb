@@ -15,7 +15,7 @@ merge replays sorted source deltas onto target via range-grouped `apply_leaf_run
 
 **V4 Rollback** — only this branch’s ref contributions; other branches untouched. Inc target **before** dec old HEAD.
 
-**V5 Publication & staging** — history changes and `bulk_load` publish metadata and remaining pages with `commit_sync()`. Shared runtimes record `[0x05]` retirements in that publication; working edits (`insert`, `remove`, `write_batch`, `discard`) commit one unsynced batch. Large `bulk_load` and `merge` builds flush pending data at 16 MiB and anchor unpublished roots at `[0x06]` `STAGE`; if a build errors or unwinds after `flush_stage`, cleanup must remove/defer those `[0x06]` anchors and private chunks so they do not leak or poison `[0x07]` `REFS` checkpoints (`has_anchors`).
+**V5 Publication & staging** — history changes and `bulk_load` publish metadata and remaining pages with `commit_sync()`. Shared runtimes record `[0x05]` retirements in that publication; a changed working root (`insert`, `remove`, `write_batch`, `edit_working`, `discard`) is published with an unsynced batch. An unchanged root can skip publication. Large `bulk_load` and `merge` builds flush pending data at 16 MiB and anchor unpublished roots at `[0x06]` `STAGE`; if a build errors or unwinds after `flush_stage`, cleanup must remove/defer those `[0x06]` anchors and private chunks so they do not leak or poison `[0x07]` `REFS` checkpoints (`has_anchors`).
 
 **V6 Commit immutable** after create — id/root/parents/timestamp; only `ref_count` is rewritten.
 
@@ -33,6 +33,17 @@ the cache after the storage batch succeeds. A failed publication or recovery cle
 cached heads. Branch point reads resolve and pin the working root under the ref
 lock, then traverse with a scoped pin. Branch creation shares both the source
 HEAD and its working root.
+
+**V11 Dependent working edits** — `edit_working` reads the latest overlay
+value or the captured working root. Replacing a staged value releases its
+previous charge. A budget violation returns `InvalidConfig`. A changed
+root detected after the callback returns `WorkingRootChanged`. Keep the
+existing writer-exclusion contract across aliases. An error returned by
+the callback or an unwind publishes none of its overlay. A read-only
+callback leaves the generation unchanged and submits no write or fence.
+Drop the private lease before publishing a changed root. Check that a real
+external snapshot can still read the previous values after publication.
+[Working-edit tests](../../../strata/src/versioned/test.rs) · [Leased page checks](btree.md) · [Write-submission measurements](../../evaluations/v18-publication/README.md)
 
 ## Bugs
 
@@ -60,15 +71,3 @@ publishing either row, so a reader lease cannot drop an otherwise unowned result
 - [ ] Merge shapes: same head → no-op; FF only into empty target; target-ancestor → 2-parent commit
 - [ ] Snapshot and iterator roots survive alias writes/GC/restore; final drop releases once
 - [ ] Recount preserves all live pins; clone owns only its copied persistent graph
-
-
-## Dependent working edits
-
-Trace `edit_working` from its leased working root through the overlay,
-budget and commit. Replacing a staged value releases its previous charge.
-Callback error or panic discards the overlay. Drop the private lease before
-publishing; a genuine external snapshot retains the necessary old nodes.
-A working-edit fallback read checks page bounds, referenced objects and
-blob visibility, returning corruption for a missing reachable object while
-an absent key yields `None`. Count engine submissions and root generations separately. Reopen saved
-metadata and check that working edits leave the history head intact.

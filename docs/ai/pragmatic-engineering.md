@@ -22,6 +22,21 @@ restart sequence is needed. Report tool/access failures accurately and continue
 independent work that remains possible; wording changes do not establish that a
 previously blocked operation is permitted or has succeeded.
 
+## Performance evidence
+
+Choose the control that answers the claim. An upgrade comparison runs the
+same VSDB operation on v4-backed and v5-backed v18. An adapter optimization
+compares two implementations on the same MMDB v5 backend. Keep the data,
+durability, offered load and cache regime matched. Compare paired results
+with control-to-control variation and record the verified binary revisions.
+Use the ordinary build for latency and treat diagnostic counters separately.
+
+At saturation, report small-put and bulk completion rates separately from
+aggregate bytes/s. For paced writes, include arrival-to-ack p99, unserved
+work and end-of-window storage debt. For queries, check ordered results and
+time the whole API call. Use actual I/O counters for device-read claims.
+[Adapter trials](../evaluations/v18-adapter/README.md) · [Publication trials](../evaluations/v18-publication/README.md) · [VecDex query controls](../evaluations/v18-vecdex-v5/README.md)
+
 ## Engineering choices
 
 Simplicity = stable, deterministic execution — not shorter text.

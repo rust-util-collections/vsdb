@@ -40,9 +40,10 @@ on the same captured view, including after the writer changes the live index.
 
 ## MMDB v5 query boundary
 
-Resolve each query against one read view. Validate vector dimensions, reverse
-key mappings, adjacency byte lengths and fallback-node key widths on the
-fallible path. Reaching the visit cap on the last admitted neighbor or on a
+Production search uses scalar pinned decoding on a single read view.
+The grouped-width and distance-cache alternatives are recorded experiments.
+Validate vector dimensions, reverse key mappings, adjacency byte lengths
+and fallback-node key widths on the fallible path. Reaching the visit cap on the last admitted neighbor or on a
 component restart must stop further adjacency access. For a candidate read
 optimization compare complete ordered result keys, distance bits, callbacks
 and visit caps on exactly the same graph. Separate logical block acquisitions,
@@ -54,7 +55,8 @@ exclusive `next_node_id` at chunk entry. An overlay adjacency may reference
 IDs already allocated inside the chunk. Stale references to previously issued
 IDs can have missing vector rows. Check both traversal and unpruned
 reciprocal-edge append paths. An invalid ID or partial ID encoding must
-return a typed error before the chunk publishes any row.
+return a typed error before the chunk publishes any row. Keep earlier
+successful chunks visible if a later chunk fails. [Mutation fixtures](../../../strata/src/vecdex/test.rs)
 
 ## Checklist
 

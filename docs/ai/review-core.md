@@ -25,18 +25,21 @@ Assess platform correctness against the [supported architectures](compatibility-
 
 | Subsystem | Implementation | Review guide |
 | --- | --- | --- |
-| Engine, universe and prefix allocator | [Engine and MMDB backend](../../core/src/common/engine), [universe headers and locks](../../core/src/common/universe.rs), [configuration, IDs and range bounds](../../core/src/common) | [Engine](patterns/engine.md) |
+| MMDB v5 shard adapter | [Admission, fences, snapshots, lending reads and cache ownership](../../core/src/common/engine/mmdb.rs), [shard geometry preflight](../../core/src/common/engine/mmdb/geometry.rs), [prefix-bound callers](../../core/src/common/engine/mod.rs) | [Engine](patterns/engine.md) · [Adapter contract tests](../../core/tests/v5_adapter_test.rs) |
+| Universe and prefix allocation | [Lifecycle records and locks](../../core/src/common/universe.rs), [allocation and ceiling recovery](../../core/src/common/engine/mmdb.rs), [shared shard format options](../../core/src/common/mod.rs) | [Engine](patterns/engine.md) · [Migration](patterns/migration.md) |
 | Namespace lifecycle | [Registry, routing and teardown](../../core/src/common/namespace.rs) | [Engine](patterns/engine.md) · [Compatibility](compatibility-policy.md) |
 | Raw and typed collections | [MapxRaw](../../core/src/basic/mapx_raw), [Mapx](../../strata/src/basic/mapx), [MapxOrd](../../strata/src/basic/mapx_ord), [raw-key maps](../../strata/src/basic/mapx_ord_rawkey), [Orphan](../../strata/src/basic/orphan) | [Engine](patterns/engine.md) · [Encoding and guards](technical-patterns.md) |
 | Persistent B+ tree | [Pages, blobs, COW, diff, merge and runtime caches](../../strata/src/basic/persistent_btree) | [B+ tree](patterns/btree.md) |
-| Versioning | [VerMap, snapshots, history, publications and repair](../../strata/src/versioned) | [Versioning](patterns/versioning.md) · [B+ tree](patterns/btree.md) |
+| Versioning | [Working edits and publication](../../strata/src/versioned/map.rs), [leased snapshot reads](../../strata/src/versioned/read.rs), [repair](../../strata/src/versioned/repair.rs) | [Versioning](patterns/versioning.md) · [B+ tree](patterns/btree.md) |
 | Merkle tries | [MPT, SMT, proofs, checkpoints and VerMap integration](../../strata/src/trie) | [Tries](patterns/trie.md) |
 | SlotDex | [Slot codec, tier counts and pagination](../../strata/src/slotdex) | [SlotDex](patterns/slotdex.md) |
-| DagMap | [Typed, raw-key and raw overlay maps](../../strata/src/dagmap) | [DagMap](patterns/dagmap.md) |
-| VecDex | [HNSW, metric dispatch and read views](../../strata/src/vecdex) | [VecDex](patterns/vecdex.md) |
+| DagMap | [Graph operations and recovery](../../strata/src/dagmap/raw), [typed and raw-key constructors](../../strata/src/dagmap), [co-located raw inserts](../../core/src/basic/mapx_raw/mod.rs) | [DagMap](patterns/dagmap.md) · [Placement tests](../../core/tests/colocated.rs) |
+| VecDex | [Query state, staged neighbor reads and mutation publication](../../strata/src/vecdex/mod.rs), [HNSW traversal](../../strata/src/vecdex/hnsw.rs), [shared row overlay](../../strata/src/common/staged.rs) | [VecDex](patterns/vecdex.md) · [Graph tests](../../strata/src/vecdex/test.rs) |
 | Shared codecs, frames, readers, guards and staged writes | [Typed infrastructure](../../strata/src/common), [error types](../../core/src/common/error.rs) | [Technical checks](technical-patterns.md) · [Compatibility](compatibility-policy.md) |
-| Offline migration | [Converters](../../migration/src), [fixtures and tests](../../migration/tests), [upgrade instructions](../../migration/README.md) | [Migration](patterns/migration.md) · [Compatibility](compatibility-policy.md) |
-| Public exports and build | [Core exports](../../core/src/lib.rs), [typed exports](../../strata/src/lib.rs), [workspace and crate manifests](../../Cargo.toml) | [Compatibility](compatibility-policy.md) |
+| Physical generation staging | [CLI](../../migration/src/bin/vsdb-stage-v5.rs), [v4 source inventory, v5 export, verification and exclusive publication](../../migration/src/universe/staging.rs), [registry and allocator](../../migration/src/universe.rs) | [Migration](patterns/migration.md) · [Staged generation tests](../../migration/tests/staged_generation.rs) |
+| Logical v17 collection conversion | [Handle and collection converters](../../migration/src), [frozen fixtures](../../migration/tests/fixtures), [upgrade order](../../migration/README.md) | [Migration](patterns/migration.md) · [Compatibility](compatibility-policy.md) |
+| Public exports and build | [Core exports](../../core/src/lib.rs), [typed exports](../../strata/src/lib.rs), [runtime dependency](../../Cargo.toml), [offline dependencies](../../migration/Cargo.toml) | [Compatibility](compatibility-policy.md) · [Validation](commit-protocol.md#final-workspace-gate) |
+| Workload measurements | [Adapter memory and throughput](../evaluations/v18-adapter/README.md), [collection publications](../evaluations/v18-publication/README.md), [VecDex queries](../evaluations/v18-vecdex-v5/README.md), [tree controls](../evaluations/v18-tree-v5/README.md) | Use each report's named revisions, driver and verification procedure. |
 
 ### Full-repository coverage
 
@@ -93,12 +96,13 @@ Check alias life, write exclusion, process-global env, allocator, lifecycle seri
 **Crash recovery.** Trace publication, synchronization and reopen across the
 affected rows. VerMap uses one prefix with retirement and staging anchors.
 SlotDex commits a batch of entries and tier counts together. VecDex can publish
-several mutation chunks during one call. DagMap child creation uses one
-checked two-prefix batch; prune/reparent still has ordered recovery phases. The mapped guides describe each protocol and
-its failure boundaries. For filesystem metadata, check the lock scope and the
-order of file sync, rename and directory sync. For a backend change, trace
-both the runtime v5 adapter and the offline v4 reader, including the
-[real SST and residual-WAL fixture](../../migration/tests/staged_generation.rs).
+several mutation chunks during one call. Check the complete stream for a
+rejected chunk and the visibility of earlier successful chunks. DagMap creates a
+child with one checked two-prefix batch. Prune and reparent have ordered
+recovery phases. For a generation export, follow the locked source inventory,
+the copied data, the exclusive rename and the destination parent sync. Distinguish
+a byte-identical logical stream from a usable v18 universe by restoring actual
+handles and opening the destination writable. [Physical collection fixture](../../migration/tests/collections_generation.rs)
 
 **Compatibility:** `compatibility-policy.md`. Old data preserve/reject/migrate
 intentionally. A break needs explicit user acceptance before any major bump.
@@ -108,7 +112,12 @@ on foreground database paths. Compare the same workload against the baseline,
 including a contended run when synchronization changes. Extra time on necessary
 background cleanup can be acceptable when foreground latency, throughput and
 resource use remain bounded. Include time spent holding locks or delaying a writer
-when evaluating a maintenance job.
+when evaluating a maintenance job. For an upgrade claim, identify the v4-backed
+and v5-backed VSDB executables, corpus, cache regime and comparison metric.
+Report saturated foreground operations separately from total bytes and paced
+request latency. Compare candidate gains to control/control variation. A result
+from an archived experimental patch describes the binary built from that patch.
+[VSDB v18 implementation and measured decisions](../proposals/v18-mmdb-v5-execution.md)
 
 **Design:** Locks, ownership, queues, multi-step install, degrade, public/on-disk
 → applicable D-\* in `design-patterns.md`; skip empty families.

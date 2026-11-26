@@ -1,5 +1,5 @@
 interface:
   display_name: "VSDB Review"
-  short_description: "Review VSDB correctness and compatibility"
+  short_description: "Review scoped VSDB defects and reconcile the audit registry"
 policy:
   allow_implicit_invocation: false
