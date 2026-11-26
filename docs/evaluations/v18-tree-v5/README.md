@@ -28,6 +28,16 @@ and 12 snapshot tests passed on the candidate, covering empty and unbounded
 ranges, internal cache eviction, mutation across aliases, blob-backed
 values, and pin retention after dropping a snapshot.
 
+## Final stock comparison
+
+The [final v4/v5 confirmation](stock/README.md) repeated the original
+client with stock VSDB `6854273` after selecting 16 MiB shard buffers.
+Warm standalone tree point-hit and point-miss p99 rose by 12.03% and
+11.83%, respectively, on this host. The paired scan p99 rose by 32.83%;
+v4's 41.18% maximum control difference limits that estimate. The
+earlier prototype measurements below retain their original source and
+configuration.
+
 ## Measured requests
 
 | Operation | Control p99 µs | Candidate p99 µs | Paired median gain | Paired gain range | Max A/A | Favorable pairs | Throughput change |

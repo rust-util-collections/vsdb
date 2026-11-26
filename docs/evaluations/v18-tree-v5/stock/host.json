@@ -1,0 +1,51 @@
+{
+  "date": "2026-11-26",
+  "kernel": "7.0.0-44-generic",
+  "arch": "x86_64",
+  "cpu": "4",
+  "processor": "AMD Ryzen 9 5900X 12-Core Processor",
+  "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)\nbinary: rustc\ncommit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a\ncommit-date: 2026-11-09\nhost: x86_64-unknown-linux-gnu\nrelease: 1.100.0\nLLVM version: 23.1.5",
+  "filesystem": "/dev/nvme1n1 btrfs rw,noatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvolid=5,subvol=/",
+  "directory_compression": "compression=none",
+  "probe_sha256": "3d409d6af9b44167096aa6ce7f620fa66081163990295860e436692cbfc54df7",
+  "source": {
+    "v4": {
+      "vsdb": "6ddaed901901910537d0cf280141218380c5665d",
+      "mmdb": "4.3.15",
+      "cargo_lock_sha256": "7ed19d204660374f9701b96f986db3cc4716096d97902f60360377be58a44083"
+    },
+    "v5": {
+      "vsdb": "685427371e5e538592db946b258ead6dce3cc42c",
+      "mmdb": "255015ad0f488f09c7985736a903d3171876bcaf",
+      "cargo_lock_sha256": "a803ec0647b5e696e47c9fb45675422eef912ba093db77da22e92abb8648ab4a"
+    }
+  },
+  "binary_sha256": {
+    "v4": "ebb07b898fdbe77e501cf8269b6fdf8c4c65c1b569289e6105416f933729ce72",
+    "v5": "93ceee3bd4fe118dc6f1fd470950f567c41aa6295b8ff4ebc8a68416d5134995"
+  },
+  "final_observed_geometry": {
+    "shards": 16,
+    "buffer_bytes": 16777216,
+    "immutable_limit": 4,
+    "segmented_capacity": 268435456,
+    "overflow_capacity": 268435456
+  },
+  "geometry_probe_sha256": "551f14b44a270404efe6644be781ceceab68d8d4745579a8f9f36da54e896956",
+  "rows": 32768,
+  "value_bytes": 32,
+  "process_budget_mib": 2048,
+  "sampling": {
+    "hit": 60000,
+    "miss": 60000,
+    "scan": 10000,
+    "rows_per_scan": 128
+  },
+  "seeds": [
+    20291134,
+    20292155,
+    20293176,
+    20294197,
+    20295218
+  ]
+}
