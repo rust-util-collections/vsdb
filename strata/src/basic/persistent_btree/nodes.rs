@@ -293,6 +293,7 @@ impl Node {
         raw
     }
 
+    #[cfg(test)]
     pub(crate) fn decode(raw: &[u8]) -> Self {
         let page = NodeView::open(raw).expect("invalid B+ tree page header");
         page.validate().expect("invalid B+ tree page");

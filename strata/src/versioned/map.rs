@@ -751,14 +751,16 @@ where
     // =================================================================
 
     /// Inserts a key-value pair into the working state of `branch`.
+    /// An unreadable or malformed tree page returns an error before the
+    /// replacement working root is published.
     pub fn insert(&mut self, branch: BranchId, key: &K, value: &V) -> Result<()> {
         self.ensure_writable("versioned map insert")?;
         let state = self.get_branch(branch)?;
         let bytes = encode_value(value)?;
         let root = self.build_root(|tree| {
-            Ok(key.with_ordered_bytes(|k| {
-                tree.insert_buffered(state.dirty_root, k, &bytes)
-            }))
+            key.with_ordered_bytes(|k| {
+                tree.try_insert_buffered(state.dirty_root, k, &bytes)
+            })
         })?;
         self.publish_working(branch, state, root)
     }

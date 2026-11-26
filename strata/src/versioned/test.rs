@@ -5962,3 +5962,55 @@ fn fallible_branch_and_reader_operations_propagate_corrupt_rows() {
     map.tree.nodes.insert(c1_key, saved_c1);
     assert_eq!(reader.at(c1).unwrap().get(&1), Some(10));
 }
+
+#[test]
+fn insert_propagates_working_page_and_blob_read_errors() {
+    use crate::basic::persistent_btree::{LeafVal, Node, object_key};
+
+    let mut map = VerMap::<u32, Vec<u8>>::new();
+    let branch = map.main_branch();
+    let value = vec![7; 2048];
+    map.insert(branch, &1, &value).unwrap();
+    let head = map.get_branch(branch).unwrap();
+    let leaf_key = object_key(head.dirty_root);
+    let leaf = map.tree.nodes.get(leaf_key).unwrap();
+    let Node::Leaf { values, .. } = map.tree.node(head.dirty_root) else {
+        panic!("expected one leaf");
+    };
+    let LeafVal::Blob(blob) = values[0] else {
+        panic!("expected a stored blob");
+    };
+
+    map.tree.nodes.remove(leaf_key);
+    assert!(matches!(
+        map.insert(branch, &2, &value),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    assert_eq!(map.get_branch(branch).unwrap(), head);
+
+    // A failed build leaves the reference state for a recount. Heal it from
+    // intact pages before each fault so the insertion path reads the page.
+    map.tree.nodes.insert(leaf_key, &leaf);
+    map.tree.ensure_healthy_refs().unwrap();
+    map.tree.nodes.insert(leaf_key, [0x18, 0]);
+    assert!(matches!(
+        map.insert(branch, &2, &value),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    assert_eq!(map.get_branch(branch).unwrap(), head);
+
+    map.tree.nodes.insert(leaf_key, &leaf);
+    map.tree.ensure_healthy_refs().unwrap();
+    let blob_key = object_key(blob);
+    let saved = map.tree.nodes.get(blob_key).unwrap();
+    map.tree.nodes.remove(blob_key);
+    assert!(matches!(
+        map.insert(branch, &1, &value),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    assert_eq!(map.get_branch(branch).unwrap(), head);
+
+    map.tree.nodes.insert(blob_key, saved);
+    map.insert(branch, &2, &value).unwrap();
+    assert_eq!(map.get(branch, &2).unwrap(), Some(value));
+}

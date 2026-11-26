@@ -7,12 +7,16 @@ use super::{
     EMPTY_ROOT, InsertResult, LeafVal, MAX_KEYS, Node, NodeId, PersistentBTree,
 };
 
+use crate::Result;
+
 impl PersistentBTree {
     /// Inserts `(key, value)`, returning the **new root**.
     ///
     /// The old root (and every version that references it) is unaffected.
     pub fn insert(&mut self, root: NodeId, key: &[u8], value: &[u8]) -> NodeId {
-        let new_root = self.insert_buffered(root, key, value);
+        let new_root = self
+            .try_insert_buffered(root, key, value)
+            .expect("B+ tree insert failed");
         // One engine write batch for the whole path-copy node group.
         self.flush_pending();
         new_root
@@ -22,19 +26,19 @@ impl PersistentBTree {
     /// path stays in `pending` so a multi-step operation can discard its
     /// own intermediate versions before they ever reach the engine. The
     /// caller must [`flush_pending`](Self::flush_pending) before returning.
-    pub(crate) fn insert_buffered(
+    pub(crate) fn try_insert_buffered(
         &mut self,
         root: NodeId,
         key: &[u8],
         value: &[u8],
-    ) -> NodeId {
-        if root == EMPTY_ROOT {
+    ) -> Result<NodeId> {
+        Ok(if root == EMPTY_ROOT {
             self.alloc(&Node::Leaf {
                 keys: vec![key.to_vec()],
                 values: vec![LeafVal::Bytes(value.to_vec())],
             })
         } else {
-            match self.insert_rec(root, key, value) {
+            match self.insert_rec(root, key, value)? {
                 InsertResult::Unchanged => root,
                 InsertResult::Updated(r) => r,
                 InsertResult::Split { left, sep, right } => {
@@ -44,11 +48,16 @@ impl PersistentBTree {
                     })
                 }
             }
-        }
+        })
     }
 
-    fn insert_rec(&mut self, id: NodeId, key: &[u8], value: &[u8]) -> InsertResult {
-        match self.node(id) {
+    fn insert_rec(
+        &mut self,
+        id: NodeId,
+        key: &[u8],
+        value: &[u8],
+    ) -> Result<InsertResult> {
+        match self.try_node(id)? {
             Node::Leaf { keys, values } => self.insert_leaf(keys, values, key, value),
             Node::Internal { keys, children } => {
                 self.insert_internal(keys, children, key, value)
@@ -62,9 +71,9 @@ impl PersistentBTree {
         mut values: Vec<LeafVal>,
         key: &[u8],
         value: &[u8],
-    ) -> InsertResult {
-        match keys.binary_search_by(|k| k.as_slice().cmp(key)) {
-            Ok(i) if self.leaf_val_eq(&values[i], value) => InsertResult::Unchanged,
+    ) -> Result<InsertResult> {
+        Ok(match keys.binary_search_by(|k| k.as_slice().cmp(key)) {
+            Ok(i) if self.try_leaf_val_eq(&values[i], value)? => InsertResult::Unchanged,
             Ok(i) => {
                 values[i] = LeafVal::Bytes(value.to_vec());
                 InsertResult::Updated(self.alloc(&Node::Leaf { keys, values }))
@@ -78,7 +87,7 @@ impl PersistentBTree {
                     self.split_leaf(keys, values)
                 }
             }
-        }
+        })
     }
 
     pub(super) fn split_leaf(
@@ -106,9 +115,9 @@ impl PersistentBTree {
         mut children: Vec<NodeId>,
         key: &[u8],
         value: &[u8],
-    ) -> InsertResult {
+    ) -> Result<InsertResult> {
         let ci = Self::child_index(&keys, key);
-        match self.insert_rec(children[ci], key, value) {
+        Ok(match self.insert_rec(children[ci], key, value)? {
             InsertResult::Unchanged => InsertResult::Unchanged,
             InsertResult::Updated(nc) => {
                 children[ci] = nc;
@@ -124,7 +133,7 @@ impl PersistentBTree {
                     self.split_internal(keys, children)
                 }
             }
-        }
+        })
     }
 
     pub(super) fn split_internal(

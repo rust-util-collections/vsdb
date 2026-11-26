@@ -1232,13 +1232,9 @@ impl PersistentBTree {
         self.with_checked_page(id, |page| page.materialize())
     }
 
+    #[cfg(test)]
     pub(crate) fn node(&self, id: NodeId) -> Node {
         Node::decode(&self.object(id))
-    }
-
-    pub(crate) fn leaf_val_eq(&self, existing: &LeafVal, new_bytes: &[u8]) -> bool {
-        self.try_leaf_val_eq(existing, new_bytes)
-            .expect("B+ tree value read failed")
     }
 
     fn try_leaf_val_eq(&self, existing: &LeafVal, new_bytes: &[u8]) -> Result<bool> {
