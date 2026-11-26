@@ -10,7 +10,7 @@ p.add_argument("folder", type=Path)
 p.add_argument("--seed", type=int, default=261126)
 args = p.parse_args()
 all_trace = {}
-for regime in ("warm", "device", "singleton", "secondary", "device-width8", "landed", "distance-cache", "width8-repeat", "final"):
+for regime in ("warm", "device", "singleton", "secondary", "device-width8", "landed", "distance-cache", "width8-repeat", "final", "policy"):
     path = args.folder/(regime+".csv")
     rows = list(csv.DictReader(path.open()))
     pairs = ({"diagnostic-width8": ("8",)} if regime=="device-width8"
@@ -20,6 +20,9 @@ for regime in ("warm", "device", "singleton", "secondary", "device-width8", "lan
         pairs = {"AA": ("shipped","shipped"), "AB": ("shipped","8")}
     if regime == "distance-cache":
         pairs = {"AA": ("shipped","shipped"), "AB": ("shipped","cached")}
+    if regime == "policy":
+        pairs = {"AA": ("policy","policy"), "AB": ("final","policy"),
+                 "v4AA": ("v4","v4"), "upgrade": ("v4","policy")}
     if regime == "final":
         pairs = {"AA": ("final","final"), "AB": ("shipped","final"),
                  "v4AA": ("v4","v4"), "upgrade": ("v4","final")}
@@ -32,7 +35,7 @@ for regime in ("warm", "device", "singleton", "secondary", "device-width8", "lan
         n = int(row["round"])
         seed = int(row["seed"])
         samples = int(row["samples"])
-        expected_seed = args.seed + n + {"width8-repeat":100_000, "final":200_000}.get(regime,0)
+        expected_seed = args.seed + n + {"width8-repeat":100_000, "final":200_000, "policy":300_000}.get(regime,0)
         if row["regime"] != regime or not 1<=n<=5 or seed!=expected_seed or samples<10_000:
             raise ValueError(f"unexpected classification or trace in {path}: {row}")
         if (not 0 < int(row["p50_ns"]) <= int(row["p99_ns"])
@@ -76,10 +79,10 @@ for regime in ("warm", "device", "singleton", "secondary", "device-width8", "lan
 # RSS is a shorter, independent diagnostic. These rows never enter a p99
 # comparison. Each arm must complete all three seeds in each measured regime.
 resource_digests = {}
-for filename, arms in (("rss.csv", ["1","8","32","shipped","v4"]), ("rss-final.csv", ["final"])):
+for filename, arms in (("rss.csv", ["1","8","32","shipped","v4"]), ("rss-final.csv", ["final"]), ("rss-policy.csv", ["policy"])):
     resource = defaultdict(list)
     expected_keys = {(i, regime, arm) for i in range(1,4)
-                     for regime in ("warm","device") for arm in arms
+                     for regime in (("warm",) if filename=="rss-policy.csv" else ("warm","device")) for arm in arms
                      if (regime,arm) != ("device","v4")}
     with (args.folder/filename).open() as f:
         for row in csv.DictReader(f):

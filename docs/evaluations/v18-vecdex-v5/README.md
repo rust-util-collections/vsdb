@@ -185,6 +185,7 @@ for width in 1 8 32; do python3 "$d/build.py" . "$s/bin" dd07a00 "$width"; done
 python3 "$d/build.py" . "$s/bin" 1300ad2 shipped
 python3 "$d/build.py" . "$s/bin" 1300ad2 cached
 python3 "$d/build.py" . "$s/bin" 3b220e7 final
+python3 "$d/build.py" . "$s/bin" 6854273 policy
 "$s/bin/v4" create "$s/builder" "$s/graph.rows"
 "$s/bin/v4" import "$s/v4-warm" "$s/graph.rows" 512
 "$s/bin/32" import "$s/v5-warm" "$s/graph.rows" 512
@@ -196,6 +197,8 @@ done
 python3 "$d/trials.py" "$s/bin" "$s" "$s/results/singleton.csv" singleton --samples 100000 --cpus 4
 python3 "$d/trials.py" "$s/bin" "$s" "$s/results/width8-repeat.csv" width8-repeat --samples 30000 --seed 361126 --cpus 4
 python3 "$d/trials.py" "$s/bin" "$s" "$s/results/final.csv" final --seed 461126 --cpus 4
+python3 "$d/trials.py" "$s/bin" "$s" "$s/results/policy.csv" policy --seed 561126 --cpus 4
+python3 "$d/rss.py" "$s/bin" "$s" "$s/results/rss-policy.csv" --policy-warm-only --cpus 4 --lock "$s/timing.lock"
 python3 "$d/rss.py" "$s/bin" "$s" "$s/results/rss-final.csv" --final-only --cpus 4 --lock "$s/timing.lock"
 python3 "$d/rss.py" "$s/bin" "$s" "$s/results/rss.csv" --cpus 4 --lock "$s/timing.lock"
 python3 "$d/summarize.py" "$s/results"
