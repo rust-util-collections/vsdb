@@ -186,7 +186,8 @@ fn replacement_is_staged_without_mutating_committed_state() {
         &idx.store
             .get(user_key(&KeyEnDe::encode_key(&7u32)))
             .expect("old key mapping"),
-    );
+    )
+    .unwrap();
 
     let mut txn = Txn::new(&idx.store, idx.state());
     assert!(VecDex::<u32, L2>::stage_remove(&L2, &mut txn, &cfg, &7).unwrap());
@@ -198,7 +199,8 @@ fn replacement_is_staged_without_mutating_committed_state() {
             &idx.store
                 .get(user_key(&KeyEnDe::encode_key(&7u32)))
                 .expect("committed mapping remains visible"),
-        ),
+        )
+        .unwrap(),
         old_node
     );
     assert_eq!(idx.get(&7), Some(vec![1.0, 1.0]));
@@ -873,7 +875,8 @@ fn rejects_nonfinite_vectors_before_mutating_index() {
 
     let mut stored: VecDex<u32, InnerProduct> = VecDex::new(idx.config).unwrap();
     stored.insert(&7, &[1.0]).unwrap();
-    let node = decode_node_id(&stored.store.get(user_key(&7u32.encode_key())).unwrap());
+    let node = decode_node_id(&stored.store.get(user_key(&7u32.encode_key())).unwrap())
+        .unwrap();
     stored
         .store
         .insert(node_key(TAG_VEC, node), f32::NAN.to_le_bytes());
@@ -2089,7 +2092,8 @@ fn shared_handles_keep_ids_and_snapshot_queries_coherent() {
     index.insert(&1, &[1.0, 2.0]).unwrap();
     alias.insert(&2, &[3.0, 4.0]).unwrap();
     assert_eq!(index.len(), 2);
-    let old_id = decode_node_id(&index.store.get(user_key(&1u32.encode_key())).unwrap());
+    let old_id =
+        decode_node_id(&index.store.get(user_key(&1u32.encode_key())).unwrap()).unwrap();
     let reader = index.reader();
     let view = reader.read_view();
     let pairs = index.iter();
@@ -2302,7 +2306,7 @@ fn compact_rejects_incomplete_mappings_without_wiping_data() {
         index.insert(&10, &[1., 2.]).unwrap();
         index.insert(&11, &[3., 4.]).unwrap();
         let key = user_key(&10u32.encode_key());
-        let id = decode_node_id(&index.store.get(&key).unwrap());
+        let id = decode_node_id(&index.store.get(&key).unwrap()).unwrap();
         match damage {
             "missing reverse" => index.store.remove(node_key(TAG_NODE2KEY, id)),
             "extra forward" => index
@@ -2531,6 +2535,48 @@ fn scored_vectors_require_their_reverse_key_for_results_and_filters() {
     ] {
         assert!(matches!(result, Err(VsdbError::Corrupt { .. })));
     }
+}
+
+#[test]
+fn mutations_reject_corrupt_node_mappings_before_publication() {
+    let mut idx: VecDex<u64, L2> = VecDex::new(HnswConfig {
+        dim: 2,
+        ..Default::default()
+    })
+    .unwrap();
+    insert_at_layer(&mut idx, 0, &[0., 0.], 0);
+    insert_at_layer(&mut idx, 1, &[1., 1.], 0);
+    let forward = user_key(&0u64.encode_key());
+    let mut long = 1u64.to_le_bytes().to_vec();
+    long.push(0);
+    for invalid in [vec![0; 7], long, 1u64.to_le_bytes().to_vec()] {
+        idx.store.insert(&forward, invalid);
+        let before = idx.store.iter().collect::<Vec<_>>();
+        assert!(matches!(idx.remove(&0), Err(VsdbError::Corrupt { .. })));
+        assert!(matches!(
+            idx.insert(&0, &[2., 2.]),
+            Err(VsdbError::Corrupt { .. })
+        ));
+        assert!(matches!(
+            idx.insert_batch(&[(2, vec![2., 2.]), (0, vec![3., 3.])]),
+            Err(VsdbError::Corrupt { .. })
+        ));
+        assert_eq!(idx.store.iter().collect::<Vec<_>>(), before);
+    }
+    idx.store.insert(forward, 0u64.to_le_bytes());
+    let mut long = node_key(TAG_INFO, 1).to_vec();
+    long.push(0);
+    for key in [vec![TAG_INFO], long] {
+        idx.store.insert(&key, [0]);
+        let before = idx.store.iter().collect::<Vec<_>>();
+        assert!(matches!(idx.remove(&0), Err(VsdbError::Corrupt { .. })));
+        assert_eq!(idx.store.iter().collect::<Vec<_>>(), before);
+        idx.store.remove(key);
+    }
+    idx.store.insert(node_key(TAG_INFO, 0), [33]);
+    let before = idx.store.iter().collect::<Vec<_>>();
+    assert!(matches!(idx.remove(&0), Err(VsdbError::Corrupt { .. })));
+    assert_eq!(idx.store.iter().collect::<Vec<_>>(), before);
 }
 
 #[test]

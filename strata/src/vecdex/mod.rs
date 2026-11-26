@@ -278,10 +278,26 @@ fn user_key(key_bytes: &[u8]) -> Vec<u8> {
     v
 }
 
-fn decode_node_id(raw: &[u8]) -> u64 {
-    let mut b = [0u8; 8];
-    b.copy_from_slice(&raw[..8]);
-    u64::from_le_bytes(b)
+fn decode_node_id(raw: &[u8]) -> Result<u64> {
+    raw.try_into()
+        .map(u64::from_le_bytes)
+        .map_err(|_| corrupt("invalid VecDex forward mapping width"))
+}
+
+fn decode_info_key(key: &[u8]) -> Result<u64> {
+    let [TAG_INFO, id @ ..] = key else {
+        return Err(corrupt("invalid VecDex node-info tag"));
+    };
+    id.try_into()
+        .map(u64::from_be_bytes)
+        .map_err(|_| corrupt("invalid VecDex node-info key width"))
+}
+
+fn decode_layer(raw: &[u8]) -> Result<u8> {
+    match raw {
+        [layer @ 0..=32] => Ok(*layer),
+        _ => Err(corrupt("invalid VecDex node layer")),
+    }
 }
 
 // =========================================================================
@@ -323,12 +339,7 @@ impl AdjRead for SearchRows<'_, '_> {
         Ok(Some(Box::new(std::iter::from_fn(move || {
             rows.try_step_next().transpose().map(|row| {
                 let (key, _) = row?;
-                let [TAG_INFO, id @ ..] = key else {
-                    return Err(corrupt("invalid VecDex node-info tag"));
-                };
-                Ok(u64::from_be_bytes(id.try_into().map_err(|_| {
-                    corrupt("invalid VecDex node-info key width")
-                })?))
+                decode_info_key(key)
             })
         }))))
     }
@@ -546,10 +557,6 @@ impl<'a, S: Scalar> Txn<'a, S> {
 
 fn encode_value<T: ValueEnDe>(v: &T) -> Vec<u8> {
     v.encode_value()
-}
-
-fn decode_value<T: ValueEnDe>(raw: &[u8]) -> T {
-    T::decode_value(raw).expect("VecDex: corrupt row payload")
 }
 
 /// A persistent, disk-backed approximate nearest-neighbor index
@@ -827,8 +834,11 @@ where
     }
 
     /// Returns the vector associated with the given key, if it exists.
+    ///
+    /// Panics if the stored forward mapping has an invalid width.
     pub fn get(&self, key: &K) -> Option<Vec<S>> {
-        let node_id = decode_node_id(&self.store.get(user_key(&key.encode_key()))?);
+        let node_id = decode_node_id(&self.store.get(user_key(&key.encode_key()))?)
+            .expect("VecDex: corrupt forward mapping");
         self.store
             .get(node_key(TAG_VEC, node_id))
             .map(|raw| decode_vector::<S>(&raw))
@@ -1189,9 +1199,10 @@ where
     #[cfg(test)]
     fn node_layers(&self) -> impl Iterator<Item = (u64, u8)> + '_ {
         self.scan_tag(TAG_INFO).map(|(raw_key, raw_val)| {
-            let mut b = [0u8; 8];
-            b.copy_from_slice(&raw_key[1..9]);
-            (u64::from_be_bytes(b), decode_value::<u8>(&raw_val))
+            (
+                decode_info_key(&raw_key).unwrap(),
+                decode_layer(&raw_val).unwrap(),
+            )
         })
     }
 
@@ -1217,6 +1228,8 @@ where
     /// Read-only and preflight rejection leave state unchanged. Runtime
     /// state updates only after commit succeeds. A persistence error can
     /// leave recoverable WAL data and must not be retried automatically.
+    /// A malformed mapping or node-info row encountered during removal returns
+    /// [`VsdbError::Corrupt`] before the mutation is published.
     pub fn remove(&mut self, key: &K) -> Result<bool> {
         ensure_writable(&self.namespace(), "vector index remove")?;
         let mut txn =
@@ -1239,10 +1252,17 @@ where
         let Some(raw) = txn.get(&user_key(&encoded_key)) else {
             return Ok(false);
         };
-        let node_id = decode_node_id(&raw);
+        let node_id = decode_node_id(&raw)?;
+        if node_id >= txn.state.next_node_id
+            || txn.get(&node_key(TAG_NODE2KEY, node_id)).as_deref() != Some(&encoded_key)
+        {
+            return Err(corrupt("VecDex forward and reverse mappings disagree"));
+        }
         let max_layer = txn
             .get(&node_key(TAG_INFO, node_id))
-            .map(|raw| decode_value::<u8>(&raw))
+            .as_deref()
+            .map(decode_layer)
+            .transpose()?
             .unwrap_or(txn.state.max_layer);
 
         // Phase 1: Remove edges and collect former neighbors per layer.
@@ -1332,7 +1352,9 @@ where
         }
         let layer = txn
             .get(&node_key(TAG_INFO, entry))
-            .map(|raw| decode_value::<u8>(&raw));
+            .as_deref()
+            .map(decode_layer)
+            .transpose()?;
         if layer != Some(txn.state.max_layer) {
             return Ok(true);
         }
@@ -1351,18 +1373,13 @@ where
     ) -> Result<()> {
         #[cfg(test)]
         ENTRY_REPAIRS.with(|count| count.set(count.get() + 1));
-        let live: Vec<(u64, u8)> = txn
-            .rows
-            .scan_prefix(txn.store, &[TAG_INFO])
-            .filter_map(|(raw_key, raw_val)| {
-                let mut b = [0u8; 8];
-                b.copy_from_slice(&raw_key[1..9]);
-                let id = u64::from_be_bytes(b);
-                txn.get(&node_key(TAG_VEC, id))
-                    .is_some()
-                    .then(|| (id, decode_value::<u8>(&raw_val)))
-            })
-            .collect();
+        let mut live = Vec::new();
+        for (key, value) in txn.rows.scan_prefix(txn.store, &[TAG_INFO]) {
+            let id = decode_info_key(&key)?;
+            if txn.get(&node_key(TAG_VEC, id)).is_some() {
+                live.push((id, decode_layer(&value)?));
+            }
+        }
         let Some(true_max) = live.iter().map(|(_, layer)| *layer).max() else {
             txn.state.entry_point = None;
             txn.state.max_layer = 0;

@@ -60,8 +60,11 @@ impl<K: KeyEnDe, D: DistanceMetric<S>, S: Scalar> VecDexReadView<'_, K, D, S> {
     }
 
     /// Gets a vector by its user key.
+    ///
+    /// Panics if the stored forward mapping has an invalid width.
     pub fn get(&self, key: &K) -> Option<Vec<S>> {
-        let id = decode_node_id(&self.raw.get(user_key(&key.encode_key()))?);
+        let id = decode_node_id(&self.raw.get(user_key(&key.encode_key()))?)
+            .expect("VecDex: corrupt forward mapping");
         self.raw
             .get(node_key(TAG_VEC, id))
             .map(|bytes| decode_vector(&bytes))
