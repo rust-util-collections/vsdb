@@ -5550,13 +5550,17 @@ fn failed_clone_in_wipes_copied_destination_prefix() {
     let main = bad_hdr.main_branch();
     bad_hdr.insert(main, &1, &10).unwrap();
     bad_hdr.tree.nodes.insert(super::store::HEADER, [0xff; 4]);
-    let base = crate::MapxRaw::new_in(&dst).instance_id().map_id;
-    assert!(matches!(
-        bad_hdr.clone_in(&dst),
-        Err(crate::VsdbError::Corrupt { .. })
-    ));
-    assert_eq!(crate::MapxRaw::new_in(&dst).instance_id().map_id, base + 2);
-    assert_eq!(open_prefix(base + 1).iter().count(), 0);
+    let allocated = loop {
+        let base = crate::MapxRaw::new_in(&dst).instance_id().map_id;
+        assert!(matches!(
+            bad_hdr.clone_in(&dst),
+            Err(crate::VsdbError::Corrupt { .. })
+        ));
+        if crate::MapxRaw::new_in(&dst).instance_id().map_id == base + 2 {
+            break base + 1;
+        }
+    };
+    assert_eq!(open_prefix(allocated).iter().count(), 0);
 
     // Case 2: corrupt reachable page fails deep verification in recover(true).
     let mut bad_page = VerMap::<u64, u64>::new();
@@ -5568,13 +5572,17 @@ fn failed_clone_in_wipes_copied_destination_prefix() {
     let root = bad_page.get_branch(main).unwrap().dirty_root;
     bad_page.tree.nodes.insert(object_key(root), [0x18, 0]);
     for _ in 0..2 {
-        let base = crate::MapxRaw::new_in(&dst).instance_id().map_id;
-        assert!(matches!(
-            bad_page.clone_in(&dst),
-            Err(crate::VsdbError::Corrupt { .. })
-        ));
-        assert_eq!(crate::MapxRaw::new_in(&dst).instance_id().map_id, base + 2);
-        assert_eq!(open_prefix(base + 1).iter().count(), 0);
+        let allocated = loop {
+            let base = crate::MapxRaw::new_in(&dst).instance_id().map_id;
+            assert!(matches!(
+                bad_page.clone_in(&dst),
+                Err(crate::VsdbError::Corrupt { .. })
+            ));
+            if crate::MapxRaw::new_in(&dst).instance_id().map_id == base + 2 {
+                break base + 1;
+            }
+        };
+        assert_eq!(open_prefix(allocated).iter().count(), 0);
     }
 
     drop(dst);

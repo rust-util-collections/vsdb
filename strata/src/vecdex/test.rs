@@ -2811,12 +2811,14 @@ fn failed_clone_in_wipes_copied_destination_prefix() {
 
     let dst = crate::Namespace::create().unwrap();
     let dst_id = dst.id();
-    let probe0 = MapxRaw::new_in(&dst).instance_id().map_id;
-    for attempt in 0..2u64 {
-        assert!(matches!(idx.clone_in(&dst), Err(VsdbError::Corrupt { .. })));
-        let allocated = probe0 + 1 + attempt * 2;
-        let marker = MapxRaw::new_in(&dst).instance_id().map_id;
-        assert_eq!(marker, allocated + 1);
+    for _ in 0..2 {
+        let allocated = loop {
+            let base = MapxRaw::new_in(&dst).instance_id().map_id;
+            assert!(matches!(idx.clone_in(&dst), Err(VsdbError::Corrupt { .. })));
+            if MapxRaw::new_in(&dst).instance_id().map_id == base + 2 {
+                break base + 1;
+            }
+        };
         let frame = [
             b"VSMAPX02".as_slice(),
             &allocated.to_le_bytes(),

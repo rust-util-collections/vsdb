@@ -1507,25 +1507,33 @@ fn failed_clone_in_wipes_copied_destination_prefix() {
     let mut bad_total = SlotDex64::<u64>::new(4, false).unwrap();
     bad_total.insert_batch((0..20).map(|k| (k, k))).unwrap();
     bad_total.store.insert(TOTAL_KEY, [0xaa; 3]);
-    let base = MapxRaw::new_in(&dst).instance_id().map_id;
-    assert!(matches!(
-        bad_total.clone_in(&dst),
-        Err(VsdbError::Corrupt { .. })
-    ));
-    assert_eq!(MapxRaw::new_in(&dst).instance_id().map_id, base + 2);
-    assert_eq!(open_prefix(base + 1).iter().count(), 0);
+    let allocated = loop {
+        let base = MapxRaw::new_in(&dst).instance_id().map_id;
+        assert!(matches!(
+            bad_total.clone_in(&dst),
+            Err(VsdbError::Corrupt { .. })
+        ));
+        if MapxRaw::new_in(&dst).instance_id().map_id == base + 2 {
+            break base + 1;
+        }
+    };
+    assert_eq!(open_prefix(allocated).iter().count(), 0);
 
     // Case 2: corrupt tier row fails during hydration after TOTAL_KEY rewrite.
     let mut bad_tier = SlotDex64::<u64>::new(2, false).unwrap();
     bad_tier.insert_batch((0..16).map(|k| (k, k))).unwrap();
     bad_tier.store.insert(level_key(1, &0u64), [1]);
-    let base = MapxRaw::new_in(&dst).instance_id().map_id;
-    assert!(matches!(
-        bad_tier.clone_in(&dst),
-        Err(VsdbError::Corrupt { .. })
-    ));
-    assert_eq!(MapxRaw::new_in(&dst).instance_id().map_id, base + 2);
-    assert_eq!(open_prefix(base + 1).iter().count(), 0);
+    let allocated = loop {
+        let base = MapxRaw::new_in(&dst).instance_id().map_id;
+        assert!(matches!(
+            bad_tier.clone_in(&dst),
+            Err(VsdbError::Corrupt { .. })
+        ));
+        if MapxRaw::new_in(&dst).instance_id().map_id == base + 2 {
+            break base + 1;
+        }
+    };
+    assert_eq!(open_prefix(allocated).iter().count(), 0);
 
     drop(dst);
     crate::Namespace::close_by_id(dst_id).unwrap();

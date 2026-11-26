@@ -1401,8 +1401,8 @@ fn restored_delete_does_not_flush_discarded_pending_nodes() {
 
 #[test]
 fn restored_blob_leaf_underflow_drops_discarded_pending_blobs() {
-    fn build() -> (PersistentBTree, NodeId) {
-        let mut tree = PersistentBTree::new();
+    fn build(ns: &crate::Namespace) -> (PersistentBTree, NodeId) {
+        let mut tree = ns.scope(PersistentBTree::new);
         let mut root = EMPTY_ROOT;
         // 33 entries split into a 16-key left BLOB_LEAF and a 17-key right BLOB_LEAF.
         for i in 0u32..33 {
@@ -1416,9 +1416,14 @@ fn restored_blob_leaf_underflow_drops_discarded_pending_blobs() {
         (tree, root)
     }
 
-    let (mut hot, hot_root) = build();
+    let hot_ns = crate::Namespace::create().unwrap();
+    let hot_ns_id = hot_ns.id();
+    let cold_ns = crate::Namespace::create().unwrap();
+    let cold_ns_id = cold_ns.id();
+
+    let (mut hot, hot_root) = build(&hot_ns);
     hot.assert_refs_match_recount(&[hot_root]);
-    let (origin, cold_root) = build();
+    let (origin, cold_root) = build(&cold_ns);
     let bytes = postcard::to_allocvec(&origin).unwrap();
     drop(origin);
     let mut cold: PersistentBTree = postcard::from_bytes(&bytes).unwrap();
@@ -1441,6 +1446,12 @@ fn restored_blob_leaf_underflow_drops_discarded_pending_blobs() {
         cold.nodes.iter().count() - cold_before,
         hot.nodes.iter().count() - hot_before
     );
+
+    drop((hot, cold, hot_ns, cold_ns));
+    crate::Namespace::close_by_id(hot_ns_id).unwrap();
+    crate::Namespace::destroy(hot_ns_id).unwrap();
+    crate::Namespace::close_by_id(cold_ns_id).unwrap();
+    crate::Namespace::destroy(cold_ns_id).unwrap();
 }
 
 /// Serde roundtrip preserves multi-version data:
