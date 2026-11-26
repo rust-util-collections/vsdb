@@ -2,12 +2,55 @@
 
 These Linux/x86_64 trials exercise ordinary VSDB raw maps, snapshot views and
 one namespace with 16 live MMDB shards. The historical runtime is VSDB
-`6ddaed9` on MMDB 4.3.15. The native adapter is VSDB `b5f3153` on MMDB
-`255015a`. An isolated alternate build changes only its buffer threshold from
-6 MiB to 16 MiB at this budget. All three runs configure a 2 GiB VSDB memory
+`6ddaed9` on MMDB 4.3.15. The sizing comparison uses VSDB `b5f3153` on MMDB `255015a` with
+a 6 MiB buffer and an isolated build changing only that threshold to 16 MiB. All three runs configure a 2 GiB VSDB memory
 budget, a 256 MiB limit in each evictable pool store, and VSDB's normal
 16 KiB SST blocks with per-level LZ4/Zstd. Both v5 builds use an immutable
 limit of four. The v4 writer flushes synchronously.
+
+## Buffer selection
+
+VSDB selected **16 MiB per shard** for its 2 GiB, 16-shard configuration
+at `6854273`, with up to four immutables per shard. With the same pool and
+caller trace, reducing the threshold to 6 MiB lost 27.60% of hot-shard
+saturation throughput against a 1.44% A/A band. All five pairs lost
+26.46–31.52%, exceeding the 5% throughput-regression limit. Both profiles
+stayed below the 1 GiB engine scenario in every sampled process. The recorded
+2 GiB input, cache capacities and possible buffer generations do not enforce
+a hard RSS ceiling. [Complete original packet](runs.jsonl.gz) · [Paired metrics and guard status](summary.csv)
+
+| Placement | Buffer | Small-put p99 at matched offer, ms | Saturated MiB/s | Saturated puts/s | Saturated batches/s | Complete-mix MiB/s | Maximum RSS MiB |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Hot | 16 MiB | 1.787 | 297.67 | 1,640 | 18,744 | 52.25 | 270.62 |
+| Hot | 6 MiB | 2.403 | 216.65 | 1,238 | 13,643 | 39.47 | 101.85 |
+| All active | 16 MiB | 2.792 | 492.86 | 12,499 | 30,956 | 398.32 | 677.50 |
+| All active | 6 MiB | 8.363 | 441.85 | 9,163 | 27,765 | 292.00 | 447.88 |
+
+Each performance column is the median of five independent v5 A/B runs.
+RSS is the largest process high-water mark over both load modes and all
+appearances of that binary at each placement. All matched schedules
+qualified. The independent A/A spread for small-put p99 was 10.47% hot
+and 1,034.63% all-active. Those latency observations alone cannot certify
+a 5% guard. The saturation bulk rates in the hot arm (−27.59%, A/A 1.47%)
+identify most of the drop in total bytes with the smaller buffer. The
+common-mix calculation discounts surplus bulk completions.
+
+| Saturation endpoint | L0 before → after | Immutables after | Completed flushes / compactions |
+|---|---:|---:|---:|
+| Hot, 16 MiB | 3 → 5 | 1 | 79 / 19 |
+| Hot, 6 MiB | 7 → 6 | 1 | 154 / 32 |
+| All active, 16 MiB | 16 → 27 | 15 | 111 / 25 |
+| All active, 6 MiB | 16 → 40 | 35 | 276 / 64 |
+
+The same logical preload produced different initial hot-shard file layouts.
+On the all-active fixed offer, the 16 MiB arm finished with 32 L0 files,
+16 flushes and zero compactions during the interval. The 6 MiB arm
+finished with zero L0 files after 48 flushes and 16 compactions. Both had
+zero outstanding immutables. These are per-arm median file and operation
+counts. File sizes differ with the buffer setting. With all 16 shards full,
+one active and four immutable 16 MiB thresholds per shard total 1,280 MiB
+before caches and overshoot. The raw writes exercised a few MiB of segmented
+charge and zero overflow; the populated-cache check below exercises a reader.
 
 ## Allocation results
 
