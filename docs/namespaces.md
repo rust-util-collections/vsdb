@@ -108,6 +108,10 @@ must exclude writers when using a lockless immutable copy.
 before the universe header. Namespace creation reserves an ID with a
 pending record, creates and verifies the engine, then establishes the
 record. A writable opener can complete an interrupted initialization.
+If creation rolls back after populating an explicit root, VSDB retains its
+ownership record until cleanup is durable. After a filesystem error clears,
+retry `Namespace::create_with` at the same path to finish cleanup and create
+the namespace.
 An established root must contain its registered shards. Both open modes
 check the anchored v5 MANIFEST geometry before opening the shards.
 [Universe and engine validation](../core/src/common/universe.rs) · [Read-only operation](read-only.md)
