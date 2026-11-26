@@ -11,12 +11,6 @@
 
 ## Open
 
-### [LOW] review guides: the SlotDex checklist names a removed helper
-- **Where**: `docs/ai/patterns/slotdex.md` (checklist)
-- **What**: The checklist asks for a pure `floor_base_of`, which cc2f41c removed. The current functions are `SlotType::tier_stride` and `floor_align`, applied through `aligned`.
-- **Why**: review-core §4 requires the guides to stay aligned with the code.
-- **Suggested fix**: Name `SlotType::tier_stride` and `floor_align` instead.
-
 ## Won't Fix
 
 ### [MEDIUM] dagmap: an unmarked fold left by earlier releases without children is undetectable

@@ -34,7 +34,7 @@ inverted ⇒ empty. Counts and pages must agree with the logical slot and key or
 
 ## Checklist
 
-- [ ] Pure `floor_align` / `floor_base_of`
+- [ ] Pure `SlotType::tier_stride` / `floor_align`, applied through `aligned`
 - [ ] Ranges cover all tiers
 - [ ] No gap/overlap at bounds
 - [ ] Page internal consistency (offset design OK); bounded boundary scans and ascending within-slot keys
