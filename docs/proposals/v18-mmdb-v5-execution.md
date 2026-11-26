@@ -33,6 +33,15 @@ direct path. These are independent operations on generated data, with
 matched durability and separate ordinary versus diagnostic builds.
 [Publication runs](../evaluations/v18-publication/README.md) · [Independent review record](reviews/v18-mmdb-v5/README.md)
 
+The initial 6 MiB write-buffer trial failed the hot-shard throughput
+floor against 16 MiB on the real adapter (−27.60% across matched pairs).
+The selected per-shard formula is `clamp(B / 8 / S, 64 KiB, 512 MiB)`,
+with four immutable slots. At the 2 GiB/16-shard fixture the larger
+buffer met the measured 1 GiB screen in both placements, including the
+separate all-active read/write fixture with a populated shared cache.
+Record remaining L0/immutable work alongside the measured throughput.
+[Real adapter evidence](../evaluations/v18-adapter/README.md) · [Units and application sizing](shared-mem-pool.md)
+
 For warm B+ tree lookup the ordinary upgraded path was slower than the
 v4-backed control. The tested header-reuse scan improved p99 by 9.40%;
 the separate borrowed-leaf prototype cut requested allocation from about
