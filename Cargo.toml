@@ -16,7 +16,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 postcard = { version = "1.2.0", features = ["alloc", "use-std"] }
 sha3 = "0.12.0"
 
-mmdb = { version = "5.0.0", git = "https://github.com/rust-util-collections/mmdb", rev = "255015ad0f488f09c7985736a903d3171876bcaf" }
+mmdb = { version = "5.0.0", git = "https://github.com/rust-util-collections/mmdb" }
 mmdb_v4 = { package = "mmdb", version = "=4.3.15" }
 
 vsdb_core = { path = "core", version = "18.0.0", default-features = false }
