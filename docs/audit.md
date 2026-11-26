@@ -11,14 +11,6 @@
 
 ## Open
 
-### [MEDIUM] configuration: a failed first initialization poisons the derived-directory getters
-- **Where**: `core/src/common/mod.rs` (`VSDB_SYSTEM_DIR`, `VSDB_CUSTOM_DIR`, `vsdb_get_system_dir`, `vsdb_get_custom_dir`)
-- **What**: Both statics are `LazyLock`s whose initializers `expect` a successful `universe::active()`. A transient initialization error panics inside the initializer and poisons it. One example is another writer holding `__SYSTEM__/LOCK`.
-- **Why**: Every later call panics for the rest of the process, even after the universe opens through other APIs; `DEFAULT_NS` and the universe itself use retryable `OnceLock`s. Reproduced: after the competing lock is released, `Namespace::list()` succeeds while `vsdb_get_custom_dir()` still panics with a poisoned `LazyLock`. Neither getter documents a panic.
-- **Suggested fix**: Use `OnceLock::get_or_init`, which leaves the cell uninitialized when the initializer panics, or initialize fallibly. Add `# Panics` docs. Regression test: in a separate binary, hold the lock, observe the failure, release the lock and expect the custom directory path. No format change.
-
----
-
 ### [LOW] configuration: vsdb_configure cannot be retried after initialization fails
 - **Where**: `core/src/common/mod.rs` (`vsdb_configure`)
 - **What**: The selection is frozen and stored before `universe::initialize` runs. If initialization fails, for example with `Io(WouldBlock)` from another writer, a second `vsdb_configure` returns `BaseDirFrozen`. Other APIs meanwhile retry initialization with the frozen selection.

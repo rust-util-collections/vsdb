@@ -25,7 +25,7 @@ use std::{
     mem::size_of,
     path::{Path, PathBuf},
     sync::{
-        LazyLock,
+        OnceLock,
         atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering},
     },
 };
@@ -73,32 +73,27 @@ const BASE_DIR_VAR: &str = "VSDB_BASE_DIR";
 
 static VSDB_BASE_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
 
-static VSDB_SYSTEM_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
-    // See VSDB_CUSTOM_DIR: derived paths freeze the base dir.
-    vsdb_freeze_base_dir();
-    universe::active().expect("vsdb: universe initialization failed");
-    let mut d = vsdb_get_base_dir();
-    d.push("__SYSTEM__");
-    if !vsdb_is_read_only() {
-        create_dir_all_durable(&d).unwrap();
-    }
-    d
-});
+static VSDB_SYSTEM_DIR: OnceLock<PathBuf> = OnceLock::new();
+static VSDB_CUSTOM_DIR: OnceLock<PathBuf> = OnceLock::new();
 
-static VSDB_CUSTOM_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
-    // Materializing a derived directory pins it to the current base
-    // dir forever; freeze the base dir so a later `vsdb_configure`
-    // fails loudly instead of silently splitting the directory tree
-    // across two bases.
-    vsdb_freeze_base_dir();
-    universe::active().expect("vsdb: universe initialization failed");
-    let mut d = vsdb_get_base_dir();
-    d.push("__CUSTOM__");
-    if !vsdb_is_read_only() {
-        create_dir_all_durable(&d).unwrap();
-    }
-    d
-});
+// A failed initialization leaves the cell empty, so a later call retries
+// instead of failing for the rest of the process.
+fn derived_dir(cell: &'static OnceLock<PathBuf>, name: &str) -> &'static Path {
+    cell.get_or_init(|| {
+        // Materializing a derived directory pins it to the current base
+        // dir forever; freeze the base dir so a later `vsdb_configure`
+        // fails loudly instead of silently splitting the directory tree
+        // across two bases.
+        vsdb_freeze_base_dir();
+        universe::active().expect("vsdb: universe initialization failed");
+        let mut d = vsdb_get_base_dir();
+        d.push(name);
+        if !vsdb_is_read_only() {
+            create_dir_all_durable(&d).unwrap();
+        }
+        d
+    })
+}
 
 /// Per-process sequence for atomic-write staging files.
 static TMP_WRITE_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -330,9 +325,14 @@ fn absolute_base_dir(path: &Path) -> io::Result<PathBuf> {
 /// the base dir carries these files with the data they point into.
 ///
 /// In read-only mode this returns the path without creating the directory.
+///
+/// # Panics
+///
+/// Panics if the universe cannot be opened or the directory cannot be
+/// created. A later call tries again.
 #[inline(always)]
 pub fn vsdb_get_custom_dir() -> &'static Path {
-    VSDB_CUSTOM_DIR.as_path()
+    derived_dir(&VSDB_CUSTOM_DIR, "__CUSTOM__")
 }
 
 /// Returns the internal system directory path of the **default
@@ -346,9 +346,14 @@ pub fn vsdb_get_custom_dir() -> &'static Path {
 /// `Namespace::default_ns().system_dir()`, this only resolves the path: it
 /// never opens the default engine. In read-only mode it returns the path
 /// without creating the directory.
+///
+/// # Panics
+///
+/// Panics if the universe cannot be opened or the directory cannot be
+/// created. A later call tries again.
 #[inline(always)]
 pub fn vsdb_get_system_dir() -> &'static Path {
-    VSDB_SYSTEM_DIR.as_path()
+    derived_dir(&VSDB_SYSTEM_DIR, "__SYSTEM__")
 }
 
 /// Returns the base directory path for VSDB.
