@@ -1,9 +1,9 @@
 //! Offline physical conversion. The only public rename publishes a complete
 //! directory containing the base and all explicitly placed namespace roots.
 use super::{
-    CEILING, HEADER, PROGRESS, Plan, REG, Record, Registry, State, check_regular, migrate_universe,
-    mmdb_err, physical_path, read_id, read_metadata, registry, saved_instance_prefix,
-    v4_iterator_status,
+    CEILING, FileLockGuard, HEADER, PROGRESS, Plan, REG, Record, Registry, State, check_regular,
+    migrate_universe, mmdb_err, physical_path, read_id, read_metadata, registry,
+    saved_instance_prefix, v4_iterator_status,
 };
 use crate::corrupt;
 use sha3::{Digest, Keccak256};
@@ -284,14 +284,13 @@ fn overlap(left: &[(DirectoryId, PathBuf)], right: &[(DirectoryId, PathBuf)]) ->
     })
 }
 
-fn lock_existing_file(path: &Path, locks: &mut Vec<File>) -> Result<()> {
+fn lock_existing_file(path: &Path, locks: &mut Vec<FileLockGuard>) -> Result<()> {
     match check_regular(path) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         result => result?,
     }
     let lock = File::open(path)?;
-    lock.try_lock_shared().map_err(io::Error::from)?;
-    locks.push(lock);
+    locks.push(FileLockGuard::shared(lock)?);
     Ok(())
 }
 
@@ -439,6 +438,11 @@ fn stage(
     destination: &Path,
     mut completed: impl FnMut(Step) -> Result<()>,
 ) -> Result<()> {
+    if vsdb::vsdb_open_mode() == vsdb::OpenMode::ReadOnly {
+        return Err(vsdb::VsdbError::ReadOnly {
+            operation: "universe staging",
+        });
+    }
     let source = source.canonicalize()?;
     let destination = std::path::absolute(destination)?;
     let name = destination
@@ -462,8 +466,7 @@ fn stage(
     }
     let parent_id = directory_id(&parent)?;
     directory_id(&source)?;
-    let root_lock = File::open(&source)?;
-    root_lock.try_lock_shared().map_err(io::Error::from)?;
+    let root_lock = FileLockGuard::shared(File::open(&source)?)?;
     let mut locks = vec![root_lock];
     lock_existing_file(&source.join("__SYSTEM__/LOCK"), &mut locks)?;
     let mut plan = registry(

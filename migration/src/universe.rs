@@ -107,12 +107,41 @@ fn working_lock(path: &Path) -> io::Result<File> {
         .open(path)
 }
 
+pub(super) struct FileLockGuard(Option<File>);
+
+impl FileLockGuard {
+    pub(super) fn exclusive(file: File) -> Result<Self> {
+        file.try_lock().map_err(io::Error::from)?;
+        Ok(Self(Some(file)))
+    }
+
+    pub(super) fn shared(file: File) -> Result<Self> {
+        file.try_lock_shared().map_err(io::Error::from)?;
+        Ok(Self(Some(file)))
+    }
+
+    pub(super) fn unlock(mut self) -> Result<()> {
+        if let Some(file) = self.0.take() {
+            file.unlock()?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for FileLockGuard {
+    fn drop(&mut self) {
+        if let Some(file) = self.0.take() {
+            let _ = file.unlock();
+        }
+    }
+}
+
 fn with_exclusive_lock(file: File, operation: impl FnOnce() -> Result<()>) -> Result<()> {
-    file.try_lock().map_err(io::Error::from)?;
+    let guard = FileLockGuard::exclusive(file)?;
     let result = operation();
     // A concurrently spawned child may still hold a copy of this descriptor.
     // Unlock before returning so an immediate migration retry can acquire it.
-    file.unlock()?;
+    guard.unlock()?;
     result
 }
 
@@ -519,7 +548,7 @@ impl Engine {
         max: &mut u64,
         ceiling: &mut u64,
         current: bool,
-        locks: &mut Vec<File>,
+        locks: &mut Vec<FileLockGuard>,
     ) -> Result<()> {
         let has_header = self.header_path().try_exists()?;
         if !has_header && self.root.join("__SYSTEM__/.shards_ready").try_exists()? {
@@ -601,8 +630,7 @@ impl Engine {
             // through publication, including when the ceiling makes a full scan
             // unnecessary. A writable old process takes the exclusive mmdb lock.
             let shard_lock = working_lock(&dir.join("LOCK"))?;
-            shard_lock.try_lock_shared().map_err(io::Error::from)?;
-            locks.push(shard_lock);
+            locks.push(FileLockGuard::shared(shard_lock)?);
             let default_first = self.ns == 0 && n == 0;
             if anchored && (scan || (!current && default_first)) {
                 let db = mmdb::DB::open_read_only_with_options(
@@ -850,5 +878,24 @@ mod tests {
             contender.try_lock().unwrap();
             contender.unlock().unwrap();
         }
+
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            with_exclusive_lock(file.try_clone().unwrap(), || {
+                panic!("simulated unwind while holding lock");
+            })
+        }));
+        assert!(panicked.is_err());
+        contender.try_lock().unwrap();
+        contender.unlock().unwrap();
+
+        {
+            let _shared = FileLockGuard::shared(file.try_clone().unwrap()).unwrap();
+            assert!(matches!(
+                contender.try_lock(),
+                Err(fs::TryLockError::WouldBlock)
+            ));
+        }
+        contender.try_lock().unwrap();
+        contender.unlock().unwrap();
     }
 }

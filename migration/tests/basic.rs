@@ -389,6 +389,30 @@ fn slotdex_and_dagmap_converters_return_err_without_default_engine() {
             migrate_universe(&dir),
             Err(vsdb::VsdbError::ReadOnly { .. })
         ));
+        let stage_parent =
+            std::env::temp_dir().join(format!("vsdb-ro-stage-parent-{}", rand::random::<u128>()));
+        fs::create_dir_all(&stage_parent).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&stage_parent, fs::Permissions::from_mode(0o555)).unwrap();
+        }
+        let stage_res = vsdb_migrate::stage_universe(&dir, stage_parent.join("gen"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&stage_parent, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        fs::remove_dir_all(&stage_parent).unwrap();
+        assert!(
+            matches!(
+                stage_res,
+                Err(vsdb::VsdbError::ReadOnly {
+                    operation: "universe staging"
+                })
+            ),
+            "unexpected stage_universe result in read-only mode: {stage_res:?}"
+        );
         assert!(matches!(
             migrate_basic::<Mapx<u64, u64>>(typed),
             Err(vsdb::VsdbError::ReadOnly { .. })
