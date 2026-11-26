@@ -81,7 +81,10 @@ dispatching requests to infallible mutation APIs.
 
 VSDB takes a shared, non-blocking lock on an existing `__SYSTEM__/LOCK`
 for the process lifetime. Several readers can hold it together. A writer
-requires exclusive access, including for namespace administration. On Unix,
+requires exclusive access, including for namespace administration. If the
+lock file is created while the universe header is being read, the reader
+takes the shared lock or returns `Io(WouldBlock)` instead of proceeding
+without it. On Unix,
 MMDB also takes a shared lock on each existing shard `LOCK` as it opens
 that shard. An immutable copy may omit lock files. Keep such a copy
 byte-stable until all readers exit.

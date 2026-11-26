@@ -70,7 +70,7 @@ engine (`OnceLock`; `vsdb_flush()` skips it when unopened) — never use it just
 default budget = nonzero `VsdbOptions::mem_budget_mb` > `VSDB_MEM_BUDGET_MB` > 2 GiB.
 
 **E15 Read-only open** — complete immutable datasets only; in-memory WAL replay,
-no persistent repair. Acquire shared `__SYSTEM__/LOCK` (`NotFound` OK on lockless immutable copies) **before** reading `universe_header` so contention with an active writer returns `Io(WouldBlock)` rather than `Corrupt`. A stale initialization sentinel on a complete marked root
+no persistent repair. Acquire shared `__SYSTEM__/LOCK` (`NotFound` OK on lockless immutable copies) **before** reading `universe_header` so contention with an active writer returns `Io(WouldBlock)` rather than `Corrupt`. If that first open finds no lock file, check again after the header is visible: a writer that created the file in between still returns `Io(WouldBlock)`, and a copy that never had one stays lockless. A stale initialization sentinel on a complete marked root
 is accepted untouched; a `Pending` namespace lifecycle is refused. Explicit trie checkpoints return `ReadOnly`, never silently succeed.
 
 **E16 Write admission and fences** — A nonempty `commit_no_slowdown` or

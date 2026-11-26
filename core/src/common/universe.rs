@@ -73,7 +73,11 @@ fn read_lock(base: &Path) -> Result<Option<File>> {
             Ok(Some(file))
         }
         // A read-only mount of an immutable copy may omit lock files.
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            #[cfg(test)]
+            tests::after_missing_universe_lock();
+            Ok(None)
+        }
         Err(e) => Err(e.into()),
     }
 }
@@ -125,13 +129,19 @@ pub(crate) fn initialize(base: &Path, mode: OpenMode) -> Result<&'static Univers
     } else {
         None
     };
-    let lease = if writable {
+    let mut lease = if writable {
         Some(lock(base)?)
     } else {
         read_lock(base)?
     };
     let id = match read_header(&base.join(HEADER))? {
         Some(id) => {
+            if !writable && lease.is_none() {
+                // The lock file was absent before the header was read. A
+                // writer can create and hold it in that window; a second
+                // attempt distinguishes that writer from a lockless copy.
+                lease = read_lock(base)?;
+            }
             namespace::check_registry_at(base)?;
             // A universe can contain only non-default engines.
             validate_ready_engine(base, id, 0, 16)?;
@@ -159,6 +169,7 @@ pub(crate) fn initialize(base: &Path, mode: OpenMode) -> Result<&'static Univers
         _lock: lease,
     }))
 }
+
 fn fresh_or_interrupted(base: &Path) -> Result<bool> {
     if base.join("mmdb").try_exists()?
         || base.join("__NAMESPACES__").try_exists()?
@@ -343,4 +354,90 @@ pub(crate) fn install_engine(
         Err(e) => return Err(e.into()),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{VsdbOptions, vsdb_configure};
+    use std::{env, fs, process::Command, thread, time::Duration};
+
+    pub(super) fn after_missing_universe_lock() {
+        let Some(dir) = env::var_os("VSDB_RO_LOCK_HANDOFF") else {
+            return;
+        };
+        let dir = PathBuf::from(dir);
+        fs::write(dir.join("reader_at_lock"), b"1").unwrap();
+        let continue_at = dir.join("continue");
+        for _ in 0..500 {
+            if continue_at.exists() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        panic!("timed out waiting for the universe lock handoff");
+    }
+
+    #[test]
+    fn read_only_open_rejects_a_lock_created_before_the_header_is_read() {
+        const HANDOFF: &str = "VSDB_RO_LOCK_HANDOFF";
+        if let Some(dir) = env::var_os(HANDOFF) {
+            let err = vsdb_configure(VsdbOptions::read_only(dir)).unwrap_err();
+            match err {
+                crate::VsdbError::Io(source) => {
+                    assert_eq!(source.kind(), io::ErrorKind::WouldBlock);
+                }
+                other => panic!("expected WouldBlock Io error, got {other:?}"),
+            }
+            return;
+        }
+
+        let scratch = env::temp_dir()
+            .join(format!("vsdb-ro-lock-handoff-{}", rand::random::<u128>()));
+        let base = scratch.join("base");
+        fs::create_dir_all(&base).unwrap();
+        let child = Command::new(env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "common::universe::tests::read_only_open_rejects_a_lock_created_before_the_header_is_read",
+                "--nocapture",
+            ])
+            .env(HANDOFF, &base)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let ready = base.join("reader_at_lock");
+        for _ in 0..500 {
+            if ready.exists() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            ready.exists(),
+            "reader did not reach the missing-lock window"
+        );
+        let system = base.join("__SYSTEM__");
+        fs::create_dir(&system).unwrap();
+        let lock_file = fs::File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(system.join("LOCK"))
+            .unwrap();
+        lock_file.try_lock().unwrap();
+        fs::write(base.join(HEADER), header_bytes(1)).unwrap();
+        fs::write(base.join("continue"), b"1").unwrap();
+        let output = child.wait_with_output().unwrap();
+        drop(lock_file);
+        fs::remove_dir_all(&scratch).unwrap();
+        assert!(
+            output.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
