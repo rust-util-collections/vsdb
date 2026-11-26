@@ -18,6 +18,9 @@ fn corrupt(detail: impl Into<String>) -> VsdbError {
         detail: detail.into(),
     }
 }
+pub(crate) fn try_get(map: &MapxRaw, key: impl AsRef<[u8]>) -> Result<Option<Vec<u8>>> {
+    map.try_get_with(key, |v| Ok(v.to_vec()))
+}
 pub(crate) fn sync_parent(path: &Path) -> Result<()> {
     let parent = match path.parent() {
         Some(p) if !p.as_os_str().is_empty() => p,
@@ -369,22 +372,30 @@ pub fn rewrite_values(
             operation: "value conversion",
         });
     }
-    let mut rows = map.range_detached(..).peekable();
+    let reader = map.reader();
+    let view = reader.read_view();
+    let mut rows = view.try_range(..)?;
     let mut count = 0;
-    while rows.peek().is_some() {
+    while let Some((first_key, first_val)) = rows.try_step_next()? {
         let mut batch = map.batch();
         let mut staged = 0;
-        for (key, value) in rows.by_ref() {
-            if let Some(new) = convert(&key, &value)? {
+        let mut cur = Some((first_key, first_val));
+        while let Some((key, value)) = cur {
+            if let Some(new) = convert(key, value)? {
                 staged += key.len() + new.len() + 16;
-                batch.insert(&key, new);
+                batch.insert(key, new);
                 count += 1;
                 if staged >= 4 << 20 {
                     break;
                 }
             }
+            cur = rows.try_step_next()?;
         }
+        let exhausted = cur.is_none();
         batch.commit_sync()?;
+        if exhausted {
+            break;
+        }
     }
     Ok(count)
 }

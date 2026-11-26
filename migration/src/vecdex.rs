@@ -1,7 +1,7 @@
 //! Offline conversion of a single v17 HNSW index. The progress row shares
 //! the batch and WAL with its vector chunk, so a retry never decodes LE
 //! components as a postcard vector, or skips an unconverted row.
-use crate::{corrupt, exactly, legacy_payload, raw_id, raw_map, tag, typed_handle};
+use crate::{corrupt, exactly, legacy_payload, raw_id, raw_map, tag, try_get, typed_handle};
 use serde::Deserialize;
 use std::{
     any::{TypeId, type_name},
@@ -122,7 +122,7 @@ fn convert_bytes<K: KeyEnDe, D: DistanceMetric<S>, S: Scalar>(
         config.ef_search,
         &metric,
     ))?;
-    match store.get(META_KEY) {
+    match try_get(&store, META_KEY)? {
         Some(old) if old != schema => return Err(corrupt("schema mismatch on migration retry")),
         Some(_) => {}
         None => convert_vectors::<K, S>(&mut store, &config, &schema)?,
@@ -169,7 +169,7 @@ fn convert_vectors<K: KeyEnDe, S: Scalar>(
     config: &HnswConfig,
     schema: &[u8],
 ) -> Result<()> {
-    let state: GraphState = match store.get(STATE_KEY) {
+    let state: GraphState = match try_get(store, STATE_KEY)? {
         Some(bytes) => exactly(&bytes)?,
         None => GraphState {
             ef_search: config.ef_search,
@@ -177,12 +177,12 @@ fn convert_vectors<K: KeyEnDe, S: Scalar>(
         },
     };
     let state_bytes = state.encode()?;
-    let progress = store.get(PROGRESS);
+    let progress = try_get(store, PROGRESS)?;
     let cursor = if let Some(bytes) = progress.as_deref() {
         let (saved, cursor): (&[u8], u64) = exactly(bytes)?;
         if saved != schema
             || cursor >= state.next_node_id
-            || !store.contains_key(node_key(TAG_VEC, cursor))
+            || !store.try_contains_key(node_key(TAG_VEC, cursor))?
         {
             return Err(corrupt("invalid VecDex migration cursor or schema"));
         }
@@ -195,14 +195,15 @@ fn convert_vectors<K: KeyEnDe, S: Scalar>(
         || Bound::Included(vec![TAG_VEC]),
         |id| Bound::Excluded(node_key(TAG_VEC, id).to_vec()),
     );
-    let mut rows = store
-        .range_detached((start, Bound::Excluded(vec![TAG_VEC + 1])))
-        .peekable();
-    while rows.peek().is_some() {
+    let reader = store.reader();
+    let view = reader.read_view();
+    let mut rows = view.try_range((start, Bound::Excluded(vec![TAG_VEC + 1])))?;
+    while let Some((first_key, first_raw)) = rows.try_step_next()? {
         let mut batch = store.batch();
         let mut bytes_staged = 0;
         let mut cursor = 0;
-        for (key, raw) in rows.by_ref() {
+        let mut cur = Some((first_key, first_raw));
+        while let Some((key, raw)) = cur {
             cursor = u64::from_be_bytes(
                 key[1..]
                     .try_into()
@@ -213,7 +214,7 @@ fn convert_vectors<K: KeyEnDe, S: Scalar>(
             }
             // Postcard's float components already have the v18 IEEE-754 LE
             // representation. Authenticate the old length and copy the tail.
-            let (dim, data): (usize, _) = postcard::take_from_bytes(&raw)?;
+            let (dim, data): (usize, _) = postcard::take_from_bytes(raw)?;
             if dim != config.dim || dim.checked_mul(size_of::<S>()) != Some(data.len()) {
                 return Err(corrupt("malformed v17 vector"));
             }
@@ -222,10 +223,17 @@ fn convert_vectors<K: KeyEnDe, S: Scalar>(
             if bytes_staged >= CHUNK_BYTES {
                 break;
             }
+            cur = rows.try_step_next()?;
         }
+        let exhausted = cur.is_none();
         batch.insert(PROGRESS, postcard::to_allocvec(&(schema, cursor))?);
         batch.commit()?;
+        if exhausted {
+            break;
+        }
     }
+    drop(rows);
+    drop(view);
     if repair_reverse {
         normalize_reverse_keys(store)?;
     }
@@ -268,14 +276,15 @@ fn validate_source<K: KeyEnDe, S: Scalar>(
         .ok_or_else(|| corrupt("vector dimension overflow"))?;
     let mut unusual = std::collections::HashSet::new();
     let mut highest = 0;
-    for (key, row) in store.iter() {
+    let mut rows = store.try_range(..)?;
+    while let Some((key, row)) = rows.try_step_next()? {
         let (&tag, k) = key
             .split_first()
             .ok_or_else(|| corrupt("empty v17 graph key"))?;
         match tag {
             0 => {
                 let id = node_id(k, state)?;
-                if !store.contains_key(node_key(4, id)) {
+                if !store.try_contains_key(node_key(4, id))? {
                     return Err(corrupt("v17 vector lacks node info"));
                 }
                 if cursor.is_some_and(|c| id <= c) {
@@ -283,7 +292,7 @@ fn validate_source<K: KeyEnDe, S: Scalar>(
                         return Err(corrupt("invalid already-converted vector"));
                     }
                 } else {
-                    let (dim, data): (usize, _) = postcard::take_from_bytes(&row)?;
+                    let (dim, data): (usize, _) = postcard::take_from_bytes(row)?;
                     if dim != config.dim || data.len() != width {
                         return Err(corrupt("invalid v17 vector"));
                     }
@@ -296,7 +305,7 @@ fn validate_source<K: KeyEnDe, S: Scalar>(
                     .ok_or_else(|| corrupt("malformed adjacency key"))?;
                 let id = node_id(addr, state)?;
                 if layer > state.max_layer
-                    || !store.contains_key(node_key(4, id))
+                    || !store.try_contains_key(node_key(4, id))?
                     || !row.len().is_multiple_of(8)
                     || row
                         .as_chunks::<8>()
@@ -309,22 +318,20 @@ fn validate_source<K: KeyEnDe, S: Scalar>(
             }
             2 => {
                 let raw: [u8; 8] = row
-                    .as_slice()
                     .try_into()
                     .map_err(|_| corrupt("invalid v17 forward mapping"))?;
                 let id = u64::from_le_bytes(raw);
                 if K::decode_key(k)?.encode_key() != k {
                     return Err(corrupt("noncanonical or incompatible v17 key"));
                 }
-                let reverse = store
-                    .get(node_key(3, id))
+                let reverse = try_get(store, node_key(3, id))?
                     .ok_or_else(|| corrupt("missing v17 reverse mapping"))?;
                 if reverse != k {
                     // The v17 forward mapping used KeyEnDe while the reverse
                     // used ValueEnDe. Custom codecs can differ legitimately.
                     let mut old_probe = vec![2];
                     old_probe.extend(reverse);
-                    if store.get(old_probe).as_deref() == Some(&raw) || !unusual.insert(id) {
+                    if try_get(store, old_probe)?.as_deref() == Some(&raw) || !unusual.insert(id) {
                         return Err(corrupt("duplicate key mapping to one node"));
                     }
                 }
@@ -332,11 +339,11 @@ fn validate_source<K: KeyEnDe, S: Scalar>(
             }
             3 | 4 => {
                 let id = node_id(k, state)?;
-                if tag == 3 && !store.contains_key(node_key(4, id)) {
+                if tag == 3 && !store.try_contains_key(node_key(4, id))? {
                     return Err(corrupt("v17 reverse mapping has no node info"));
                 }
                 if tag == 4 {
-                    let layer: u8 = exactly(&row)?;
+                    let layer: u8 = exactly(row)?;
                     if layer > 32 {
                         return Err(corrupt("invalid v17 layer"));
                     }
@@ -348,11 +355,13 @@ fn validate_source<K: KeyEnDe, S: Scalar>(
             _ => return Err(corrupt("unexpected v17 graph row")),
         }
     }
+    let ep_ok = match state.entry_point {
+        Some(ep) => try_get(store, node_key(4, ep))?.as_deref() == Some(&[state.max_layer]),
+        None => true,
+    };
     if [counts[0], counts[2], counts[3], counts[4]] != [state.node_count; 4]
         || highest != state.max_layer
-        || state
-            .entry_point
-            .is_some_and(|ep| store.get(node_key(4, ep)).as_deref() != Some(&[state.max_layer]))
+        || !ep_ok
     {
         return Err(corrupt("v17 graph state disagrees with rows"));
     }
@@ -361,28 +370,31 @@ fn validate_source<K: KeyEnDe, S: Scalar>(
 // Only custom v17 key codecs normally require reverse-map updates. This pass
 // is idempotent if the process stops after its final converted vector chunk.
 fn normalize_reverse_keys(store: &mut MapxRaw) -> Result<()> {
-    let mut rows = store.range_detached([2]..[3]).peekable();
-    while rows.peek().is_some() {
-        let view = store.reader();
+    let reader = store.reader();
+    let snapshot = reader.read_view();
+    let mut rows = snapshot.try_range([2]..[3])?;
+    while let Some((first_key, first_id)) = rows.try_step_next()? {
         let mut batch = store.batch();
         let mut bytes = 0;
-        for (key, id) in rows.by_ref() {
-            let id = u64::from_le_bytes(
-                id.as_slice()
-                    .try_into()
-                    .map_err(|_| corrupt("invalid node ID"))?,
-            );
+        let mut cur = Some((first_key, first_id));
+        while let Some((key, id)) = cur {
+            let id = u64::from_le_bytes(id.try_into().map_err(|_| corrupt("invalid node ID"))?);
             let reverse = node_key(3, id);
             let original = &key[1..];
-            if view.get(reverse).as_deref() != Some(original) {
+            if reader.try_get_with(reverse, |v| Ok(v == original))? != Some(true) {
                 batch.insert(reverse, original);
                 bytes += original.len() + 25;
                 if bytes >= CHUNK_BYTES {
                     break;
                 }
             }
+            cur = rows.try_step_next()?;
         }
+        let exhausted = cur.is_none();
         batch.commit()?;
+        if exhausted {
+            break;
+        }
     }
     Ok(())
 }

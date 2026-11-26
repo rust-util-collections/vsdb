@@ -1,5 +1,5 @@
 //! Prefix-preserving conversion of an offline v17 version store.
-use crate::{LegacyRaw, corrupt, legacy_payload, tag, typed_handle};
+use crate::{LegacyRaw, corrupt, legacy_payload, tag, try_get, typed_handle};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use vsdb::{
@@ -285,10 +285,10 @@ fn convert_vermap_bytes<K: KeyEnDeOrdered, V: ValueEnDe>(
             return Err(corrupt("invalid component identity"));
         }
     }
-    if store.get(HEADER).is_none() {
+    if !store.try_contains_key(HEADER)? {
         let [commits, branches, _, next_commit, next_branch, main, _] = &retired;
         let scalar = |v: &MapxRaw| -> Result<u64> {
-            crate::exactly(&v.get([]).ok_or_else(|| corrupt("missing v17 allocator"))?)
+            crate::exactly(&try_get(v, [])?.ok_or_else(|| corrupt("missing v17 allocator"))?)
         };
         let mut hdr = Header {
             next_id: 1,
@@ -302,9 +302,10 @@ fn convert_vermap_bytes<K: KeyEnDeOrdered, V: ValueEnDe>(
         }
         let mut branch_rows = BTreeMap::new();
         let mut unique_names = HashSet::new();
-        for (k, v) in branches.iter() {
-            let branch = legacy_id(&k)?;
-            let state: BranchState = crate::exactly(&v)?;
+        let mut b_rows = branches.try_range(..)?;
+        while let Some((k, v)) = b_rows.try_step_next()? {
+            let branch = legacy_id(k)?;
+            let state: BranchState = crate::exactly(v)?;
             if branch == 0 || !unique_names.insert(state.name.clone()) {
                 return Err(corrupt("invalid v17 branch table"));
             }
@@ -315,6 +316,7 @@ fn convert_vermap_bytes<K: KeyEnDeOrdered, V: ValueEnDe>(
             );
             branch_rows.insert(branch, state);
         }
+        drop(b_rows);
         if !branch_rows.contains_key(&hdr.main_branch.raw())
             || hdr.main_branch.raw() >= hdr.next_branch
         {
@@ -335,8 +337,7 @@ fn convert_vermap_bytes<K: KeyEnDeOrdered, V: ValueEnDe>(
             if *count > 1 {
                 continue;
             }
-            let raw = commits
-                .get(id.raw().to_be_bytes())
+            let raw = try_get(commits, id.raw().to_be_bytes())?
                 .ok_or_else(|| corrupt("missing v17 commit"))?;
             let c: Commit = crate::exactly(&raw)?;
             if c.id != id
@@ -405,16 +406,18 @@ fn clear_pre_publication_objects(store: &mut MapxRaw) -> Result<()> {
     // only 9-byte converted [0x10]/[0x12] objects left by an interrupted chunk
     // flush, and reject any unexpected non-8-byte row before touching storage.
     let mut stale = Vec::new();
-    for (k, _) in store.iter() {
+    let mut rows = store.try_range(..)?;
+    while let Some((k, _)) = rows.try_step_next()? {
         if k.len() == 8 {
             continue;
         }
         if k.len() == 9 && matches!(k[0], 0x10 | 0x12) {
-            stale.push(k);
+            stale.push(k.to_vec());
         } else {
             return Err(corrupt("unexpected pre-migration row in B+ tree pool"));
         }
     }
+    drop(rows);
     for group in stale.chunks(8192) {
         let mut batch = store.batch();
         for key in group {
@@ -449,18 +452,18 @@ fn parse_v18_header(raw: &[u8]) -> Result<Header> {
 }
 
 fn validate_published_store(store: &MapxRaw) -> Result<(Header, HashSet<Vec<u8>>, Vec<u64>)> {
-    let hdr_bytes = store
-        .get(HEADER)
-        .ok_or_else(|| corrupt("missing migrated version store header"))?;
+    let hdr_bytes =
+        try_get(store, HEADER)?.ok_or_else(|| corrupt("missing migrated version store header"))?;
     let hdr = parse_v18_header(&hdr_bytes)?;
     let mut heads = BTreeMap::new();
     let mut names = BTreeMap::new();
     let mut commits = BTreeMap::new();
-    for (k, v) in store.iter() {
+    let mut rows = store.try_range(..)?;
+    while let Some((k, v)) = rows.try_step_next()? {
         if k.len() == 8 {
             continue;
         }
-        match k.as_slice() {
+        match k {
             [0] | [7] => {}
             [3, ..] => {}
             [tag @ (HEAD | NAME | COMMIT | 5 | 6), rest @ ..] if rest.len() == 8 => {
@@ -476,7 +479,8 @@ fn validate_published_store(store: &MapxRaw) -> Result<(Header, HashSet<Vec<u8>>
                         heads.insert(id, (head, dirty_root));
                     }
                     NAME => {
-                        let s = String::from_utf8(v)
+                        let s = std::str::from_utf8(v)
+                            .map(str::to_owned)
                             .map_err(|_| corrupt("invalid migrated branch name"))?;
                         names.insert(id, s);
                     }
@@ -544,7 +548,8 @@ fn verify_converted_objects(store: &MapxRaw, next_id: u64, roots: &[u64]) -> Res
     if next_id == 0 || next_id > LEAF {
         return Err(corrupt("invalid converted B+ tree allocation ceiling"));
     }
-    for (k, _) in store.range([0x10].as_slice()..[0x13].as_slice()) {
+    let mut obj_rows = store.try_range([0x10].as_slice()..[0x13].as_slice())?;
+    while let Some((k, _)) = obj_rows.try_step_next()? {
         if k.len() != 9 {
             continue;
         }
@@ -557,6 +562,7 @@ fn verify_converted_objects(store: &MapxRaw, next_id: u64, roots: &[u64]) -> Res
             return Err(corrupt("converted object ID exceeds allocation ceiling"));
         }
     }
+    drop(obj_rows);
     enum PageKind {
         Leaf {
             first: Vec<u8>,
@@ -588,8 +594,7 @@ fn verify_converted_objects(store: &MapxRaw, next_id: u64, roots: &[u64]) -> Res
         if serial == 0 || serial >= next_id {
             return Err(corrupt("reachable object ID out of bounds"));
         }
-        let raw = store
-            .get(object_key(id))
+        let raw = try_get(store, object_key(id))?
             .ok_or_else(|| corrupt("missing converted B+ tree object"))?;
         if id & BLOB == BLOB {
             continue;
@@ -854,9 +859,10 @@ fn remove_old_nodes(store: &mut MapxRaw, protected: &HashSet<Vec<u8>>) -> Result
     let mut old = Vec::new();
     let reader = store.reader();
     let view = reader.read_view();
-    for (k, _) in view.range(..) {
-        if k.len() == 8 && !protected.contains(&k) {
-            old.push(k);
+    let mut rows = view.try_range(..)?;
+    while let Some((k, _)) = rows.try_step_next()? {
+        if k.len() == 8 && !protected.contains(k) {
+            old.push(k.to_vec());
         }
         if old.len() >= 8192 {
             let mut batch = store.batch();
@@ -866,6 +872,8 @@ fn remove_old_nodes(store: &mut MapxRaw, protected: &HashSet<Vec<u8>>) -> Result
             batch.commit()?;
         }
     }
+    drop(rows);
+    drop(view);
     if !old.is_empty() {
         let mut batch = store.batch();
         for key in old {
@@ -1012,11 +1020,13 @@ fn convert_tree_bytes(
         let tree: PersistentBTree = crate::exactly(frame_bytes)?;
         return Ok((tree, frame_bytes.to_vec(), remapped));
     }
-    for (k, _) in raw.iter() {
-        if k.len() != 8 && k.as_slice() != [9] && !(k.len() == 9 && matches!(k[0], 0x10 | 0x12)) {
+    let mut pool_rows = raw.try_range(..)?;
+    while let Some((k, _)) = pool_rows.try_step_next()? {
+        if k.len() != 8 && k != [9] && !(k.len() == 9 && matches!(k[0], 0x10 | 0x12)) {
             return Err(corrupt("unexpected row in standalone tree pool"));
         }
     }
+    drop(pool_rows);
     verify_converted_objects(&raw, next, &mapping.converted)?;
     let mut batch = raw.batch();
     batch.insert([9], next.to_le_bytes());
@@ -1045,9 +1055,8 @@ fn legacy_id(raw: &[u8]) -> Result<u64> {
     ))
 }
 fn legacy_node(store: &MapxRaw, id: NodeId) -> Result<Node> {
-    let raw = store
-        .get(id.to_le_bytes())
-        .ok_or_else(|| corrupt("missing v17 B+ tree node"))?;
+    let raw =
+        try_get(store, id.to_le_bytes())?.ok_or_else(|| corrupt("missing v17 B+ tree node"))?;
     let mut bytes = raw.as_slice();
     let tag = *bytes
         .split_off_first()

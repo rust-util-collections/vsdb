@@ -1,6 +1,8 @@
 //! Offline, resumable conversion of v17's three-prefix node handles.
 
-use crate::{BasicHandle, LegacyRaw, legacy_payload, raw_map, typed_handle, typed_handle_tag};
+use crate::{
+    BasicHandle, LegacyRaw, legacy_payload, raw_map, try_get, typed_handle, typed_handle_tag,
+};
 use serde::{
     Deserialize, Serialize,
     de::{self, DeserializeOwned},
@@ -251,14 +253,10 @@ fn plan<T>(ns: &Namespace, root: InstanceId, legacy: Legacy) -> Result<Vec<Conve
         let decode_link = |row: &[u8]| -> Result<Option<[InstanceId; 3]>> {
             Ok(decode::<Option<Legacy>>(row)?.map(|link| link.ids()))
         };
-        let owner = decode_link(
-            &node
-                .1
-                .get([])
-                .ok_or_else(|| corrupt("missing v17 parent slot"))?,
-        )?;
+        let owner =
+            decode_link(&try_get(&node.1, [])?.ok_or_else(|| corrupt("missing v17 parent slot"))?)?;
         let marker = |key| -> Result<Option<[InstanceId; 3]>> {
-            match node.1.get([key]) {
+            match try_get(&node.1, [key])? {
                 Some(v) => Ok(Some(
                     decode_link(&v)?.ok_or_else(|| corrupt("empty v17 recovery marker"))?,
                 )),
@@ -267,16 +265,21 @@ fn plan<T>(ns: &Namespace, root: InstanceId, legacy: Legacy) -> Result<Vec<Conve
         };
         let clearing = marker(1)?;
         let destroying = marker(2)?;
-        if clearing.is_some_and(|g| g != root_parts)
-            || node
-                .1
-                .iter()
-                .any(|(k, _)| !matches!(k.as_slice(), [] | [1] | [2]))
-        {
+        let mut unexpected_marker = false;
+        let mut meta_rows = node.1.try_range(..)?;
+        while let Some((k, _)) = meta_rows.try_step_next()? {
+            if !matches!(k, [] | [1] | [2]) {
+                unexpected_marker = true;
+                break;
+            }
+        }
+        drop(meta_rows);
+        if clearing.is_some_and(|g| g != root_parts) || unexpected_marker {
             return Err(corrupt("invalid v17 DAG recovery metadata"));
         }
         let mut children = Vec::new();
-        for (k, v) in node.2.iter() {
+        let mut child_rows = node.2.try_range(..)?;
+        while let Some((k, v)) = child_rows.try_step_next()? {
             let e = u128::from_le_bytes(
                 k.try_into()
                     .map_err(|_| corrupt("invalid v17 child token"))?,
@@ -285,7 +288,7 @@ fn plan<T>(ns: &Namespace, root: InstanceId, legacy: Legacy) -> Result<Vec<Conve
                 .ok()
                 .filter(|e| *e < u64::MAX)
                 .ok_or_else(|| corrupt("v17 DAG edge exceeds u64"))?;
-            let child: Legacy = decode(&v)?;
+            let child: Legacy = decode(v)?;
             let target = child.0.instance_id().map_id;
             reverse
                 .entry(target)
@@ -294,6 +297,7 @@ fn plan<T>(ns: &Namespace, root: InstanceId, legacy: Legacy) -> Result<Vec<Conve
             children.push((edge, target));
             pending.push(child);
         }
+        drop(child_rows);
         sources.insert(
             id,
             Source {
@@ -441,23 +445,31 @@ fn plan<T>(ns: &Namespace, root: InstanceId, legacy: Legacy) -> Result<Vec<Conve
 // the engine's single-batch limit.
 fn copy_rows(source: &MapxRaw, target: &mut MapxRaw, tag: bool) -> Result<()> {
     target.batch_wiped().commit()?;
-    let mut rows = source.iter().peekable();
-    while rows.peek().is_some() {
+    let mut rows = source.try_range(..)?;
+    while let Some((first_k, first_v)) = rows.try_step_next()? {
         let mut batch = target.batch();
         let mut size = 0;
-        for (k, v) in rows.by_ref().take(4096) {
+        let mut count = 0usize;
+        let mut cur = Some((first_k, first_v));
+        while let Some((k, v)) = cur {
             size += k.len() + v.len() + 2;
+            count += 1;
             if tag {
-                let v = if v.is_empty() { vec![0] } else { tagged(1, &v) };
-                batch.insert(tagged(2, &k), v);
+                let v = if v.is_empty() { vec![0] } else { tagged(1, v) };
+                batch.insert(tagged(2, k), v);
             } else {
                 batch.insert(k, v);
             }
-            if size >= 4 << 20 {
+            if count >= 4096 || size >= 4 << 20 {
                 break;
             }
+            cur = rows.try_step_next()?;
         }
+        let exhausted = cur.is_none();
         batch.commit()?;
+        if exhausted {
+            break;
+        }
     }
     Ok(())
 }
@@ -488,8 +500,7 @@ fn next_legacy_edge() -> Result<u64> {
                 .try_into()
                 .map_err(|_| corrupt("invalid legacy DAG counter handle"))?,
         );
-        let counter = raw_map(id.into())?
-            .get([])
+        let counter = try_get(&raw_map(id.into())?, [])?
             .ok_or_else(|| corrupt("missing legacy DAG counter"))?;
         ceiling = ceiling.max(decode(&counter)?);
     }
@@ -500,9 +511,7 @@ fn next_legacy_edge() -> Result<u64> {
 }
 
 fn node_meta(store: &MapxRaw) -> Result<(u64, u64, State)> {
-    let bytes = store
-        .get([0])
-        .ok_or_else(|| corrupt("missing converted DAG node"))?;
+    let bytes = try_get(store, [0])?.ok_or_else(|| corrupt("missing converted DAG node"))?;
     let (magic, dag, next, state): ([u8; 8], u64, u64, State) = decode(&bytes)?;
     if magic != *b"VSDAGN01" {
         return Err(corrupt("unexpected converted DAG node layout"));
@@ -1028,7 +1037,8 @@ fn repair_completed(ns: &Namespace, root: InstanceId, map: &Remap) -> Result<Rec
                 components: None,
             },
         );
-        for (_, value) in store.range([1]..[2]) {
+        let mut edges = store.try_range([1]..[2])?;
+        while let Some((_, value)) = edges.try_step_next()? {
             pending.push(u64::from_le_bytes(
                 value
                     .try_into()

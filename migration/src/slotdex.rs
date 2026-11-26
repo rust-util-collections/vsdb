@@ -1,5 +1,5 @@
 //! Upgrade fixed-width v17 SlotDex indices without moving their data.
-use crate::{LegacyRaw, legacy_payload, typed_handle};
+use crate::{LegacyRaw, legacy_payload, try_get, typed_handle};
 use std::{any::TypeId, fs};
 use vsdb::{InstanceId, KeyEnDeOrdered, Namespace, Result, SlotDex, SlotType, VsdbError};
 use vsdb_core::{MapxRaw, common::atomic_write_file};
@@ -124,8 +124,8 @@ fn convert_bytes<S: SlotType, K: KeyEnDeOrdered>(
     if !tail.is_empty() || version != 2 || capacity < 2 || expected.is_some_and(|e| id != e) {
         return Err(invalid("invalid v17 SlotDex configuration or identity"));
     }
-    let total = match store.get([2]).as_deref() {
-        None if store.iter().next().is_none() => 0,
+    let total = match try_get(&store, [2])?.as_deref() {
+        None if store.try_range(..)?.try_step_next()?.is_none() => 0,
         Some(raw) if raw.len() == 8 => u64::from_le_bytes(raw.try_into().unwrap()),
         Some(raw) if raw.len() == 16 && raw[8..] == [0; 8] => {
             u64::from_le_bytes(raw[..8].try_into().unwrap())
@@ -171,18 +171,19 @@ fn verify_custom<S: SlotType, K: KeyEnDeOrdered>(
     capacity: u32,
     total: u64,
 ) -> Result<()> {
-    let mut entries = store.range([0]..[1]);
+    let mut entries = store.try_range([0]..[1])?;
+    let mut level0 = store.try_range([1, 0]..[1, 1])?;
     let mut seen = 0u64;
-    for (key, val) in store.range([1, 0]..[1, 1]) {
+    while let Some((key, val)) = level0.try_step_next()? {
         let slot = coordinate::<S>(&key[2..])?;
-        let n = count(&val)?;
+        let n = count(val)?;
         seen = seen
             .checked_add(n)
             .ok_or_else(|| invalid("slot count overflow"))?;
         let prefix = slot.to_bytes();
         for _ in 0..n {
             let (row, val) = entries
-                .next()
+                .try_step_next()?
                 .ok_or_else(|| invalid("missing v17 slot entry"))?;
             let suffix = row[1..]
                 .strip_prefix(prefix.as_ref())
@@ -192,42 +193,55 @@ fn verify_custom<S: SlotType, K: KeyEnDeOrdered>(
             }
         }
     }
-    if seen != total || entries.next().is_some() {
+    if seen != total || entries.try_step_next()?.is_some() {
         return Err(invalid("v17 SlotDex total mismatch"));
     }
+    drop(entries);
+    drop(level0);
     let mut previous = 0u8;
-    let mut rows = store
-        .range([1, 1]..[2, 0])
-        .take_while(|(k, _)| k[0] == 1)
-        .peekable();
-    while let Some((k, _)) = rows.peek() {
-        let level = *k.get(1).ok_or_else(|| invalid("invalid v17 tier tag"))?;
+    let mut rows = store.try_range([1, 1]..[2, 0])?;
+    let mut cur_row = rows
+        .try_step_next()?
+        .filter(|(k, _)| k.first() == Some(&1))
+        .map(|(k, v)| (k.to_vec(), v.to_vec()));
+    while let Some((ref first_k, _)) = cur_row {
+        let level = *first_k
+            .get(1)
+            .ok_or_else(|| invalid("invalid v17 tier tag"))?;
         if previous.checked_add(1u8) != Some(level) {
             return Err(invalid("missing v17 tier"));
         }
         let stride = S::tier_stride(capacity, level);
-        let mut lower = store.range([1, previous]..[1, level]).peekable();
-        while let Some((k, _)) = rows.peek()
-            && k[1] == level
-        {
-            let (k, v) = rows.next().expect("peeked");
+        let mut lower = store.try_range([1, previous]..[1, level])?;
+        let mut cur_low = lower
+            .try_step_next()?
+            .map(|(k, v)| (k.to_vec(), v.to_vec()));
+        while cur_row.as_ref().is_some_and(|(k, _)| k[1] == level) {
+            let (k, v) = cur_row.take().expect("checked");
+            cur_row = rows
+                .try_step_next()?
+                .filter(|(k, _)| k.first() == Some(&1))
+                .map(|(k, v)| (k.to_vec(), v.to_vec()));
             let floor = coordinate::<S>(&k[2..])?;
             let mut sum = 0u64;
-            while let Some((low, _)) = lower.peek() {
+            while let Some((ref low, _)) = cur_low {
                 let slot = coordinate::<S>(&low[2..])?;
                 if stride.map_or(S::MIN, |s| slot.floor_align(s)) != floor {
                     break;
                 }
-                let (_, v) = lower.next().expect("peeked");
+                let (_, lv) = cur_low.take().expect("checked");
+                cur_low = lower
+                    .try_step_next()?
+                    .map(|(k, v)| (k.to_vec(), v.to_vec()));
                 sum = sum
-                    .checked_add(count(&v)?)
+                    .checked_add(count(&lv)?)
                     .ok_or_else(|| invalid("tier count overflow"))?;
             }
             if sum != count(&v)? {
                 return Err(invalid("incompatible v17 tier alignment or count"));
             }
         }
-        if lower.next().is_some() {
+        if cur_low.is_some() {
             return Err(invalid("incomplete v17 tier"));
         }
         previous = level;
