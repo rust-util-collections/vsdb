@@ -341,6 +341,41 @@ fn save_pending_creates(base: &Path, entries: &[PendingCreate]) -> Result<()> {
     Ok(())
 }
 
+/// List `dir`, which was opened on the namespace root before the registry
+/// update. A later replacement of that path must not redirect the wipe.
+fn read_held_dir(dir: &fs::File, path: &Path) -> io::Result<fs::ReadDir> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::io::AsRawFd;
+        let via_fd = format!("/proc/self/fd/{}", dir.as_raw_fd());
+        if let Ok(entries) = fs::read_dir(via_fd) {
+            return Ok(entries);
+        }
+    }
+    let _ = dir;
+    fs::read_dir(path)
+}
+
+/// Whether `path` still names the directory `dir` already has open.
+fn same_directory(dir: &fs::File, path: &Path) -> io::Result<bool> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let held = dir.metadata()?;
+        match fs::symlink_metadata(path) {
+            Ok(meta) if meta.file_type().is_symlink() => Ok(false),
+            Ok(meta) => Ok(held.dev() == meta.dev() && held.ino() == meta.ino()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (dir, path);
+        Ok(true)
+    }
+}
+
 /// Make a directory entry change durable. Unlink and rename survive power
 /// loss only after their parent directory is synchronized.
 fn sync_parent(path: &Path) -> io::Result<()> {
@@ -1493,10 +1528,12 @@ impl Namespace {
         let Some(target) = target else {
             return Ok(());
         };
-        let _keep_lease = root_lease;
+        let Some(lease) = root_lease else {
+            return Ok(());
+        };
         #[cfg(test)]
         tests::before_root_wipe(&target);
-        let entries = match fs::read_dir(&target) {
+        let entries = match read_held_dir(&lease, &target) {
             Ok(entries) => entries,
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 sync_parent(&target)?;
@@ -1517,6 +1554,26 @@ impl Namespace {
                 Err(e) => return Err(e.into()),
             }
         }
+        if !same_directory(&lease, &target)? {
+            // The path was replaced after the identity check. Drop a symlink
+            // left in its place, and do not remove a different directory.
+            return match fs::symlink_metadata(&target) {
+                Ok(meta) if meta.file_type().is_symlink() => {
+                    fs::remove_file(&target)?;
+                    sync_parent(&target)?;
+                    Ok(())
+                }
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                    sync_parent(&target)?;
+                    Ok(())
+                }
+                Ok(_) => {
+                    lease.sync_all()?;
+                    Ok(())
+                }
+                Err(e) => Err(e.into()),
+            };
+        }
         match fs::remove_dir(&target) {
             Ok(()) => {
                 sync_parent(&target)?;
@@ -1534,7 +1591,7 @@ impl Namespace {
                     io::ErrorKind::PermissionDenied | io::ErrorKind::ResourceBusy
                 ) =>
             {
-                fs::File::open(&target)?.sync_all()?;
+                lease.sync_all()?;
                 Ok(())
             }
             Err(e) => Err(e.into()),
@@ -1761,12 +1818,43 @@ mod tests {
         static INTERRUPT_AFTER_PENDING: Cell<bool> = const { Cell::new(false) };
         static INTERRUPTED_ID: Cell<Option<NsId>> = const { Cell::new(None) };
         static REMOVE_ROOT_BEFORE_WIPE: Cell<bool> = const { Cell::new(false) };
+        static REPLACE_ROOT_WITH: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
     }
 
     pub(super) fn before_root_wipe(root: &Path) {
         if REMOVE_ROOT_BEFORE_WIPE.with(|flag| flag.replace(false)) {
             fs::remove_dir_all(root).unwrap();
         }
+        if let Some(canary) = REPLACE_ROOT_WITH.with(|slot| slot.take()) {
+            let aside = root.with_extension("aside");
+            fs::rename(root, &aside).unwrap();
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&canary, root).unwrap();
+            #[cfg(not(unix))]
+            let _ = (canary, aside);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn destroy_does_not_follow_a_replacement_symlink() {
+        let ns = Namespace::create().unwrap();
+        let id = ns.id();
+        let root = ns.path().to_path_buf();
+        ns.close().unwrap();
+        let canary = root.with_file_name(format!("canary-{id}"));
+        fs::create_dir(&canary).unwrap();
+        fs::write(canary.join("keep"), b"safe").unwrap();
+        REPLACE_ROOT_WITH.with(|slot| slot.replace(Some(canary.clone())));
+        let destroyed = Namespace::destroy(id);
+        let kept = fs::read(canary.join("keep")).ok();
+        let _ = fs::remove_dir_all(&canary);
+        assert_eq!(
+            kept.as_deref(),
+            Some(b"safe".as_slice()),
+            "destroy followed a symlink onto another directory"
+        );
+        destroyed.expect("destroy finishes after the root is replaced");
     }
 
     #[test]
