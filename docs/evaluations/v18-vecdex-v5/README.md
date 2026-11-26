@@ -85,6 +85,12 @@ import, including an identical SHA-256 for the SST. The timing runs
 reopened this same layout read-only and charged zero storage reads.
 [Independent layout comparison](results/metadata.json)
 
+The later staged-write correction at `bdde0a6` propagates malformed-edge
+errors while inserting, replacing or removing rows. The public read-only
+query's `MetricSearch::run` and `search_scored_layer` bodies are identical
+to those measured at `6854273`. All timed queries reopened an existing
+fixture. No mutation or graph construction ran in those windows.
+
 The earlier v5-backed code at `3b220e7` had 42.77% higher warm
 end-to-end p99 than v4-backed `6ddaed9` on this graph. The two arms
 measured 256.62 µs and 180.43 µs respectively. Every paired v5 run was
