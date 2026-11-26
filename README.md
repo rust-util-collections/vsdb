@@ -13,8 +13,9 @@ is MMDB, a Rust LSM tree whose bundled Zstd backend requires a C toolchain.
 VSDB guarantees correct behavior on 64-bit x86 (`x86_64`) and 64-bit Arm
 (`aarch64`). Other architectures carry no testing or correctness guarantee.
 
-VSDB v19 opens a native v18 universe in place, including its existing
-namespaces and saved collection handles. [Upgrading an existing store](docs/README.md#upgrade-an-existing-universe)
+VSDB v19 opens native v18 universes in place. The [v18 maintenance branch](https://github.com/rust-util-collections/vsdb/tree/v18)
+ships 18.x releases and maintains the converter for upgrading v17 data to v18.
+[Upgrade guide](docs/README.md#upgrade-an-existing-universe)
 
 ## Quick start
 
