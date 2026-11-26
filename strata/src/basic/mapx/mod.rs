@@ -118,9 +118,7 @@ where
         K: KeyLookup<Q>,
     {
         crate::common::ensure_writable(&self.namespace(), "value update")?;
-        Ok(K::with_lookup(key, |bytes| self.inner.update(bytes, f))
-            .transpose()?
-            .flatten())
+        Ok(K::try_with_lookup(key, |bytes| self.inner.update(bytes, f))?.flatten())
     }
 
     /// Checks if the map contains a value for the specified key (borrowed

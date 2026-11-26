@@ -34,6 +34,12 @@ pub trait KeyEnDe: Eq + Sized {
     fn with_encoded_key<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
         f(&self.encode_key())
     }
+    /// Invokes `f` on the encoded key bytes, propagating any key-encoding error.
+    fn try_with_encoded_key<R>(&self, f: impl FnOnce(&[u8]) -> Result<R>) -> Result<R> {
+        let mut dst = Vec::new();
+        self.encode_key_into(&mut dst)?;
+        f(&dst)
+    }
     fn decode_key(bytes: &[u8]) -> Result<Self>;
 }
 
@@ -59,6 +65,19 @@ fn postcard_key<T: Serialize + ?Sized, R>(key: &T, f: impl FnOnce(&[u8]) -> R) -
         Err(e) => panic!("vsdb: encode key: {e}"),
     }
 }
+fn try_postcard_key<T: Serialize + ?Sized, R>(
+    key: &T,
+    f: impl FnOnce(&[u8]) -> Result<R>,
+) -> Result<R> {
+    let mut buf = [0; 128];
+    match postcard::to_slice(key, &mut buf) {
+        Ok(bytes) => f(bytes),
+        Err(postcard::Error::SerializeBufferFull | postcard::Error::CollectStrError) => {
+            f(&postcard::to_allocvec(key)?)
+        }
+        Err(e) => Err(e.into()),
+    }
+}
 fn decode_exact<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
     let (value, rest) = postcard::take_from_bytes(bytes)?;
     if !rest.is_empty() {
@@ -76,6 +95,9 @@ impl<T: Serialize + DeserializeOwned + Eq + Hash> KeyEnDe for T {
     }
     fn with_encoded_key<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
         postcard_key(self, f)
+    }
+    fn try_with_encoded_key<R>(&self, f: impl FnOnce(&[u8]) -> Result<R>) -> Result<R> {
+        try_postcard_key(self, f)
     }
     fn decode_key(bytes: &[u8]) -> Result<Self> {
         decode_exact(bytes)
@@ -95,6 +117,12 @@ impl<T: Serialize + DeserializeOwned> ValueEnDe for T {
 /// fixed-array length returns `None` before calling the storage operation.
 pub trait KeyLookup<Q: ?Sized>: KeyEnDe {
     fn with_lookup<R>(query: &Q, f: impl FnOnce(&[u8]) -> R) -> Option<R>;
+    fn try_with_lookup<R>(
+        query: &Q,
+        f: impl FnOnce(&[u8]) -> Result<R>,
+    ) -> Result<Option<R>> {
+        Self::with_lookup(query, f).transpose()
+    }
 }
 pub trait OrderedKeyLookup<Q: ?Sized>: KeyEnDeOrdered {
     fn with_ordered_lookup<R>(query: &Q, f: impl FnOnce(&[u8]) -> R) -> Option<R>;
@@ -102,6 +130,12 @@ pub trait OrderedKeyLookup<Q: ?Sized>: KeyEnDeOrdered {
 impl<K: KeyEnDe> KeyLookup<K> for K {
     fn with_lookup<R>(query: &K, f: impl FnOnce(&[u8]) -> R) -> Option<R> {
         Some(query.with_encoded_key(f))
+    }
+    fn try_with_lookup<R>(
+        query: &K,
+        f: impl FnOnce(&[u8]) -> Result<R>,
+    ) -> Result<Option<R>> {
+        query.try_with_encoded_key(f).map(Some)
     }
 }
 impl<K: KeyEnDeOrdered> OrderedKeyLookup<K> for K {
@@ -114,6 +148,12 @@ macro_rules! borrowed_keys {
         impl KeyLookup<$query> for $owner {
             fn with_lookup<R>(query: &$query, f: impl FnOnce(&[u8]) -> R) -> Option<R> {
                 Some(postcard_key(query, f))
+            }
+            fn try_with_lookup<R>(
+                query: &$query,
+                f: impl FnOnce(&[u8]) -> Result<R>,
+            ) -> Result<Option<R>> {
+                try_postcard_key(query, f).map(Some)
             }
         }
         impl OrderedKeyLookup<$query> for $owner {

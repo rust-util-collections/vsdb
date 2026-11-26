@@ -190,7 +190,10 @@ fn replacement_is_staged_without_mutating_committed_state() {
     .unwrap();
 
     let mut txn = Txn::new(&idx.store, idx.state(), idx.config.dim);
-    assert!(VecDex::<u32, L2>::stage_remove(&L2, &mut txn, &cfg, &7).unwrap());
+    assert!(
+        VecDex::<u32, L2>::stage_remove(&L2, &mut txn, &cfg, &7u32.encode_key())
+            .unwrap()
+    );
     VecDex::<u32, L2>::stage_insert(&L2, &mut txn, &cfg, 7u32.encode_key(), &[9.0, 9.0])
         .unwrap();
 
@@ -2713,4 +2716,42 @@ fn missing_issued_neighbors_and_ids_staged_in_the_current_chunk_remain_valid() {
     let hits = idx.search_ef(&[3.], 4, 4).unwrap();
     assert_eq!(hits.len(), 4);
     assert_eq!(hits[0].0, 3);
+}
+
+#[test]
+fn mutations_propagate_key_encoding_errors_without_publishing_rows() {
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    let valid = UNIX_EPOCH + Duration::from_secs(1);
+    let pre_epoch = UNIX_EPOCH - Duration::from_secs(1);
+
+    let mut idx = VecDex::<SystemTime, L2>::new(HnswConfig {
+        dim: 2,
+        ..Default::default()
+    })
+    .unwrap();
+    idx.insert(&valid, &[1.0, 2.0]).unwrap();
+    let before = idx.store.iter().collect::<Vec<_>>();
+
+    assert!(matches!(
+        idx.insert(&pre_epoch, &[3.0, 4.0]),
+        Err(VsdbError::Encoding(_))
+    ));
+    assert!(matches!(
+        idx.remove(&pre_epoch),
+        Err(VsdbError::Encoding(_))
+    ));
+
+    // Span more than one 64-item chunk so preflight key encoding rejects the
+    // batch before any earlier chunk commits.
+    let mut batch: Vec<(SystemTime, Vec<f32>)> = (2..=72)
+        .map(|s| (UNIX_EPOCH + Duration::from_secs(s), vec![s as f32, 0.0]))
+        .collect();
+    batch.insert(0, (pre_epoch, vec![9.0, 9.0]));
+    assert!(matches!(
+        idx.insert_batch(&batch),
+        Err(VsdbError::Encoding(_))
+    ));
+    assert_eq!(idx.len(), 1);
+    assert_eq!(idx.store.iter().collect::<Vec<_>>(), before);
 }

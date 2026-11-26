@@ -953,20 +953,16 @@ where
     pub fn insert(&mut self, key: &K, vector: &[S]) -> Result<()> {
         ensure_writable(&self.namespace(), "vector index insert")?;
         validate_vector(self.config.dim, vector)?;
+        let mut encoded_key = Vec::new();
+        key.encode_key_into(&mut encoded_key)?;
 
         let mut txn = Txn::new(
             &self.store,
             GraphState::read(self.store.get(STATE_KEY))?,
             self.config.dim,
         );
-        Self::stage_remove(&self.metric, &mut txn, &self.config, key)?;
-        Self::stage_insert(
-            &self.metric,
-            &mut txn,
-            &self.config,
-            key.encode_key(),
-            vector,
-        )?;
+        Self::stage_remove(&self.metric, &mut txn, &self.config, &encoded_key)?;
+        Self::stage_insert(&self.metric, &mut txn, &self.config, encoded_key, vector)?;
         let rows = txn.finish();
         rows.commit(&mut self.store)?;
         Ok(())
@@ -1024,29 +1020,34 @@ where
         // Last occurrence of each key wins (matching the final state of
         // a serial insert loop), preserving the order of survivors.
         let mut seen: HashSet<Vec<u8>> = HashSet::with_capacity(items.len());
-        let mut dedup: Vec<&(K, Vec<S>)> = Vec::with_capacity(items.len());
-        for item in items.iter().rev() {
-            if seen.insert(item.0.encode_key()) {
-                dedup.push(item);
+        let mut dedup: Vec<(Vec<u8>, &[S])> = Vec::with_capacity(items.len());
+        for (key, vec) in items.iter().rev() {
+            let mut encoded_key = Vec::new();
+            key.encode_key_into(&mut encoded_key)?;
+            if !seen.contains(encoded_key.as_slice()) {
+                seen.insert(encoded_key.clone());
+                dedup.push((encoded_key, vec.as_slice()));
             }
         }
+        drop(seen);
         dedup.reverse();
 
         let mut vec_cache = VecCache::new();
-        for chunk in dedup.chunks(CHUNK) {
+        for chunk in dedup.chunks_mut(CHUNK) {
             let mut txn = Txn::with_cache(
                 &self.store,
                 GraphState::read(self.store.get(STATE_KEY))?,
                 self.config.dim,
                 vec_cache,
             );
-            for (key, vec) in chunk {
-                Self::stage_remove(&self.metric, &mut txn, &self.config, key)?;
+            for (encoded_key, vec) in chunk {
+                let encoded_key = std::mem::take(encoded_key);
+                Self::stage_remove(&self.metric, &mut txn, &self.config, &encoded_key)?;
                 Self::stage_insert(
                     &self.metric,
                     &mut txn,
                     &self.config,
-                    key.encode_key(),
+                    encoded_key,
                     vec,
                 )?;
             }
@@ -1269,32 +1270,33 @@ where
     /// [`VsdbError::Corrupt`] before the mutation is published.
     pub fn remove(&mut self, key: &K) -> Result<bool> {
         ensure_writable(&self.namespace(), "vector index remove")?;
-        let mut txn = Txn::new(
-            &self.store,
-            GraphState::read(self.store.get(STATE_KEY))?,
-            self.config.dim,
-        );
-        if !Self::stage_remove(&self.metric, &mut txn, &self.config, key)? {
-            return Ok(false);
-        }
-        let rows = txn.finish();
-        rows.commit(&mut self.store)?;
-        Ok(true)
+        key.try_with_encoded_key(|encoded_key| {
+            let mut txn = Txn::new(
+                &self.store,
+                GraphState::read(self.store.get(STATE_KEY))?,
+                self.config.dim,
+            );
+            if !Self::stage_remove(&self.metric, &mut txn, &self.config, encoded_key)? {
+                return Ok(false);
+            }
+            let rows = txn.finish();
+            rows.commit(&mut self.store)?;
+            Ok(true)
+        })
     }
 
     fn stage_remove(
         metric: &D,
         txn: &mut Txn<'_, S>,
         config: &HnswConfig,
-        key: &K,
+        encoded_key: &[u8],
     ) -> Result<bool> {
-        let encoded_key = key.encode_key();
-        let Some(raw) = txn.get(&user_key(&encoded_key)) else {
+        let Some(raw) = txn.get(&user_key(encoded_key)) else {
             return Ok(false);
         };
         let node_id = decode_node_id(&raw)?;
         if node_id >= txn.state.next_node_id
-            || txn.get(&node_key(TAG_NODE2KEY, node_id)).as_deref() != Some(&encoded_key)
+            || txn.get(&node_key(TAG_NODE2KEY, node_id)).as_deref() != Some(encoded_key)
         {
             return Err(corrupt("VecDex forward and reverse mappings disagree"));
         }
@@ -1362,7 +1364,7 @@ where
 
         // Phase 3: Clean up rows and state.
         txn.del_vec(node_id);
-        txn.rows.del(user_key(&encoded_key));
+        txn.rows.del(user_key(encoded_key));
         txn.rows.del(node_key(TAG_NODE2KEY, node_id).to_vec());
         txn.rows.del(node_key(TAG_INFO, node_id).to_vec());
 

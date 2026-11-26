@@ -177,3 +177,81 @@ fn update_propagates_stored_value_decode_error_before_callback() {
         expected_bytes.as_slice()
     );
 }
+
+#[test]
+fn fallible_typed_edits_propagate_key_encoding_errors() {
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct CheckedKey(u8);
+    impl vsdb::KeyEnDe for CheckedKey {
+        fn encode_key_into(&self, dst: &mut Vec<u8>) -> vsdb::Result<()> {
+            if self.0 == 0xff {
+                return Err(VsdbError::InvalidConfig {
+                    detail: "rejected key".into(),
+                });
+            }
+            dst.push(self.0);
+            Ok(())
+        }
+        fn decode_key(bytes: &[u8]) -> vsdb::Result<Self> {
+            Ok(Self(bytes[0]))
+        }
+    }
+
+    common::setup();
+    let valid = UNIX_EPOCH + Duration::from_secs(1);
+    let pre_epoch = UNIX_EPOCH - Duration::from_secs(1);
+
+    let mut map = Mapx::<SystemTime, u32>::new();
+    map.insert(&valid, &10);
+    assert!(matches!(
+        map.update(&pre_epoch, |_| panic!("callback must not run")),
+        Err(VsdbError::Encoding(_))
+    ));
+    assert_eq!(map.update(&valid, |v| *v += 5).unwrap(), Some(()));
+    assert_eq!(map.get(&valid), Some(15));
+
+    let mut strings = Mapx::<String, u32>::new();
+    let long = "x".repeat(200);
+    strings.insert(&long, &7);
+    assert_eq!(
+        strings
+            .update(long.as_str(), |v| {
+                *v += 1;
+                *v
+            })
+            .unwrap(),
+        Some(8)
+    );
+
+    let mut arrays = Mapx::<[u8; 4], u32>::new();
+    arrays.insert(&[1, 2, 3, 4], &9);
+    assert_eq!(
+        arrays
+            .update(&[1, 2, 3][..], |_| panic!("short slice must miss"))
+            .unwrap(),
+        None
+    );
+
+    let mut dag = DagMap::<SystemTime, u32>::new(None);
+    dag.insert(&valid, &20);
+    assert!(matches!(
+        dag.update(&pre_epoch, |_| panic!("callback must not run")),
+        Err(VsdbError::Encoding(_))
+    ));
+    assert_eq!(dag.get(&valid), Some(20));
+
+    let mut custom_map = Mapx::<CheckedKey, u32>::new();
+    custom_map.insert(&CheckedKey(1), &3);
+    assert!(matches!(
+        custom_map.update(&CheckedKey(0xff), |_| panic!("callback must not run")),
+        Err(VsdbError::InvalidConfig { .. })
+    ));
+    let mut custom_dag = DagMap::<CheckedKey, u32>::new(None);
+    custom_dag.insert(&CheckedKey(1), &3);
+    assert!(matches!(
+        custom_dag.update(&CheckedKey(0xff), |_| panic!("callback must not run")),
+        Err(VsdbError::InvalidConfig { .. })
+    ));
+}

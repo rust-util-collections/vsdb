@@ -64,7 +64,7 @@ impl<K: KeyEnDe, V: ValueEnDe> DagMap<K, V> {
         key: &K,
         edit: impl FnOnce(&mut V) -> R,
     ) -> Result<Option<R>> {
-        key.with_encoded_key(|k| self.inner.update(k, edit))
+        key.try_with_encoded_key(|k| self.inner.update(k, edit))
     }
     /// Stores an override on this node.
     pub fn insert(&mut self, key: &K, v: &V) {
