@@ -215,3 +215,22 @@ parent's placement in both build profiles. Referenced zero-slot pages
 in a committed working root return a typed error without changing
 the handling of a valid empty tree or temporary removal-builder pages.
 [Lifecycle fixtures](../../../../core/tests/universe_header.rs) · [Namespace fixture](../../../../strata/tests/dagmap_namespace_test.rs)
+
+## Final VecDex mutation and workspace gate
+
+All four [final mutation reviews](adjacency-confirmation.json.gz) inspected
+the selected code at `1b51384`. Touched persisted adjacency rows are checked
+against the committed next node ID at transaction start. Rows staged in the
+current chunk use the advancing in-memory limit. Previously allocated
+neighbors may be missing after deletion. The public mutation fixtures
+exercise insert, bulk-chunk insert, replacement, removal and reciprocal
+append, checking that a rejected operation leaves the complete prefixed
+row stream unchanged. Reviewers confirmed those contracts.
+[Regression tests](../../../../strata/src/vecdex/test.rs)
+
+Across the plan, implementation milestones, measurement review, integrated
+release and corrections, **ten checkpoints received four terminal reviews
+each**. The final native x86_64 workspace gate ran on source `1b51384`.
+It passed 850 tests in each of debug and release and 26 doctests. Native
+ARM macOS is an explicit maintainer verification step.
+[Native receipt](validation.json) · [macOS handoff](../../v18-mmdb-v5-execution.md#native-arm-macos-handoff)
