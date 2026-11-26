@@ -179,8 +179,9 @@ joint development. Version 18 remains unreleased through this work.
 The reviewed production corrections cover the exclusive allocator floor,
 error returns during VecDex mutation, and checked leaf classes and bounds
 during a VerMap working edit, pre-copy locking, and placement of a DagMap
-child. At `a331ecc` the seven native x86_64 workspace commands passed.
-The debug and release runs each passed 848
+child. VecDex mutation also checks touched stored neighbor IDs against the
+allocator floor before retaining staged rows. At `1b51384` the seven native
+x86_64 workspace commands passed. The debug and release runs each passed 850
 top-level test cases, and 26 doctests passed. The receipt separates
 subprocess probes and ignored tests. [Native validation receipt](reviews/v18-mmdb-v5/validation.json)
 

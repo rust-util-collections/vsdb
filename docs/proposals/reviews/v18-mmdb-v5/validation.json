@@ -1,50 +1,50 @@
 {
   "native": "x86_64-unknown-linux-gnu",
-  "revision": "a331eccd9a1aaacfb65a18ba94217380cb379398",
+  "revision": "1b51384c73af2bc454c3b60eaa2c893f2d6b688c",
   "compiler": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
   "commands": [
     {
       "command": "cargo +stable fmt --all -- --check",
       "exit": 0,
-      "seconds": 0.4
+      "seconds": 0.41
     },
     {
       "command": "cargo +stable clippy --workspace",
       "exit": 0,
-      "seconds": 4.89
+      "seconds": 4.77
     },
     {
       "command": "cargo +stable check --workspace --tests",
       "exit": 0,
-      "seconds": 3.47
+      "seconds": 3.44
     },
     {
       "command": "cargo +stable check --workspace --benches",
       "exit": 0,
-      "seconds": 0.18
+      "seconds": 0.2
     },
     {
       "command": "cargo +stable test --workspace --tests",
       "exit": 0,
-      "seconds": 66.62,
+      "seconds": 63.36,
       "top_level_harnesses": 45,
-      "passed": 848,
+      "passed": 850,
       "ignored": 5,
-      "nested_and_top_level_passed": 849
+      "nested_and_top_level_passed": 851
     },
     {
       "command": "cargo +stable test --workspace --release --tests",
       "exit": 0,
-      "seconds": 56.2,
+      "seconds": 55.78,
       "top_level_harnesses": 45,
-      "passed": 848,
+      "passed": 850,
       "ignored": 5,
-      "nested_and_top_level_passed": 849
+      "nested_and_top_level_passed": 851
     },
     {
       "command": "cargo +stable test --workspace --doc",
       "exit": 0,
-      "seconds": 1.58,
+      "seconds": 1.55,
       "top_level_harnesses": 5,
       "passed": 26,
       "ignored": 4,
