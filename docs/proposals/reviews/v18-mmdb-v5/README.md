@@ -166,3 +166,37 @@ also corrupted a slot offset while leaving the header valid. Returning
 either error from a callback leaves its prior staged edits unpublished.
 The four reviewers found the correction satisfactory.
 [Regression tests](../../../../strata/src/versioned/test.rs) · [Checked-path measurements](../../../evaluations/v18-publication/results/verified-leaf/summary.csv)
+
+## Integrated correction verification
+
+The [four correction reports](release-confirmation.json.gz) inspected
+`246de8f` against `7aafa3d`. The following dispositions were verified
+against the applicable format versions and ordinary public operations.
+
+- A v17 writer could retain both a file ceiling and a higher, exclusive
+  allocator value in default shard zero. Historical v17 used the maximum
+  of the two. A frozen fixture accepts file `C`, live owner `C` and legacy
+  floor `C+1`, then allocates `C+1`. For v18 the authoritative file cannot
+  be contradicted by live map prefixes or saved IDs, even with a higher
+  leftover legacy key. Opaque user values, including syntactically valid
+  foreign handles, are preserved. Source bytes survive both outcomes.
+  [Tests for both formats](../../../../migration/tests/staged_generation.rs)
+- A working-edit read now distinguishes an absent key from an invalid
+  class, out-of-range offset, missing object or zero-slot page reached
+  from a committed root. An empty tree uses the distinguished empty root.
+  Testing a deliberately malformed reachable page leaves the previous
+  working head and generation intact. The 1,000 empty callbacks made zero
+  native write or fence submissions; each callback still read a key.
+  [Working-edit fixtures](../../../../strata/src/versioned/test.rs) · [Submission counters](../../../evaluations/v18-publication/README.md)
+- Framing alone did not identify a valid-length adjacency containing an
+  impossible future node ID. Tests reproduced a published bad mutation.
+  At `1b51384`, persisted rows touched by a mutation use the committed
+  allocation floor at chunk entry; staged rows use the current floor.
+  A reference to an issued, subsequently removed node stays valid. The
+  staged chunk returns `Corrupt` and leaves the full row stream unchanged
+  on malformed data. [Mutation regressions](../../../../strata/src/vecdex/test.rs)
+- The direct final stock upgrade packet was still being measured when
+  reviewers inspected this checkpoint. The complete 80-process packet
+  now provides independent v4/v4 and v4/v5 pairs, checked binary hashes
+  and per-class rates in both placements. RSS and load-qualification
+  outcomes are reported separately. [Selected upgrade results](../../../evaluations/v18-adapter/README.md)
