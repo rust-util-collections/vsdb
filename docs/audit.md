@@ -30,7 +30,7 @@
 
 ### [LOW] engine: budget decisions are not logged at startup
 - **Where**: `core/src/common/engine/mmdb.rs` (`MEM_BUDGET`)
-- **What**: Operators cannot see whether the configured option, environment override or fixed default selected the budget, or the resulting per-shard sizes.
+- **What**: Startup does not report which configuration source selected the budget. Applications can query the effective budget with `Namespace::mem_budget_bytes()` and the per-shard write buffer size with `Namespace::memory_usage()`.
 - **Reason**: `vsdb_core` has no logging facade and is a library; unconditional stderr output from a storage engine is worse than silence. Revisit if a workspace-wide logging facade is adopted.
 
 ---
