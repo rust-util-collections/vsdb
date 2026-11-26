@@ -254,10 +254,24 @@ fn validate_vector<S: Scalar>(dim: usize, vector: &[S]) -> Result<()> {
     Ok(())
 }
 
-fn decode_vector<S: Scalar>(raw: &[u8]) -> Vec<S> {
-    let mut vector = Vec::with_capacity(raw.len() / size_of::<S>());
-    S::decode_into(raw, &mut vector);
-    vector
+fn decode_vector_into<S: Scalar>(
+    raw: &[u8],
+    dim: usize,
+    out: &mut Vec<S>,
+) -> Result<()> {
+    if raw.len() != dim * size_of::<S>() {
+        return Err(corrupt(
+            "VecDex: vector length differs from graph dimensions",
+        ));
+    }
+    S::decode_into(raw, out);
+    Ok(())
+}
+
+fn decode_vector<S: Scalar>(raw: &[u8], dim: usize) -> Result<Vec<S>> {
+    let mut vector = Vec::new();
+    decode_vector_into(raw, dim, &mut vector)?;
+    Ok(vector)
 }
 // =========================================================================
 // Key codecs
@@ -312,6 +326,7 @@ struct Txn<'a, S> {
     store: &'a MapxRaw,
     rows: StagedRows,
     state: GraphState,
+    dim: usize,
     /// Exclusive ID limit before this chunk allocated or linked any new nodes.
     committed_next_node_id: u64,
     /// Per-operation decoded-vector cache: HNSW linking re-reads the
@@ -390,16 +405,22 @@ impl<S> AdjRead for Txn<'_, S> {
 }
 
 impl<'a, S: Scalar> Txn<'a, S> {
-    fn new(store: &'a MapxRaw, state: GraphState) -> Self {
-        Self::with_cache(store, state, HashMap::new())
+    fn new(store: &'a MapxRaw, state: GraphState, dim: usize) -> Self {
+        Self::with_cache(store, state, dim, HashMap::new())
     }
 
-    fn with_cache(store: &'a MapxRaw, state: GraphState, cache: VecCache<S>) -> Self {
+    fn with_cache(
+        store: &'a MapxRaw,
+        state: GraphState,
+        dim: usize,
+        cache: VecCache<S>,
+    ) -> Self {
         Self {
             store,
             rows: StagedRows::new(),
             committed_next_node_id: state.next_node_id,
             state,
+            dim,
             vec_cache: RefCell::new(cache),
         }
     }
@@ -408,14 +429,20 @@ impl<'a, S: Scalar> Txn<'a, S> {
         self.rows.get_over(self.store, key)
     }
 
-    fn read_vec(&self, node_id: u64) -> Option<Rc<Vec<S>>> {
+    fn read_vec(&self, node_id: u64) -> Result<Option<Rc<Vec<S>>>> {
         if let Some(v) = self.vec_cache.borrow().get(&node_id) {
-            return Some(Rc::clone(v));
+            return Ok(Some(Rc::clone(v)));
         }
-        let raw = self.get(&node_key(TAG_VEC, node_id))?;
-        let v = Rc::new(decode_vector::<S>(&raw));
-        self.cache(node_id, &v);
-        Some(v)
+        let key = node_key(TAG_VEC, node_id);
+        let decode = |raw: &[u8]| decode_vector(raw, self.dim).map(Rc::new);
+        let vector = match self.rows.staged_value(&key) {
+            Some(staged) => staged.map(decode).transpose()?,
+            None => self.store.try_get_with(key, decode)?,
+        };
+        if let Some(v) = &vector {
+            self.cache(node_id, v);
+        }
+        Ok(vector)
     }
 
     /// Stages a vector row and pre-warms the decode cache.
@@ -532,7 +559,7 @@ impl<'a, S: Scalar> Txn<'a, S> {
         neighbors.push(added);
         let pruned = {
             let gv = |id: u64| self.read_vec(id);
-            prune_neighbors::<S, D>(metric, neighbor, &neighbors, m_max, &gv)
+            prune_neighbors::<S, D>(metric, neighbor, &neighbors, m_max, &gv)?
         };
         if let Some((pruned, evicted)) = pruned {
             self.apply_pruned_selection(neighbor, layer, pruned, evicted, keep)?;
@@ -825,8 +852,11 @@ where
     /// WAL data and must not be retried automatically.
     pub fn set_ef_search(&mut self, ef: usize) -> Result<()> {
         ensure_writable(&self.namespace(), "vector index ef update")?;
-        let mut txn: Txn<'_, S> =
-            Txn::new(&self.store, GraphState::read(self.store.get(STATE_KEY))?);
+        let mut txn: Txn<'_, S> = Txn::new(
+            &self.store,
+            GraphState::read(self.store.get(STATE_KEY))?,
+            self.config.dim,
+        );
         txn.state.ef_search = ef;
         let rows = txn.finish();
         rows.commit(&mut self.store)?;
@@ -835,13 +865,13 @@ where
 
     /// Returns the vector associated with the given key, if it exists.
     ///
-    /// Panics if the stored forward mapping has an invalid width.
+    /// Panics if the stored forward mapping or vector has an invalid width.
     pub fn get(&self, key: &K) -> Option<Vec<S>> {
         let node_id = decode_node_id(&self.store.get(user_key(&key.encode_key()))?)
             .expect("VecDex: corrupt forward mapping");
-        self.store
-            .get(node_key(TAG_VEC, node_id))
-            .map(|raw| decode_vector::<S>(&raw))
+        self.store.get(node_key(TAG_VEC, node_id)).map(|raw| {
+            decode_vector(&raw, self.config.dim).expect("VecDex: corrupt vector")
+        })
     }
 
     /// Returns `true` if the index contains the given key.
@@ -860,7 +890,8 @@ where
     pub fn iter(&self) -> impl Iterator<Item = (K, Vec<S>)> + '_ {
         let view = self.store.read_view();
         let rows = view.range_detached(tag_bounds(TAG_NODE2KEY));
-        rows.map(move |(key, value)| reader::decode_pair(&view, &key, &value))
+        let dim = self.config.dim;
+        rows.map(move |(key, value)| reader::decode_pair(&view, &key, &value, dim))
     }
 
     fn scan_tag(
@@ -889,6 +920,7 @@ where
         let mut txn: Txn<'_, S> = Txn::new(
             &self.store,
             GraphState::read(self.store.get(STATE_KEY))?.cleared(),
+            self.config.dim,
         );
         txn.rows.wipe();
         txn.rows.put(
@@ -913,7 +945,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns a dimension/capability error or the batch commit error.
+    /// Returns a dimension/capability error, a batch commit error, or
+    /// [`VsdbError::Corrupt`] when linking encounters a malformed stored row.
     /// Validation and preflight rejection leave state unchanged. Runtime
     /// state updates only after commit succeeds. A persistence error can
     /// leave recoverable WAL data and must not be retried automatically.
@@ -921,8 +954,11 @@ where
         ensure_writable(&self.namespace(), "vector index insert")?;
         validate_vector(self.config.dim, vector)?;
 
-        let mut txn =
-            Txn::new(&self.store, GraphState::read(self.store.get(STATE_KEY))?);
+        let mut txn = Txn::new(
+            &self.store,
+            GraphState::read(self.store.get(STATE_KEY))?,
+            self.config.dim,
+        );
         Self::stage_remove(&self.metric, &mut txn, &self.config, key)?;
         Self::stage_insert(
             &self.metric,
@@ -1001,6 +1037,7 @@ where
             let mut txn = Txn::with_cache(
                 &self.store,
                 GraphState::read(self.store.get(STATE_KEY))?,
+                self.config.dim,
                 vec_cache,
             );
             for (key, vec) in chunk {
@@ -1051,7 +1088,7 @@ where
         for l in (node_layer.saturating_add(1)..=cur_max).rev() {
             let res = {
                 let dist =
-                    |id| Ok(txn.read_vec(id).map(|v| metric.distance(vector, &v)));
+                    |id| Ok(txn.read_vec(id)?.map(|v| metric.distance(vector, &v)));
                 search_scored_layer(dist, &cur_ep, 1, l, txn, None)?
             };
             if let Some(&(_, id)) = res.iter().find(|&&(_, id)| id != node_id) {
@@ -1066,7 +1103,7 @@ where
 
             let candidates = {
                 let dist =
-                    |id| Ok(txn.read_vec(id).map(|v| metric.distance(vector, &v)));
+                    |id| Ok(txn.read_vec(id)?.map(|v| metric.distance(vector, &v)));
                 search_scored_layer(dist, &cur_ep, config.ef_construction, l, txn, None)?
             };
             let neighbor_pool: Vec<(S, u64)> = candidates
@@ -1077,7 +1114,7 @@ where
 
             let selected = {
                 let gv = |id: u64| txn.read_vec(id);
-                select_neighbors_heuristic::<S, D>(metric, &neighbor_pool, m_max, &gv)
+                select_neighbors_heuristic::<S, D>(metric, &neighbor_pool, m_max, &gv)?
             };
 
             txn.set_neighbors(l, node_id, &selected);
@@ -1232,8 +1269,11 @@ where
     /// [`VsdbError::Corrupt`] before the mutation is published.
     pub fn remove(&mut self, key: &K) -> Result<bool> {
         ensure_writable(&self.namespace(), "vector index remove")?;
-        let mut txn =
-            Txn::new(&self.store, GraphState::read(self.store.get(STATE_KEY))?);
+        let mut txn = Txn::new(
+            &self.store,
+            GraphState::read(self.store.get(STATE_KEY))?,
+            self.config.dim,
+        );
         if !Self::stage_remove(&self.metric, &mut txn, &self.config, key)? {
             return Ok(false);
         }
@@ -1402,18 +1442,21 @@ where
         let (new_ep, connected) = best.expect("true maximum came from a live node");
         if live.len() > 1 && !connected {
             let ep_vec = txn
-                .read_vec(new_ep)
+                .read_vec(new_ep)?
                 .expect("live entry-point candidate has a vector");
-            let nearest = live
-                .iter()
-                .filter(|(id, _)| *id != new_ep)
-                .filter_map(|(id, _)| {
-                    txn.read_vec(*id)
-                        .map(|vector| (metric.distance(&ep_vec, &vector), *id))
-                })
-                .min_by(|a, b| a.0.total_cmp(&b.0))
-                .map(|(_, id)| id);
-            if let Some(neighbor) = nearest {
+            let mut nearest: Option<(S, u64)> = None;
+            for &(id, _) in &live {
+                if id != new_ep
+                    && let Some(vector) = txn.read_vec(id)?
+                {
+                    let distance = metric.distance(&ep_vec, &vector);
+                    if nearest.is_none_or(|(best, _)| distance.total_cmp(&best).is_lt())
+                    {
+                        nearest = Some((distance, id));
+                    }
+                }
+            }
+            if let Some((_, neighbor)) = nearest {
                 txn.set_neighbors(0, new_ep, &[neighbor]);
                 let mut reverse = get_neighbors(txn, 0, neighbor)?;
                 if !reverse.contains(&new_ep) {
@@ -1480,10 +1523,7 @@ where
             if canonical_key != key {
                 return Err(corrupt("compact: noncanonical key"));
             }
-            if raw.len() != self.config.dim * size_of::<S>() {
-                return Err(corrupt("compact: incorrect vector byte length"));
-            }
-            let vector = decode_vector::<S>(&raw);
+            let vector = decode_vector::<S>(&raw, self.config.dim)?;
             if !vector.iter().all(|component| component.is_finite()) {
                 return Err(corrupt(
                     "compact: stored vector contains nonfinite components",
@@ -1501,7 +1541,7 @@ where
         drop(view);
         pairs.shuffle(&mut rand::rng());
 
-        let mut txn = Txn::new(&self.store, state.cleared());
+        let mut txn = Txn::new(&self.store, state.cleared(), self.config.dim);
         txn.rows.wipe();
         txn.rows.put(
             META_KEY.to_vec(),
@@ -1568,12 +1608,7 @@ impl<K: KeyEnDe, S: Scalar> MetricSearch<S> for Search<'_, '_, K, S> {
         let mut scratch = Vec::with_capacity(self.query.len());
         let mut distance_to = |id| {
             self.view.try_get_with(node_key(TAG_VEC, id), |bytes| {
-                if bytes.len() != size_of_val(self.query) {
-                    return Err(corrupt(
-                        "VecDex: vector length differs from graph dimensions",
-                    ));
-                }
-                S::decode_into(bytes, &mut scratch);
+                decode_vector_into(bytes, self.query.len(), &mut scratch)?;
                 Ok(metric.distance(self.query, &scratch))
             })
         };

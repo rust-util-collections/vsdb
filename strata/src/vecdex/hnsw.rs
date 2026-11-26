@@ -293,8 +293,8 @@ pub(crate) fn select_neighbors_heuristic<S: Scalar, D: DistanceMetric<S>>(
     metric: &D,
     candidates: &[(S, u64)],
     m: usize,
-    get_vector: &dyn Fn(u64) -> Option<Rc<Vec<S>>>,
-) -> Vec<u64> {
+    get_vector: &dyn Fn(u64) -> Result<Option<Rc<Vec<S>>>>,
+) -> Result<Vec<u64>> {
     let mut sorted: Vec<_> = candidates.to_vec();
     sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
 
@@ -306,7 +306,7 @@ pub(crate) fn select_neighbors_heuristic<S: Scalar, D: DistanceMetric<S>>(
         if selected.len() >= m {
             break;
         }
-        let Some(cand_vec) = get_vector(cand_id) else {
+        let Some(cand_vec) = get_vector(cand_id)? else {
             continue;
         };
 
@@ -340,7 +340,7 @@ pub(crate) fn select_neighbors_heuristic<S: Scalar, D: DistanceMetric<S>>(
         }
     }
 
-    selected.iter().map(|&(_, id)| id).collect()
+    Ok(selected.iter().map(|&(_, id)| id).collect())
 }
 
 /// Prune a neighbor slice to at most `m_max` entries using the diversity
@@ -354,23 +354,27 @@ pub(crate) fn prune_neighbors<S: Scalar, D: DistanceMetric<S>>(
     node_id: u64,
     neighbors: &[u64],
     m_max: usize,
-    get_vector: &dyn Fn(u64) -> Option<Rc<Vec<S>>>,
-) -> Option<(Vec<u64>, Vec<u64>)> {
+    get_vector: &dyn Fn(u64) -> Result<Option<Rc<Vec<S>>>>,
+) -> Result<Option<(Vec<u64>, Vec<u64>)>> {
     if neighbors.len() <= m_max {
-        return None;
+        return Ok(None);
     }
-    let node_vec = get_vector(node_id)?;
-    let scored: Vec<(S, u64)> = neighbors
-        .iter()
-        .filter_map(|&n| get_vector(n).map(|v| (metric.distance(&node_vec, &v), n)))
-        .collect();
-    let pruned = select_neighbors_heuristic::<S, D>(metric, &scored, m_max, get_vector);
+    let Some(node_vec) = get_vector(node_id)? else {
+        return Ok(None);
+    };
+    let mut scored = Vec::with_capacity(neighbors.len());
+    for &id in neighbors {
+        if let Some(vector) = get_vector(id)? {
+            scored.push((metric.distance(&node_vec, &vector), id));
+        }
+    }
+    let pruned = select_neighbors_heuristic::<S, D>(metric, &scored, m_max, get_vector)?;
     let evicted = neighbors
         .iter()
         .copied()
         .filter(|n| !pruned.contains(n))
         .collect();
-    Some((pruned, evicted))
+    Ok(Some((pruned, evicted)))
 }
 
 /// Fetches `(node_id, layer)` adjacency from `adj` and delegates to
@@ -381,12 +385,10 @@ pub(crate) fn prune_selection<S: Scalar, D: DistanceMetric<S>, A: AdjRead + ?Siz
     layer: u8,
     m_max: usize,
     adj: &A,
-    get_vector: &dyn Fn(u64) -> Option<Rc<Vec<S>>>,
+    get_vector: &dyn Fn(u64) -> Result<Option<Rc<Vec<S>>>>,
 ) -> Result<Option<(Vec<u64>, Vec<u64>)>> {
     let neighbors = get_neighbors(adj, layer, node_id)?;
-    Ok(prune_neighbors(
-        metric, node_id, &neighbors, m_max, get_vector,
-    ))
+    prune_neighbors(metric, node_id, &neighbors, m_max, get_vector)
 }
 
 #[cfg(test)]

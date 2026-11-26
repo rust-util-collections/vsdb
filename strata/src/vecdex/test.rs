@@ -189,7 +189,7 @@ fn replacement_is_staged_without_mutating_committed_state() {
     )
     .unwrap();
 
-    let mut txn = Txn::new(&idx.store, idx.state());
+    let mut txn = Txn::new(&idx.store, idx.state(), idx.config.dim);
     assert!(VecDex::<u32, L2>::stage_remove(&L2, &mut txn, &cfg, &7).unwrap());
     VecDex::<u32, L2>::stage_insert(&L2, &mut txn, &cfg, 7u32.encode_key(), &[9.0, 9.0])
         .unwrap();
@@ -700,7 +700,7 @@ fn remove_entry_point_reconnects_isolated_true_max_node() {
     // node 2 "helper": layer 0, linked to node 1 at layer 0.
     // node 3 "ep": layer 5, current entry point (isolated; its own
     // connectivity doesn't matter since it's the one being removed).
-    let mut txn: Txn<'_, f32> = Txn::new(&idx.store, idx.state());
+    let mut txn: Txn<'_, f32> = Txn::new(&idx.store, idx.state(), idx.config.dim);
     for (node_id, key, layer, vec) in [
         (0u64, 0u32, 4u8, [0.0f32, 0.0]),
         (1, 1, 1, [1.0, 0.0]),
@@ -761,7 +761,7 @@ fn saturated_neighbor_pruning_keeps_new_entry_point_reachable() {
         ef_search: 20,
     };
     let mut idx: VecDex<u32, L2> = VecDex::new(cfg.clone()).unwrap();
-    let mut txn: Txn<'_, f32> = Txn::new(&idx.store, idx.state());
+    let mut txn: Txn<'_, f32> = Txn::new(&idx.store, idx.state(), idx.config.dim);
 
     for (node_id, value) in [(0, [0.0, 0.0]), (1, [0.1, 0.0]), (2, [0.2, 0.0])] {
         txn.put_vec(node_id, &value);
@@ -917,7 +917,7 @@ fn non_entry_top_layer_remove_skips_entry_repair() {
         ..Default::default()
     };
     let mut idx: VecDex<u32, L2> = VecDex::new(cfg).unwrap();
-    let mut txn: Txn<'_, f32> = Txn::new(&idx.store, idx.state());
+    let mut txn: Txn<'_, f32> = Txn::new(&idx.store, idx.state(), idx.config.dim);
 
     // node 0 is the entry at layer 2; nodes 1 and 3 are other layer-2
     // nodes; node 2 is a layer-0 helper connected to all of them.
@@ -1926,7 +1926,7 @@ fn filtered_search_keeps_recall_under_selective_filters() {
 }
 
 fn insert_at_layer(idx: &mut VecDex<u64, L2>, id: u64, vector: &[f32], layer: u8) {
-    let mut txn: Txn<'_, f32> = Txn::new(&idx.store, idx.state());
+    let mut txn: Txn<'_, f32> = Txn::new(&idx.store, idx.state(), idx.config.dim);
     txn.put_vec(id, vector);
     txn.rows.put(
         user_key(&KeyEnDe::encode_key(&id)),
@@ -2051,7 +2051,7 @@ fn component_restarts_respect_filtered_visit_cap() {
         ef_search: 8,
     };
     let mut idx: VecDex<u64, L2> = VecDex::new(cfg).unwrap();
-    let mut txn: Txn<'_, f32> = Txn::new(&idx.store, idx.state());
+    let mut txn: Txn<'_, f32> = Txn::new(&idx.store, idx.state(), idx.config.dim);
     let n = 4200u64;
     for id in 0..n {
         txn.put_vec(id, &[id as f32]);
@@ -2371,7 +2371,7 @@ fn snapshot_scores_keep_filter_and_distance_order_and_skip_missing_rows() {
     }
     insert_at_layer(&mut idx, 70, &[0., 70.], 0);
     assert!(idx.remove(&70).unwrap());
-    let mut txn = Txn::<f32>::new(&idx.store, idx.state());
+    let mut txn = Txn::<f32>::new(&idx.store, idx.state(), idx.config.dim);
     let mut neighbors = vec![0, 70, 41];
     neighbors.extend((1..70).rev());
     txn.set_neighbors(0, 0, &neighbors);
@@ -2410,6 +2410,55 @@ fn search_reports_a_malformed_stored_vector() {
         idx.search(&[0., 0.], 2),
         Err(VsdbError::Corrupt { .. })
     ));
+}
+
+#[test]
+fn mutations_reject_wrong_stored_dimensions_before_publication() {
+    for raw in [vec![0; 7], vec![0; 4], vec![0; 12]] {
+        let mut idx: VecDex<u64, L2> = VecDex::new(HnswConfig {
+            dim: 2,
+            ..Default::default()
+        })
+        .unwrap();
+        insert_at_layer(&mut idx, 0, &[0., 0.], 0);
+        idx.store.insert(node_key(TAG_VEC, 0), raw);
+        let before = idx.store.iter().collect::<Vec<_>>();
+        assert!(matches!(
+            idx.insert(&1, &[1., 1.]),
+            Err(VsdbError::Corrupt { .. })
+        ));
+        assert!(matches!(
+            idx.insert_batch(&[(1, vec![1., 1.])]),
+            Err(VsdbError::Corrupt { .. })
+        ));
+        assert!(matches!(idx.compact(), Err(VsdbError::Corrupt { .. })));
+        assert_eq!(idx.store.iter().collect::<Vec<_>>(), before);
+    }
+}
+
+#[test]
+fn pruning_and_entry_repair_propagate_stored_dimension_errors() {
+    let mut idx: VecDex<u64, L2> = VecDex::new(HnswConfig {
+        dim: 2,
+        ..Default::default()
+    })
+    .unwrap();
+    for id in 0..3 {
+        insert_at_layer(&mut idx, id, &[id as f32, 0.], 0);
+    }
+    idx.store.insert(node_key(TAG_VEC, 1), [0; 12]);
+    idx.store.insert(adj_key(0, 0), encode_neighbors(&[1, 2]));
+    let mut txn = Txn::<f32>::new(&idx.store, idx.state(), idx.config.dim);
+    assert!(matches!(
+        txn.prune_and_detach(&L2, 0, 0, 1, None),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    for id in 0..3 {
+        idx.store.remove(adj_key(0, id));
+    }
+    let before = idx.store.iter().collect::<Vec<_>>();
+    assert!(matches!(idx.remove(&0), Err(VsdbError::Corrupt { .. })));
+    assert_eq!(idx.store.iter().collect::<Vec<_>>(), before);
 }
 
 #[test]
@@ -2621,7 +2670,7 @@ fn mutations_reject_unissued_neighbor_ids_even_if_the_chunk_allocates_them() {
         let before = idx.store.iter().collect::<Vec<_>>();
         // The reciprocal fast path below saturation copies the existing
         // adjacency without expanding it first. It must check the same limit.
-        let mut txn = Txn::<f32>::new(&idx.store, idx.state());
+        let mut txn = Txn::<f32>::new(&idx.store, idx.state(), idx.config.dim);
         txn.state.next_node_id = 3;
         assert!(matches!(
             txn.append_neighbor_and_prune(&L2, 0, 2, 0, 32, None),

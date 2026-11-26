@@ -61,20 +61,20 @@ impl<K: KeyEnDe, D: DistanceMetric<S>, S: Scalar> VecDexReadView<'_, K, D, S> {
 
     /// Gets a vector by its user key.
     ///
-    /// Panics if the stored forward mapping has an invalid width.
+    /// Panics if the stored forward mapping or vector has an invalid width.
     pub fn get(&self, key: &K) -> Option<Vec<S>> {
         let id = decode_node_id(&self.raw.get(user_key(&key.encode_key()))?)
             .expect("VecDex: corrupt forward mapping");
-        self.raw
-            .get(node_key(TAG_VEC, id))
-            .map(|bytes| decode_vector(&bytes))
+        self.raw.get(node_key(TAG_VEC, id)).map(|bytes| {
+            decode_vector(&bytes, self.dim).expect("VecDex: corrupt vector")
+        })
     }
 
     /// Iterates the key and vector pairs visible at this view's sequence number.
     pub fn iter(&self) -> impl Iterator<Item = (K, Vec<S>)> + '_ {
         self.raw
             .range(tag_bounds(TAG_NODE2KEY))
-            .map(|(k, v)| decode_pair(&self.raw, &k, &v))
+            .map(|(k, v)| decode_pair(&self.raw, &k, &v, self.dim))
     }
 
     /// Finds nearest neighbors in the captured graph.
@@ -159,11 +159,15 @@ pub(super) fn decode_pair<K: KeyEnDe, S: Scalar>(
     view: &MapxRawReadView<'_>,
     key: &[u8],
     value: &[u8],
+    dim: usize,
 ) -> (K, Vec<S>) {
     let id = u64::from_be_bytes(key[1..].try_into().expect("VecDex node ID"));
     let key = K::decode_key(value).expect("VecDex: corrupt key bytes");
     let raw = view
         .get(node_key(TAG_VEC, id))
         .expect("VecDex: missing vector");
-    (key, decode_vector(&raw))
+    (
+        key,
+        decode_vector(&raw, dim).expect("VecDex: corrupt vector"),
+    )
 }
