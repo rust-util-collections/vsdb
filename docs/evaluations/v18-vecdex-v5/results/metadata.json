@@ -139,6 +139,10 @@
     "final": {
       "sha256": "329bbd64313b5e011ad20745ffb4b2f8860da70a9bb058551d06bb433355d83f",
       "cargo_lock_sha256": "a803ec0647b5e696e47c9fb45675422eef912ba093db77da22e92abb8648ab4a"
+    },
+    "policy": {
+      "sha256": "26fb87749fbb0522f5d27283826d98547d5482800828f1fda71b7ee120025dd5",
+      "cargo_lock_sha256": "a803ec0647b5e696e47c9fb45675422eef912ba093db77da22e92abb8648ab4a"
     }
   },
   "base_degree": {
@@ -155,7 +159,8 @@
     "32",
     "shipped",
     "cached",
-    "final"
+    "final",
+    "policy"
   ],
   "pin_diagnostic_arms": [
     "1-pins",
@@ -164,5 +169,26 @@
   ],
   "distance_cache_patch_sha256": "e2c0a3eb39a9a1027ed7b682b3b67cf575b626a90857dd86642f264b35f29f63",
   "final_revision": "3b220e7b8410e033b15429bca40f0b982dc89a48",
-  "final_confirmation_seed_base": 461126
+  "final_confirmation_seed_base": 461126,
+  "stock_policy_revision": "685427371e5e538592db946b258ead6dce3cc42c",
+  "stock_policy_seed_base": 561126,
+  "policy_warm_fixture_check": {
+    "imported_visible_rows": 41493,
+    "namespace_budget_mib": 512,
+    "shards": 1,
+    "previous_write_buffer_mib": 24,
+    "selected_write_buffer_mib": 64,
+    "shared_capacity_mib_per_store": 64,
+    "immutable_limit": 4,
+    "source_wal_bytes": 0,
+    "fresh_import_wal_bytes": 0,
+    "fresh_ssts_identical_to_original": true,
+    "fresh_ssts": [
+      {
+        "path": "__NAMESPACES__/0000000000000001/mmdb/shard_00/000004.sst",
+        "bytes": 4428811,
+        "sha256": "03293e4f7dae23cc76038d0cb88fc7375427b557a71f373a7e8110df574fe534"
+      }
+    ]
+  }
 }

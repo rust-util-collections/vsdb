@@ -1,0 +1,4 @@
+round,regime,arm,seed,samples,gnu_time_peak_kib,sampled_process_vmhwm_kib,storage_bytes,io_positive,digest,nearest
+1,warm,policy,741127,1000,13076,13248,0,0,441ae75c9cde8388,873
+2,warm,policy,741128,1000,13068,13236,0,0,d250163cb156c97a,866
+3,warm,policy,741129,1000,13148,13324,0,0,424f2aefa42da7a2,874

@@ -66,8 +66,27 @@ SST pin capacity and OS process RSS have separate owners and timing.
 
 ## Warm upgrade comparison
 
-**The final v5-backed code at `3b220e7` had 42.77% higher warm
-end-to-end p99 than v4-backed `6ddaed9` on this graph.** The two arms
+**With the selected write-buffer policy at `6854273`, v5 had 37.48%
+higher warm end-to-end p99 than v4 on this graph.** Median run p99 was
+184.57 µs on v4 and 253.38 µs on v5. All five paired regressions were
+between 34.83% and 69.45%. The largest A/A differences were 22.19%
+for v4 and 11.98% for v5. The pre-policy and selected-policy v5 builds
+differed by 4.79% in paired median gain, with both positive and negative
+changes (−17.36% to +14.05%). A separate three-process RSS sample for
+the selected build peaked at 13,148 KiB (GNU time) and 13,324 KiB (probe
+VmHWM). [Final policy and control runs](results/policy.csv) · [Selected policy RSS](results/rss-policy.csv)
+
+The 512 MiB single-shard warm namespace uses a 64 MiB write-buffer
+threshold with the selected policy, compared with 24 MiB before it. The
+per-store shared-cache capacity stays 64 MiB and the immutable limit
+stays four. Importing all 41,493 canonical rows under the new stock binary
+produced the same 4,428,811-byte SST and zero-byte WAL as the earlier
+import, including an identical SHA-256 for the SST. The timing runs
+reopened this same layout read-only and charged zero storage reads.
+[Independent layout comparison](results/metadata.json)
+
+The earlier v5-backed code at `3b220e7` had 42.77% higher warm
+end-to-end p99 than v4-backed `6ddaed9` on this graph. The two arms
 measured 256.62 µs and 180.43 µs respectively. Every paired v5 run was
 slower (39.43–43.72%). Five independent old/old pairs differed by up to
 9.87%, and five new/new pairs by up to 1.99%. This confirmation used
