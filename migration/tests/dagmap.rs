@@ -146,4 +146,24 @@ fn preserves_root_and_edges_and_reports_relocated_children() {
     assert_eq!(migrate_handle_v17(&v18_bytes).unwrap().0, v18_bytes);
     let dag_restored: DagMapRaw = postcard::from_bytes(&v18_bytes).unwrap();
     assert_eq!(dag_restored.instance_id(), d.instance_id());
+
+    // Non-root v18 nodes (live children and destroyed nodes) must be rejected
+    // by both ID-based and handle-bytes root converters.
+    let mut live_root = dag_restored;
+    let mut live_child = DagMapRaw::new(Some(&mut live_root));
+    let child_id = live_child.save_meta().unwrap();
+    let child_bytes = postcard::to_allocvec(&live_child).unwrap();
+    assert!(matches!(
+        migrate_v17(child_id),
+        Err(vsdb::VsdbError::Corrupt { .. })
+    ));
+    assert!(matches!(
+        migrate_handle_v17(&child_bytes),
+        Err(vsdb::VsdbError::Corrupt { .. })
+    ));
+    live_child.destroy();
+    assert!(matches!(
+        migrate_v17(child_id),
+        Err(vsdb::VsdbError::Corrupt { .. })
+    ));
 }

@@ -599,6 +599,52 @@ pub fn migrate_rawkey_handle_v17<V: ValueEnDe>(bytes: &[u8]) -> Result<(Vec<u8>,
     migrate_bytes_with::<DagMapRawKey<V>>(bytes, typed_legacy::<V>, |d| d.instance_id())
 }
 
+fn matches_type_tag<T>(tag: u64) -> bool {
+    tag == crate::tag(type_name::<T>())
+        || tag == crate::legacy_tag_for::<T>(false)
+        || tag == crate::legacy_tag_for::<T>(true)
+}
+
+fn ensure_root_node(ns: &Namespace, root: InstanceId) -> Result<()> {
+    if !matches!(node_meta(&open_prefix(ns, root.map_id)?)?.2, State::Root) {
+        return Err(corrupt("requested DAG node is not a graph root"));
+    }
+    Ok(())
+}
+
+fn retag_saved_handle<T: DeserializeOwned>(
+    ns: &Namespace,
+    id: InstanceId,
+    invalid_msg: &'static str,
+    mismatch_msg: &'static str,
+) -> Result<()> {
+    let path = ns.meta_path(id.map_id);
+    let bytes = fs::read(&path)?;
+    let frame: &[u8] = decode(&bytes)?;
+    if frame.len() != 45
+        || &frame[..8] != b"VSTYPE04"
+        || u64::from_le_bytes(frame[16..24].try_into().unwrap()) != id.map_id
+        || u64::from_le_bytes(frame[24..32].try_into().unwrap()) != ns.id()
+        || u32::from_le_bytes(frame[32..36].try_into().unwrap()) != 9
+        || frame[36] != 1
+    {
+        return Err(corrupt(invalid_msg));
+    }
+    let found = u64::from_le_bytes(frame[8..16].try_into().unwrap());
+    let expected = crate::tag(type_name::<T>());
+    if found == expected {
+        let _: T = decode(&bytes)?;
+        crate::sync_parent(&path)?;
+        return Ok(());
+    }
+    if !matches_type_tag::<T>(found) {
+        return Err(corrupt(mismatch_msg));
+    }
+    let target = typed_handle::<T>(id, &frame[36..45])?;
+    let _: T = decode(&target)?;
+    atomic_write_file(&path, &target)
+}
+
 /// Re-tags a migrated `DagMapRawKey<V>` descendant whose saved metadata had a
 /// different value type `V` from the DAG root and contained a renamed library
 /// type (`BranchId`, `CommitId`, or `VecDexDyn`). Pass the relocated child ID
@@ -612,33 +658,13 @@ pub fn migrate_child_v17<V: ValueEnDe>(id: impl Into<InstanceId>) -> Result<DagM
             operation: "DAG child metadata migration",
         });
     }
-    let path = ns.meta_path(id.map_id);
-    let bytes = fs::read(&path)?;
-    let frame: &[u8] = decode(&bytes)?;
-    if frame.len() != 45
-        || &frame[..8] != b"VSTYPE04"
-        || u64::from_le_bytes(frame[16..24].try_into().unwrap()) != id.map_id
-        || u64::from_le_bytes(frame[24..32].try_into().unwrap()) != ns.id()
-        || u32::from_le_bytes(frame[32..36].try_into().unwrap()) != 9
-        || frame[36] != 1
-    {
-        return Err(corrupt("invalid migrated DAG child handle"));
-    }
-    let found = u64::from_le_bytes(frame[8..16].try_into().unwrap());
-    let expected = crate::tag(type_name::<DagMapRawKey<V>>());
-    if found == expected {
-        crate::sync_parent(&path)?;
-        return DagMapRawKey::<V>::from_meta(id);
-    }
-    if found != crate::legacy_tag_for::<DagMapRawKey<V>>(false)
-        && found != crate::legacy_tag_for::<DagMapRawKey<V>>(true)
-    {
-        return Err(corrupt("saved DAG child type mismatch"));
-    }
-    let target = typed_handle::<DagMapRawKey<V>>(id, &frame[36..45])?;
-    let node: DagMapRawKey<V> = decode(&target)?;
-    atomic_write_file(&path, &target)?;
-    Ok(node)
+    retag_saved_handle::<DagMapRawKey<V>>(
+        &ns,
+        id,
+        "invalid migrated DAG child handle",
+        "saved DAG child type mismatch",
+    )?;
+    DagMapRawKey::<V>::from_meta(id)
 }
 fn typed_legacy<V: ValueEnDe>(bytes: &[u8]) -> Result<Legacy> {
     let frame: &[u8] = decode(bytes)?;
@@ -828,9 +854,16 @@ fn migrate_with<T: DeserializeOwned>(
                 }
             };
             if current_handle(bytes) {
-                let _: T = decode(bytes)?;
+                ensure_root_node(&ns, root)?;
                 if source.is_none() {
-                    crate::sync_parent(&path)?;
+                    retag_saved_handle::<T>(
+                        &ns,
+                        root,
+                        "invalid migrated DAG root handle",
+                        "saved root type differs from requested DAG handle",
+                    )?;
+                } else {
+                    let _: T = decode(bytes)?;
                 }
                 return Ok(None);
             }
@@ -860,7 +893,7 @@ fn migrate_with<T: DeserializeOwned>(
                     ));
                 }
             }
-            None if requested.tag != crate::tag(type_name::<T>()) => {
+            None if !matches_type_tag::<T>(requested.tag) => {
                 return Err(corrupt("saved root type differs from requested DAG handle"));
             }
             _ => {}
@@ -879,7 +912,12 @@ fn migrate_with<T: DeserializeOwned>(
     loop {
         if let Record::Done(map) = &record {
             if source.is_none() {
-                let _: T = decode(&fs::read(&path)?)?;
+                retag_saved_handle::<T>(
+                    &ns,
+                    root,
+                    "invalid migrated DAG root handle",
+                    "saved root type differs from requested DAG handle",
+                )?;
             }
             record = repair_completed(&ns, root, map)?;
             write_record(&journal, root, &record)?;
@@ -893,6 +931,19 @@ fn migrate_with<T: DeserializeOwned>(
             let Record::Finished { dag_id, members } = record else {
                 unreachable!()
             };
+            if source.is_none() {
+                ensure_root_node(&ns, root)?;
+                retag_saved_handle::<T>(
+                    &ns,
+                    root,
+                    "invalid migrated DAG root handle",
+                    "saved root type differs from requested DAG handle",
+                )?;
+            } else if let Some(bytes) = source
+                && current_handle(bytes)
+            {
+                ensure_root_node(&ns, root)?;
+            }
             return Ok(Some(DagHandleConverter {
                 root,
                 dag_id,
@@ -939,11 +990,19 @@ fn migrate_with<T: DeserializeOwned>(
                         },
                     );
                 }
-                let requested = handle::<T>(root, *dag_id)?;
-                if source.is_none() && fs::read(&path)? != requested {
-                    return Err(corrupt(
+                if source.is_none() {
+                    retag_saved_handle::<T>(
+                        &ns,
+                        root,
+                        "invalid migrated DAG root handle",
                         "published root sidecar differs from requested DAG handle",
-                    ));
+                    )?;
+                    let requested = handle::<T>(root, *dag_id)?;
+                    if fs::read(&path)? != requested {
+                        return Err(corrupt(
+                            "published root sidecar differs from requested DAG handle",
+                        ));
+                    }
                 }
                 open_prefix(&ns, root.map_id)?.try_sync_wal()?;
                 for n in nodes.iter() {

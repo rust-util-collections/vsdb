@@ -239,4 +239,36 @@ fn migrates_mixed_saved_types() {
             .get(b"plain"),
         Some(42u64)
     );
+
+    // A composite `DagMapRawKey<Vec<CommitId>>` root sidecar on a DAG that was
+    // first converted through a `DagMapRaw` byte handle must re-tag cleanly
+    // when `migrate_rawkey_v17::<Vec<CommitId>>` is called on the root ID.
+    let ((mut crd, mut crp, _), cr_ids, cr_raw) = mk_node();
+    crp.insert([], [0]);
+    crd.insert(
+        b"history",
+        postcard::to_allocvec(&vec![CommitId::from_raw(11), CommitId::from_raw(22)]).unwrap(),
+    );
+    std::fs::write(
+        ns.meta_path(cr_ids[0]),
+        wrap_child(
+            "vsdb::dagmap::rawkey::DagMapRawKey<alloc::vec::Vec<vsdb::versioned::CommitId>>",
+            &cr_raw,
+        ),
+    )
+    .unwrap();
+    let (_, cr_remap) = vsdb_migrate::dagmap::migrate_handle_v17(&cr_raw).unwrap();
+    assert!(cr_remap.is_empty());
+    let (retagged_root, cr_remap2) = migrate_rawkey_v17::<Vec<CommitId>>(cr_ids[0]).unwrap();
+    assert!(cr_remap2.is_empty());
+    assert_eq!(
+        retagged_root.get(b"history"),
+        Some(vec![CommitId::from_raw(11), CommitId::from_raw(22)])
+    );
+    assert_eq!(
+        DagMapRawKey::<Vec<CommitId>>::from_meta(cr_ids[0])
+            .unwrap()
+            .get(b"history"),
+        Some(vec![CommitId::from_raw(11), CommitId::from_raw(22)])
+    );
 }
