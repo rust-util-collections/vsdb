@@ -238,9 +238,26 @@ fn non_utf8_environment_paths_select_requested_directories() {
         return;
     }
 
+    struct RemoveOnDrop(PathBuf);
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
     let scratch =
         env::temp_dir().join(format!("vsdb_non_utf8_{}", rand::random::<u128>()));
     fs::create_dir_all(&scratch).unwrap();
+    let _cleanup = RemoveOnDrop(scratch.clone());
+
+    // Filesystems such as APFS reject names that are not valid UTF-8.
+    if let Err(err) = fs::create_dir(scratch.join(OsStr::from_bytes(b"probe-\xff"))) {
+        eprintln!(
+            "skipping: {} rejects non-UTF-8 file names: {err}",
+            scratch.display()
+        );
+        return;
+    }
 
     let non_utf8_base = scratch.join(OsStr::from_bytes(b"base-\xff-dir"));
     let utf8_home = scratch.join("home");

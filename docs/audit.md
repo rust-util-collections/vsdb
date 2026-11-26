@@ -19,14 +19,6 @@
 
 ---
 
-### [LOW] tests: the non-UTF-8 path test fails on macOS
-- **Where**: `core/tests/configure_test.rs` (`non_utf8_environment_paths_select_requested_directories`)
-- **What**: The test runs on every Unix target and creates directories with invalid UTF-8 names. APFS and HFS+ reject those names with `EILSEQ`, so on native aarch64 macOS the child process panics in `Namespace::default_ns()` with `Io(Os { code: 92 })`.
-- **Why**: `cargo test --workspace --tests` (debug and release) and `make test` fail on a supported host architecture. Without `--no-fail-fast`, the later `vsdb_core` integration binaries and the remaining `make test` steps don't run. A failed run also leaves its `vsdb_non_utf8_*` scratch directory behind.
-- **Suggested fix**: Probe whether the filesystem accepts a non-UTF-8 name and skip with a message on `EILSEQ`, or restrict the test to Linux. Remove the scratch directory on every path. Verify on macOS and Linux.
-
----
-
 ### [LOW] tests: a second namespace test breaks the binary's single-configuration rule
 - **Where**: `core/tests/namespace_test.rs` (`failed_create_on_uncreatable_explicit_root_clears_pending_record`)
 - **What**: The file documents a single `#[test]` because `namespace_lifecycle` must call `vsdb_configure` first. The added test calls `Namespace::create_with` without configuring, which freezes the base at `VSDB_BASE_DIR` or `$HOME/.vsdb`. It sorts first, so with `--test-threads=1` `namespace_lifecycle` fails with `BaseDirFrozen` (reproduced); parallel runs race. Its exact-bytes check of the shared pending-create file also races the other test's creations.
