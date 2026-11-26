@@ -23,14 +23,14 @@
 
 ### [LOW] engine: lazy-delete auto-sweep threshold stays disabled
 - **Where**: `core/src/common/engine/mmdb.rs` (`mmdb_open`), mmdb `DbOptions::lazy_delete_compaction_threshold`
-- **What**: The default threshold is zero. Ordinary compaction or an explicit `compact()` can reclaim registered keys. A restart loses registrations for rows that compaction has yet to rewrite.
-- **Reason**: Enabling automatic sweeps rewrites populated levels and consumes I/O even on a store with no organic compaction debt. MMDB releases the DB mutex while building SSTs. Unreachable B+ tree pages do not affect reads, and operators can request compaction. [MMDB sweep semantics](https://github.com/rust-util-collections/mmdb/blob/e61902fd5c89510a86e42414ae14bc2d54f0af0c/src/db.rs#L2545-L2569)
+- **What**: The default threshold is zero, and VSDB v18 exposes no explicit compaction trigger (`Namespace::flush()` flushes memtables only). Registered keys are reclaimed during organic level compaction while the process remains open; a restart loses registrations for rows that compaction has yet to rewrite.
+- **Reason**: Enabling automatic sweeps rewrites populated levels and consumes I/O even on a store with no organic compaction debt. MMDB releases the DB mutex while building SSTs. Unreachable B+ tree pages do not affect reads and are dropped as subsequent writes trigger normal compaction. [MMDB sweep semantics](https://github.com/rust-util-collections/mmdb/blob/e61902fd5c89510a86e42414ae14bc2d54f0af0c/src/db.rs#L2545-L2569)
 
 ---
 
 ### [LOW] engine: budget decisions are not logged at startup
 - **Where**: `core/src/common/engine/mmdb.rs` (`MEM_BUDGET`)
-- **What**: Startup does not report which configuration source selected the budget. Applications can query the effective budget with `Namespace::mem_budget_bytes()` and the per-shard write buffer size with `Namespace::memory_usage()`.
+- **What**: Startup does not report which configuration source selected the budget. Public callers can inspect the derived cache capacities and per-shard write-buffer sizes via `Namespace::memory_usage()`.
 - **Reason**: `vsdb_core` has no logging facade and is a library; unconditional stderr output from a storage engine is worse than silence. Revisit if a workspace-wide logging facade is adopted.
 
 ---
