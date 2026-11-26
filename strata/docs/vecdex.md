@@ -10,10 +10,11 @@ traversal order at a single snapshot. Stored-row or engine errors return
 `Err`. On a failed search a filter may already have run on some candidates;
 discard any partial result collected by a callback. A scored live vector
 must have its reverse-key row. Filtered traversal stops before reading
-another adjacency row once it exhausts its visit limit. During mutations, an
-invalid stored adjacency row aborts the current staged chunk before its
-rows are published. Earlier completed chunks of `insert_batch` remain
-visible.
+another adjacency row once it exhausts its visit limit. During mutations, a
+stored adjacency row with a truncated ID or an ID outside the range
+allocated before the current chunk aborts that chunk before publication.
+Edges created within a chunk may refer to its freshly allocated nodes.
+Earlier completed chunks of `insert_batch` remain visible.
 
 
 ## Quick start

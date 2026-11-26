@@ -56,28 +56,21 @@ impl StagedRows {
         self.wiped = true;
     }
 
-    /// Read-your-writes point lookup: the overlay wins over `store`.
-    pub(crate) fn get_over(&self, store: &MapxRaw, key: &[u8]) -> Option<Vec<u8>> {
+    /// `Some` resolves the key in this overlay (including deletion or wipe).
+    /// `None` means the caller must read the committed map.
+    pub(crate) fn staged_value(&self, key: &[u8]) -> Option<Option<&[u8]>> {
         match self.rows.get(key) {
-            Some(Some(v)) => Some(v.clone()),
-            Some(None) => None,
-            None if self.wiped => None,
-            None => store.get(key),
+            Some(value) => Some(value.as_deref()),
+            None if self.wiped => Some(None),
+            None => None,
         }
     }
 
-    /// Projects an overlay value or a pinned backing row. A missing or wiped
-    /// key stays absent and storage/decoding failures reach the staged caller.
-    pub(crate) fn try_get_with<T>(
-        &self,
-        store: &MapxRaw,
-        key: &[u8],
-        decode: impl FnOnce(&[u8]) -> Result<T>,
-    ) -> Result<Option<T>> {
-        match self.rows.get(key) {
-            Some(value) => value.as_deref().map(decode).transpose(),
-            None if self.wiped => Ok(None),
-            None => store.try_get_with(key, decode),
+    /// Read-your-writes point lookup: the overlay wins over `store`.
+    pub(crate) fn get_over(&self, store: &MapxRaw, key: &[u8]) -> Option<Vec<u8>> {
+        match self.staged_value(key) {
+            Some(value) => value.map(<[u8]>::to_vec),
+            None => store.get(key),
         }
     }
 

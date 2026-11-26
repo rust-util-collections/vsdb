@@ -2365,8 +2365,10 @@ fn snapshot_scores_keep_filter_and_distance_order_and_skip_missing_rows() {
     for id in 0..70 {
         insert_at_layer(&mut idx, id, &[(id % 8) as f32, id as f32], 0);
     }
+    insert_at_layer(&mut idx, 70, &[0., 70.], 0);
+    assert!(idx.remove(&70).unwrap());
     let mut txn = Txn::<f32>::new(&idx.store, idx.state());
-    let mut neighbors = vec![0, 101, 41];
+    let mut neighbors = vec![0, 70, 41];
     neighbors.extend((1..70).rev());
     txn.set_neighbors(0, 0, &neighbors);
     txn.state.entry_point = Some(0);
@@ -2556,4 +2558,64 @@ fn corrupt_adjacency_aborts_staged_insert_before_publishing_rows() {
     assert!(idx.get(&50).is_none());
     assert!(idx.get(&51).is_none());
     assert_eq!(idx.store.iter().collect::<Vec<_>>(), before);
+}
+
+#[test]
+fn mutations_reject_unissued_neighbor_ids_even_if_the_chunk_allocates_them() {
+    for invalid in [1, 2, u64::MAX] {
+        let mut idx: VecDex<u64, L2> = VecDex::new(HnswConfig {
+            dim: 1,
+            ..Default::default()
+        })
+        .unwrap();
+        insert_at_layer(&mut idx, 0, &[0.], 0);
+        assert_eq!(idx.state().next_node_id, 1);
+        idx.store
+            .insert(adj_key(0, 0), encode_neighbors(&[invalid]));
+        let before = idx.store.iter().collect::<Vec<_>>();
+        // The reciprocal fast path below saturation copies the existing
+        // adjacency without expanding it first. It must check the same limit.
+        let mut txn = Txn::<f32>::new(&idx.store, idx.state());
+        txn.state.next_node_id = 3;
+        assert!(matches!(
+            txn.append_neighbor_and_prune(&L2, 0, 2, 0, 32, None),
+            Err(VsdbError::Corrupt { .. })
+        ));
+        assert!(matches!(
+            idx.insert(&50, &[1.]),
+            Err(VsdbError::Corrupt { .. })
+        ));
+        assert!(matches!(
+            idx.insert_batch(&[(50, vec![1.]), (51, vec![2.])]),
+            Err(VsdbError::Corrupt { .. })
+        ));
+        assert!(matches!(idx.remove(&0), Err(VsdbError::Corrupt { .. })));
+        assert!(matches!(
+            idx.insert(&0, &[1.]),
+            Err(VsdbError::Corrupt { .. })
+        ));
+        assert_eq!(idx.store.iter().collect::<Vec<_>>(), before);
+    }
+}
+
+#[test]
+fn missing_issued_neighbors_and_ids_staged_in_the_current_chunk_remain_valid() {
+    let mut idx: VecDex<u64, L2> = VecDex::new(HnswConfig {
+        dim: 1,
+        ..Default::default()
+    })
+    .unwrap();
+    insert_at_layer(&mut idx, 0, &[0.], 0);
+    insert_at_layer(&mut idx, 1, &[1.], 0);
+    assert!(idx.remove(&1).unwrap());
+    assert_eq!(idx.state().next_node_id, 2);
+    // ID one was issued and removed. Leave a stale reference in a touched row.
+    idx.store.insert(adj_key(0, 0), encode_neighbors(&[1]));
+    idx.insert_batch(&[(2, vec![2.]), (3, vec![3.]), (4, vec![4.])])
+        .unwrap();
+    assert_eq!(idx.len(), 4);
+    assert_eq!(idx.get(&1), None);
+    let hits = idx.search_ef(&[3.], 4, 4).unwrap();
+    assert_eq!(hits.len(), 4);
+    assert_eq!(hits[0].0, 3);
 }

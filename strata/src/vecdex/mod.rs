@@ -296,6 +296,8 @@ struct Txn<'a, S> {
     store: &'a MapxRaw,
     rows: StagedRows,
     state: GraphState,
+    /// Exclusive ID limit before this chunk allocated or linked any new nodes.
+    committed_next_node_id: u64,
     /// Per-operation decoded-vector cache: HNSW linking re-reads the
     /// same vectors many times across layers/heuristics (and across 64-item
     /// chunks inside `insert_batch`); decoding each row once removes the
@@ -332,13 +334,41 @@ impl AdjRead for SearchRows<'_, '_> {
     }
 }
 
+impl<S> Txn<'_, S> {
+    /// A committed row predates every ID allocated in this chunk. An overlay
+    /// row may already refer to nodes added earlier in the same chunk.
+    fn with_neighbor_row<T>(
+        &self,
+        key: &[u8],
+        decode: impl FnOnce(&[[u8; 8]]) -> T,
+    ) -> Result<Option<T>> {
+        let checked = |bytes: &[u8], next_node_id: u64| {
+            let (ids, tail) = bytes.as_chunks::<8>();
+            if !tail.is_empty() {
+                return Err(corrupt("invalid VecDex neighbor row width"));
+            }
+            if ids.iter().any(|id| u64::from_le_bytes(*id) >= next_node_id) {
+                return Err(corrupt("VecDex neighbor ID exceeds the issued range"));
+            }
+            Ok(decode(ids))
+        };
+        match self.rows.staged_value(key) {
+            Some(staged) => staged
+                .map(|bytes| checked(bytes, self.state.next_node_id))
+                .transpose(),
+            None => self
+                .store
+                .try_get_with(key, |bytes| checked(bytes, self.committed_next_node_id)),
+        }
+    }
+}
+
 impl<S> AdjRead for Txn<'_, S> {
     fn neighbors_into(&self, layer: u8, id: u64, out: &mut Vec<u64>) -> Result<()> {
         out.clear();
-        self.rows
-            .try_get_with(self.store, &adj_key(layer, id), |raw| {
-                hnsw::extend_neighbors(raw, out)
-            })?;
+        self.with_neighbor_row(&adj_key(layer, id), |ids| {
+            out.extend(ids.iter().map(|id| u64::from_le_bytes(*id)))
+        })?;
         Ok(())
     }
 
@@ -357,6 +387,7 @@ impl<'a, S: Scalar> Txn<'a, S> {
         Self {
             store,
             rows: StagedRows::new(),
+            committed_next_node_id: state.next_node_id,
             state,
             vec_cache: RefCell::new(cache),
         }
@@ -479,13 +510,7 @@ impl<'a, S: Scalar> Txn<'a, S> {
     ) -> Result<()> {
         let key = adj_key(layer, neighbor);
         let mut raw = self
-            .rows
-            .try_get_with(self.store, &key, |bytes| {
-                if !bytes.len().is_multiple_of(8) {
-                    return Err(corrupt("invalid VecDex neighbor row width"));
-                }
-                Ok(bytes.to_vec())
-            })?
+            .with_neighbor_row(&key, |ids| ids.as_flattened().to_vec())?
             .unwrap_or_default();
         if raw.len() / 8 < m_max {
             raw.extend_from_slice(&added.to_le_bytes());

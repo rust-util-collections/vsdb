@@ -49,9 +49,12 @@ and visit caps on exactly the same graph. Separate logical block acquisitions,
 distinct retained data allocations, process RSS and verified storage requests.
 [Query protocol and evidence](../../evaluations/v18-vecdex-v5/README.md)
 
-Staged insertion and pruning share adjacency parsing with search. On a
-missing or malformed row, trace the typed error to the mutation's public
-caller and verify the current staged chunk has published no partial edits.
+During mutation, check every ID in a touched committed adjacency against the
+exclusive `next_node_id` at chunk entry. An overlay adjacency may reference
+IDs already allocated inside the chunk. Stale references to previously issued
+IDs can have missing vector rows. Check both traversal and unpruned
+reciprocal-edge append paths. An invalid ID or partial ID encoding must
+return a typed error before the chunk publishes any row.
 
 ## Checklist
 
