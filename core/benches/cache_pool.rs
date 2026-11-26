@@ -1,18 +1,23 @@
 //! Measures SST-backed random point reads with a bounded engine-level cache pool.
-//! See `docs/storage.md` for cache sizing. The workloads are
+//! See `docs/storage.md#memory-sizing` for v18 cache sizing (`B / 8` per pool
+//! store). At `mem_budget_mb = 128`, each shared pool store has 16 MiB capacity
+//! versus 1 MiB per shard under an equal 16-shard private split:
 //!
 //! - **skew**: one hot map = one hot shard (`prefix % shards` routing
-//!   puts a collection entirely inside one shard). Working set ~10 MB
-//!   vs a 4 MB private per-shard cache: the pool should improve this
-//!   (the hot shard can use the whole engine slice).
-//! - **uniform**: 16 maps spread across shards, per-shard working set
-//!   below the private capacity: both configurations fully cache, so
-//!   any delta is pure pool overhead/contention — the regression gate.
+//!   puts a collection entirely inside one shard). Working set ~10.8 MiB
+//!   fits inside the 16 MiB shared pool store while exceeding a 1 MiB
+//!   private per-shard split.
+//! - **uniform**: 16 maps spread across shards (~0.68 MiB per map):
+//!   per-shard working set stays below the 1 MiB private split so both
+//!   configurations cache the working set and any delta reflects pool
+//!   overhead/contention.
 //!
 //! A/B protocol (two builds, criterion baselines):
-//!   1. set `block_cache: None` in `mmdb_open` (private split), run
+//!   1. replace `.with_block_cache(Some(Arc::clone(pool)))` in `mmdb_open` with
+//!      `.with_block_cache(None).with_block_cache_capacity((sizing.pool_store_capacity() / shards as u64) as usize)`
+//!      (equal private split), then run
 //!      `cargo bench -p vsdb_core --bench cache_pool -- --save-baseline private`
-//!   2. restore `block_cache: Some(pool.clone())`, run
+//!   2. restore `.with_block_cache(Some(Arc::clone(pool)))`, then run
 //!      `cargo bench -p vsdb_core --bench cache_pool -- --baseline private`
 
 #[path = "../tests/common/scratch.rs"]
@@ -35,7 +40,7 @@ fn setup() -> (MapxRaw, Vec<MapxRaw>) {
     // Pin the budget so cache capacity is the differentiator, not the
     // host's RAM.
     let dir = scratch::database_dir();
-    vsdb_core::vsdb_configure(vsdb_core::VsdbOptions::new(&dir).with_mem_budget_mb(64))
+    vsdb_core::vsdb_configure(vsdb_core::VsdbOptions::new(&dir).with_mem_budget_mb(128))
         .unwrap();
 
     let mut rng = rand::rng();
