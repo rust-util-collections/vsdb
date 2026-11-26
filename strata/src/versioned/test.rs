@@ -2334,6 +2334,26 @@ fn get_commit_with_parent() {
 }
 
 #[test]
+fn first_commit_parents_follow_the_branch_head() {
+    let mut m: VerMap<u32, u32> = VerMap::new();
+    let main = m.main_branch();
+    // Forked before any commit, so this branch has no head.
+    let headless = m.create_branch("headless", main).unwrap();
+    m.insert(main, &1, &10).unwrap();
+    let c1 = m.commit(main).unwrap();
+    assert!(m.get_commit(c1).unwrap().parents().is_empty());
+
+    let fork = m.create_branch("fork", main).unwrap();
+    m.insert(fork, &2, &20).unwrap();
+    let c2 = m.commit(fork).unwrap();
+    assert_eq!(m.get_commit(c2).unwrap().parents(), [c1]);
+
+    m.insert(headless, &3, &30).unwrap();
+    let c3 = m.commit(headless).unwrap();
+    assert!(m.get_commit(c3).unwrap().parents().is_empty());
+}
+
+#[test]
 fn get_commit_merge_commit() {
     let mut m: VerMap<u32, u32> = VerMap::new();
     let main = m.main_branch();

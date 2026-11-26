@@ -120,7 +120,12 @@ impl Commit {
         self.id
     }
 
-    /// Parent commit(s): empty for a branch's first commit, two for a merge.
+    /// Parent commit(s): the branch head the commit was created on, or the
+    /// target and source heads for a merge.
+    ///
+    /// The list is empty only for a commit created on a branch with no head.
+    /// A branch forked from a branch with commits starts at the source head,
+    /// so its first commit names that head as its parent.
     pub fn parents(&self) -> &[CommitId] {
         &self.parents
     }

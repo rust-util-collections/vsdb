@@ -11,14 +11,6 @@
 
 ## Open
 
-### [LOW] versioning docs: Commit::parents misdescribes a branch's first commit
-- **Where**: `strata/src/versioned/mod.rs` (`Commit::parents`)
-- **What**: The rustdoc says the parent list is empty for a branch's first commit. `create_branch` copies the source head, though, so the first commit on a fork names that head as its parent. Only a commit on a branch with no head has no parents.
-- **Why**: Callers that use `parents().is_empty()` to find where a branch starts get the wrong commit.
-- **Suggested fix**: Describe an empty list as a commit created on a branch that has no head.
-
----
-
 ### [LOW] docs: live docs name the engine release as MMDB v5
 - **Where**: `docs/storage.md`, `docs/v18.md`, `core/README.md`; labels in `AGENTS.md` and `docs/ai/review-core.md`
 - **What**: These docs say the runtime uses MMDB v5, but `Cargo.toml` pins `mmdb = "6.0.1"` (MANIFEST format 5). `docs/v18.md` links to the manifest that contradicts it. mmdb now versions its release line separately from its on-disk format.
