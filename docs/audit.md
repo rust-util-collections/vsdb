@@ -11,17 +11,6 @@
 
 ## Open
 
-### [LOW] VecDex tests: schema rejection guards have no effective test
-- **Where**: `strata/src/vecdex/test.rs` (`dyn_wire_tags_are_frozen`, `invalid_configs_are_rejected`); the guards are in `strata/src/vecdex/mod.rs` (`validate_store`)
-- **What**:
-  - The final assertion of `dyn_wire_tags_are_frozen` decodes `[9]` as a handle. That fails as a truncated postcard byte string before any schema row is read.
-  - `invalid_configs_are_rejected` fails on the schema binding before it reaches `config.validate()`.
-  - No test writes a binding-valid schema with an unknown metric tag, trailing bytes or an invalid stored configuration.
-- **Why**: A regression that decoded unknown metric tags, accepted trailing schema bytes or skipped stored-config validation would still pass the suite, although the VD6 compatibility rules rely on those rejections.
-- **Suggested fix**: Rewrite the three schema cases to go through `validate_store` with a recomputed binding, and drop the `[9]` assertion. Test-only change.
-
----
-
 ### [LOW] dagmap tests: two tests do not exercise their stated cases
 - **Where**: `strata/src/dagmap/raw/test.rs` (`prune_works_in_a_non_default_namespace`, `fallible_dagmap_operations_propagate_corrupt_rows_and_sst_errors`)
 - **What**: The first test prunes `head`, which is a root, so `prune` only fences and every assertion would hold without any prune. The second injects malformed rows but no SST or storage error.

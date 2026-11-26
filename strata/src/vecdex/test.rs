@@ -1432,6 +1432,17 @@ fn minimum_m_config() {
     assert_eq!(results.len(), 3);
 }
 
+// Replaces the schema row and returns the binding a handle for it carries.
+fn rebind_schema<K, D, S>(idx: &mut VecDex<K, D, S>, schema: &[u8]) -> [u8; 9]
+where
+    K: KeyEnDe,
+    D: DistanceMetric<S>,
+    S: Scalar,
+{
+    idx.store.insert(META_KEY, schema);
+    schema_binding(schema)
+}
+
 #[test]
 fn invalid_configs_are_rejected() {
     let ok = HnswConfig {
@@ -1465,8 +1476,22 @@ fn invalid_configs_are_rejected() {
             Err(VsdbError::InvalidConfig { .. })
         ));
 
+        // Store each bad configuration under a matching binding, so restores
+        // reach the stored-config validation.
         static_index.config = bad.clone();
         dynamic_index.config = bad;
+        let schema = static_index.schema().unwrap();
+        let binding = rebind_schema(&mut static_index, &schema);
+        assert!(matches!(
+            VecDexL2::<u32>::validate_store(&static_index.store, &binding),
+            Err(VsdbError::InvalidConfig { .. })
+        ));
+        let schema = dynamic_index.schema().unwrap();
+        let binding = rebind_schema(&mut dynamic_index, &schema);
+        assert!(matches!(
+            VecDexDyn::<u32>::validate_store(&dynamic_index.store, &binding),
+            Err(VsdbError::InvalidConfig { .. })
+        ));
         assert!(
             postcard::from_bytes::<VecDexL2<u32>>(
                 &postcard::to_allocvec(&static_index).unwrap()
@@ -1831,11 +1856,38 @@ fn dyn_wire_tags_are_frozen() {
         let restored: VecDexDyn<u32> = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(restored.metric(), metric);
     }
+}
 
-    // An out-of-range tag is refused outright (e.g. a meta written by
-    // a newer version with more metrics) instead of being
-    // mis-decoded as some existing variant's payload.
-    assert!(postcard::from_bytes::<VecDexDyn<u32>>(&[9]).is_err());
+#[test]
+fn schema_rows_with_a_matching_binding_are_still_validated() {
+    let cfg = HnswConfig {
+        dim: 2,
+        ..Default::default()
+    };
+    let mut idx = VecDexDyn::<u32>::new_with_metric(MetricKind::Cosine, cfg).unwrap();
+    let schema = idx.schema().unwrap();
+    // The metric parameters end the row; Cosine is the single tag byte 1.
+    assert_eq!(schema.last(), Some(&1));
+    let binding = rebind_schema(&mut idx, &schema);
+    assert!(VecDexDyn::<u32>::validate_store(&idx.store, &binding).is_ok());
+
+    // An out-of-range tag, e.g. from a newer version with more metrics, is
+    // refused instead of being decoded as an existing variant.
+    let mut unknown = schema.clone();
+    *unknown.last_mut().unwrap() = 9;
+    let binding = rebind_schema(&mut idx, &unknown);
+    assert!(matches!(
+        VecDexDyn::<u32>::validate_store(&idx.store, &binding),
+        Err(VsdbError::Encoding(_))
+    ));
+
+    let mut trailing = schema;
+    trailing.push(0);
+    let binding = rebind_schema(&mut idx, &trailing);
+    assert!(matches!(
+        VecDexDyn::<u32>::validate_store(&idx.store, &binding),
+        Err(VsdbError::Corrupt { detail }) if detail.contains("trailing")
+    ));
 }
 
 #[test]
