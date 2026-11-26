@@ -176,6 +176,13 @@ and record the disposition. Publish MMDB v5 to the registry before
 publishing VSDB v18 crates; use its exact reachable Git revision during
 joint development. Version 18 remains unreleased through this work.
 
+The reviewed production corrections cover the exclusive allocator floor,
+error returns during VecDex mutation, and checked leaf classes and bounds
+during a VerMap working edit. At `9733c19` the seven native x86_64
+workspace commands passed. The debug and release runs each passed 845
+top-level test cases, and 26 doctests passed. The receipt separates
+subprocess probes and ignored tests. [Native validation receipt](reviews/v18-mmdb-v5/validation.json)
+
 ## Native ARM macOS handoff
 
 Run this from the VSDB checkout on the target Mac. Use local writable
