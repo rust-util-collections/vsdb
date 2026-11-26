@@ -19,8 +19,9 @@ This major version introduces a distinct storage format. Stop v17 processes and 
 
 On the measured Linux/x86_64 workload, v18/v5 reduced default-namespace
 DagMap child p99 by 33.38% versus v18/v4. The same-graph warm VecDex
-upgrade comparison at `1300ad2` had 37.28% higher p99. Warm B+ tree
-point and bounded scan p99 also increased in the original matched fixture.
+upgrade comparison with the selected profile at `6854273` had 37.48% higher
+p99. Stock B+ tree point hit and miss p99 rose 12.03% and 11.83% on the
+32,768-key warm fixture. The scan p99 comparison had high control variation.
 The reports give control variation, request sizes, and later candidate trials.
 [Publication measurements](docs/evaluations/v18-publication/README.md) · [VecDex queries](docs/evaluations/v18-vecdex-v5/README.md) · [B+ tree controls](docs/evaluations/v18-tree-v5/README.md)
 

@@ -47,11 +47,15 @@ v4-backed control. The tested header-reuse scan improved p99 by 9.40%;
 the separate borrowed-leaf prototype cut requested allocation from about
 1.7 KiB to under 80 bytes per lookup but improved hit/miss p99 by only
 3.37%/4.36%. Both missed their preregistered latency criteria. Keep the
-current tree implementation. [Tree and upgrade measurements](../evaluations/v18-tree-v5/README.md) · [Leaf projection trial](../evaluations/v18-tree-v5/projection/README.md)
+current tree implementation. The final stock v4/v5 comparison at `6854273`
+confirmed 12.03% higher hit p99 and 11.83% higher miss p99. Scan throughput
+was 16.82% lower; the 32.83% p99 cost stayed within the scan's 41.18% A/A
+variation. [Final stock trial](../evaluations/v18-tree-v5/stock/README.md) · [Tree and upgrade measurements](../evaluations/v18-tree-v5/README.md) · [Leaf projection trial](../evaluations/v18-tree-v5/projection/README.md)
 
 On the measured 8,192-node warm HNSW graph, v4-backed v18 had median
-run p99 of 187.24 µs and the checked scalar v5 implementation at
-`1300ad2` had 254.77 µs, a **37.28% paired regression**. Each of five
+run p99 of 184.57 µs and the checked scalar v5 implementation with the
+selected buffer profile at `6854273` had 253.38 µs, a **37.48% paired
+regression** (v4/v4 maximum 22.19%). Each of five
 pairs returned identical ordered results. Width 32 acquired fewer blocks
 but missed the complete-query gate. Width eight's larger independent
 repeat gained 9.15%, below the 10% target and its 19.29% control spread.
