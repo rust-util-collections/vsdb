@@ -309,6 +309,18 @@ fn observe(bytes: &[u8], max: &mut u64) {
         }
     }
 }
+// save_instance_meta accepts application-defined values. The canonical
+// filename identifies the locally issued map independently of its payload.
+fn saved_instance_prefix(entry: &fs::DirEntry) -> Option<u64> {
+    let raw = entry.file_name();
+    let name = raw.to_str()?;
+    (name.len() == 16
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+    .then(|| u64::from_str_radix(name, 16).expect("sixteen hex digits"))
+}
+
 fn scan_files(dir: &Path, instance_meta: bool, max: &mut u64) -> Result<()> {
     if !dir.try_exists()? {
         return Ok(());
@@ -323,13 +335,9 @@ fn scan_files(dir: &Path, instance_meta: bool, max: &mut u64) -> Result<()> {
             } else if e.file_type()?.is_file() {
                 if d == dir
                     && instance_meta
-                    && let Some(name) = e.file_name().to_str()
-                    && name.len() == 16
-                    && name
-                        .bytes()
-                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                    && let Some(prefix) = saved_instance_prefix(&e)
                 {
-                    *max = (*max).max(u64::from_str_radix(name, 16).expect("hex prefix"));
+                    *max = (*max).max(prefix);
                 }
                 let mut file = File::open(e.path())?;
                 let mut carry = 0;

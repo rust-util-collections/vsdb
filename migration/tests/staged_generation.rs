@@ -260,3 +260,117 @@ fn destination_parent_alias_opens_the_same_registered_namespace() {
     child("first", &alias.join("v5"));
     child("reopen", &real.join("v5"));
 }
+
+#[test]
+fn stale_ceiling_rejects_an_external_row_and_an_empty_saved_map() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (source, external) = fixture(tmp.path());
+    let output = tmp.path().join("generation");
+    let ceiling = source.join("__SYSTEM__/__prefix_ceiling__");
+    let meta_dir = external.join("__SYSTEM__/__instance_meta__");
+
+    // The visible row prefix alone proves the exclusive boundary stale.
+    fs::remove_file(meta_dir.join(format!("{PREFIX:016x}"))).unwrap();
+    fs::write(&ceiling, PREFIX.to_le_bytes()).unwrap();
+    let check = |expected_id: u64| {
+        let old_source = inventory(&source);
+        let old_external = inventory(&external);
+        let error = stage_universe(&source, &output).unwrap_err();
+        assert!(matches!(error, vsdb::VsdbError::Corrupt { .. }));
+        assert!(
+            error.to_string().contains(&expected_id.to_string()),
+            "{error}"
+        );
+        assert!(!output.exists());
+        assert_eq!(inventory(&source), old_source);
+        assert_eq!(inventory(&external), old_external);
+    };
+    check(PREFIX);
+
+    // This allocated but empty external map has no row to discover. Its
+    // saved instance filename owns its ID, regardless of the payload schema.
+    fs::write(&ceiling, FLOOR.to_le_bytes()).unwrap();
+    fs::write(meta_dir.join(format!("{FLOOR:016x}")), b"opaque metadata").unwrap();
+    check(FLOOR);
+}
+
+#[test]
+fn stored_ceiling_does_not_treat_opaque_bytes_as_allocated_local_maps() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (source, external) = fixture(tmp.path());
+    let output = tmp.path().join("generation");
+    let foreign = [
+        b"VSMAPX02".as_slice(),
+        &u64::MAX.to_le_bytes(),
+        &1u64.to_le_bytes(),
+    ]
+    .concat();
+    let raw = postcard::to_allocvec(&foreign).unwrap();
+    fs::write(source.join("__CUSTOM__/foreign-handle"), &raw).unwrap();
+    fs::write(
+        external
+            .join("__SYSTEM__/__instance_meta__")
+            .join(format!("{:016x}", PREFIX + 2)),
+        &raw,
+    )
+    .unwrap();
+    let db = mmdb_v4::DB::open(
+        mmdb_v4::DbOptions {
+            prefix_len: 8,
+            ..Default::default()
+        },
+        external.join("mmdb/shard_00"),
+    )
+    .unwrap();
+    db.put(&physical(&raw), &raw).unwrap();
+    db.close().unwrap();
+    stage_universe(&source, &output).unwrap();
+    let floor = fs::read(output.join("base/__SYSTEM__/__prefix_ceiling__")).unwrap();
+    assert_eq!(floor, FLOOR.to_le_bytes());
+    let db = mmdb::DB::open(
+        vsdb_core::common::mmdb_shard_format_options().with_create_if_missing(false),
+        output.join("placements/0000000000000001/mmdb/shard_00"),
+    )
+    .unwrap();
+    assert_eq!(db.get(&physical(&raw)).unwrap(), Some(raw));
+}
+
+#[test]
+fn pending_partial_engine_also_proves_a_stale_allocator_ceiling() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (source, external) = fixture(tmp.path());
+    let pending = source.join("__NAMESPACES__/0000000000000002");
+    fs::create_dir_all(pending.join("__SYSTEM__")).unwrap();
+    fs::write(
+        pending.join("__SYSTEM__/__initializing__"),
+        [
+            b"VSENG018".as_slice(),
+            &ID.to_le_bytes(),
+            &2u64.to_le_bytes(),
+            &2u32.to_le_bytes(),
+        ]
+        .concat(),
+    )
+    .unwrap();
+    let db = mmdb_v4::DB::open(
+        mmdb_v4::DbOptions {
+            prefix_len: 8,
+            ..Default::default()
+        },
+        pending.join("mmdb/shard_00"),
+    )
+    .unwrap();
+    let key = [FLOOR.to_le_bytes().as_slice(), b"pending-row"].concat();
+    db.put(&key, b"not yet published").unwrap();
+    db.close().unwrap();
+    assert!(!pending.join("mmdb/shard_01").exists());
+    let source_before = inventory(&source);
+    let ext_before = inventory(&external);
+    let destination = tmp.path().join("generation");
+    let error = stage_universe(&source, &destination).unwrap_err();
+    assert!(matches!(error, vsdb::VsdbError::Corrupt { .. }));
+    assert!(error.to_string().contains(&FLOOR.to_string()));
+    assert!(!destination.exists());
+    assert_eq!(inventory(&source), source_before);
+    assert_eq!(inventory(&external), ext_before);
+}

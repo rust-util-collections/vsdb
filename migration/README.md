@@ -149,4 +149,12 @@ namespace so v18 can complete shard creation. An orphan established record
 or populated namespace directory requires recovery of the missing registration.
 When the allocator file is missing, reconstruction includes the default shard's
 historical ceiling, namespace data, instance metadata filenames and embedded
-handle bytes.
+handle bytes. Before publishing any generation, the exporter requires the
+exclusive allocator ceiling to exceed every visible physical row prefix
+and every canonical saved-instance filename, including empty maps and
+external or initializing namespaces. A contradiction aborts publication.
+Given a persisted ceiling, arbitrary application bytes are opaque: only
+the application can identify embedded handles, their owning universe and
+types. Validate those handles during the typed conversion and cutover.
+The conservative embedded-byte scan remains available when reconstructing
+a missing ceiling on the working copy.

@@ -1,9 +1,9 @@
 //! Offline physical conversion. The only public rename publishes a complete
 //! directory containing the base and all explicitly placed namespace roots.
-use super::v4_iterator_status;
 use super::{
-    HEADER, PROGRESS, Plan, REG, Record, Registry, State, check_regular, migrate_universe,
-    mmdb_err, physical_path, read_id, registry,
+    CEILING, HEADER, PROGRESS, Plan, REG, Record, Registry, State, check_regular, migrate_universe,
+    mmdb_err, physical_path, read_id, read_metadata, registry, saved_instance_prefix,
+    v4_iterator_status,
 };
 use crate::corrupt;
 use sha3::{Digest, Keccak256};
@@ -73,7 +73,33 @@ fn engine_file(name: &str) -> bool {
         || name.strip_suffix(".sst").is_some_and(numbered)
 }
 
-fn export_shard(staged_copy: &Path) -> Result<()> {
+fn check_issued_prefix(prefix: u64, ceiling: u64) -> Result<()> {
+    if prefix >= ceiling {
+        return Err(corrupt(format!(
+            "issued map prefix {prefix} reaches or exceeds exclusive allocator ceiling {ceiling}"
+        )));
+    }
+    Ok(())
+}
+
+fn check_saved_prefixes(root: &Path, ceiling: u64) -> Result<()> {
+    let entries = match fs::read_dir(root.join("__SYSTEM__/__instance_meta__")) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    for entry in entries {
+        let entry = entry?;
+        if entry.file_type()?.is_file()
+            && let Some(prefix) = saved_instance_prefix(&entry)
+        {
+            check_issued_prefix(prefix, ceiling)?;
+        }
+    }
+    Ok(())
+}
+
+fn export_shard(staged_copy: &Path, ceiling: u64) -> Result<()> {
     let v4 = mmdb_v4::DB::open_read_only_with_options(
         mmdb_v4::DbOptions {
             num_levels: 7,
@@ -92,10 +118,20 @@ fn export_shard(staged_copy: &Path) -> Result<()> {
             ..Default::default()
         })
         .map_err(mmdb_err)?;
+    // Short reserved keys include the one-byte v4 fence and the old
+    // default-shard allocator record. Only the leading eight bytes of a
+    // user row are its owner. Suffixes and values have application schemas.
+    let mut highest_prefix = 0;
     let ingested = target
-        .ingest_sorted(stream.by_ref().inspect(|(k, v)| expected.observe(k, v)))
+        .ingest_sorted(stream.by_ref().inspect(|(key, value)| {
+            if let Some(bytes) = key.get(..8) {
+                highest_prefix = highest_prefix.max(u64::from_le_bytes(bytes.try_into().unwrap()));
+            }
+            expected.observe(key, value);
+        }))
         .map_err(v5_error)?;
     v4_iterator_status(&stream)?;
+    check_issued_prefix(highest_prefix, ceiling)?;
     drop(stream);
     v4.close().map_err(mmdb_err)?;
     drop(v4);
@@ -507,13 +543,19 @@ fn stage(
     completed(Step::Copied)?;
     bind_placements(&base, temp.path(), &mut plan)?;
     migrate_universe(&base)?;
+    let ceiling = u64::from_le_bytes(
+        read_metadata(base.join(CEILING))?
+            .try_into()
+            .map_err(|_| corrupt("invalid staged prefix ceiling"))?,
+    );
     for (_, relative, shards) in &roots {
         let dst = temp.path().join(relative);
+        check_saved_prefixes(&dst, ceiling)?;
         for n in 0..*shards {
             let relative = format!("mmdb/shard_{n:02}");
             let copy = dst.join(&relative);
             if copy.join("CURRENT").is_file() {
-                export_shard(&copy)?;
+                export_shard(&copy, ceiling)?;
                 completed(Step::Shard)?;
             } else if copy.try_exists()? {
                 reset_unanchored_copy(&copy)?;
@@ -720,12 +762,14 @@ mod tests {
         )
         .unwrap();
         let value = [0xc5; 2048];
+        let prefix = super::super::FLOOR;
+        let key = |index: u64| [prefix.to_le_bytes(), index.to_be_bytes()].concat();
         for index in 0u64..512 {
-            old.put(&index.to_be_bytes(), &value).unwrap();
+            old.put(&key(index), &value).unwrap();
         }
         old.close().unwrap();
         drop(old);
-        export_shard(&shard).unwrap();
+        export_shard(&shard, prefix + 1).unwrap();
         let size: u64 = fs::read_dir(&shard)
             .unwrap()
             .filter_map(|entry| {
@@ -749,7 +793,7 @@ mod tests {
                 .unwrap()
                 > 0
         );
-        assert_eq!(db.get(&511u64.to_be_bytes()).unwrap().unwrap(), value);
+        assert_eq!(db.get(&key(511)).unwrap().unwrap(), value);
         assert!(
             size > 0 && size < (512 * value.len() / 4) as u64,
             "staged SST bytes: {size}"
