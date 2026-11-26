@@ -41,7 +41,13 @@ with four immutable slots. At the 2 GiB/16-shard fixture the larger
 buffer met the measured 1 GiB screen in both placements, including the
 separate all-active read/write fixture with a populated shared cache.
 Record remaining L0/immutable work alongside the measured throughput.
-[Real adapter evidence](../evaluations/v18-adapter/README.md) · [Units and application sizing](shared-mem-pool.md)
+In the independent stock v4 → v5 repeat, hot-shard saturation rose 59.53%
+and hot foreground p99 fell 95.88%. With all 16 shards active, paced
+small-put p99 fell 73.64%. At saturation, aggregate byte throughput changed
+by −2.26%, within the 14.75% baseline spread, while successful foreground
+small puts/s fell **31.63%** across all five pairs. Bulk and foreground
+throughput must be reported separately. These data describe the specified
+workload and finite interval. [Real adapter evidence](../evaluations/v18-adapter/README.md) · [Units and application sizing](shared-mem-pool.md)
 
 For warm B+ tree lookup the ordinary upgraded path was slower than the
 v4-backed control. The tested header-reuse scan improved p99 by 9.40%;
