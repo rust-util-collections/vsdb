@@ -229,11 +229,13 @@ impl<K, V> VerMapReader<K, V> {
     pub fn at(&self, id: CommitId) -> Result<Snapshot<K, V>> {
         use super::store::{COMMIT, row};
         let [lease] = self.config.lease(&self.raw, |_| {
-            let raw = self
+            let commit = self
                 .raw
-                .get(row(COMMIT, id.raw()))
+                .try_get_with(row(COMMIT, id.raw()), |raw| {
+                    super::Commit::parse(id, raw)
+                })?
                 .ok_or(crate::VsdbError::CommitNotFound { commit_id: id })?;
-            Ok([super::Commit::parse(id, &raw)?.root])
+            Ok([commit.root])
         })?;
         Ok(Snapshot {
             lease,

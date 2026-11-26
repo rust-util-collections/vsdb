@@ -1531,3 +1531,104 @@ fn failed_clone_in_wipes_copied_destination_prefix() {
     crate::Namespace::close_by_id(dst_id).unwrap();
     crate::Namespace::destroy(dst_id).unwrap();
 }
+
+#[test]
+fn fallible_slotdex_operations_propagate_corrupt_rows_and_sst_errors() {
+    use std::fs;
+
+    // 1. Malformed level-0 count row returns VsdbError::Corrupt instead of panicking.
+    let mut sd = SlotDex64::<u64>::new(2, false).unwrap();
+    sd.insert(5, 100).unwrap();
+    sd.store.insert(level_key(0, &5u64), [0x01; 3]);
+    assert!(matches!(sd.insert(5, 200), Err(VsdbError::Corrupt { .. })));
+    assert!(matches!(
+        sd.insert_batch([(5, 200)]),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    assert!(matches!(sd.remove(5, &100), Err(VsdbError::Corrupt { .. })));
+
+    // 2. SST block checksum corruption surfaces as VsdbError::Storage.
+    fn pseudo_key(seed: u64, words: u64) -> Vec<u8> {
+        let mut s = seed.wrapping_add(0x9e3779b97f4a7c15);
+        (0..words)
+            .flat_map(|_| {
+                s = s.wrapping_add(0x9e3779b97f4a7c15);
+                let mut z = s;
+                z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
+                (z ^ (z >> 31)).to_le_bytes()
+            })
+            .collect()
+    }
+
+    let ns = crate::Namespace::create_with(crate::NamespaceOpts {
+        shards: 1,
+        mem_budget_mb: Some(64),
+        ..Default::default()
+    })
+    .unwrap();
+    let ns_id = ns.id();
+    let ns_path = ns.path().to_path_buf();
+
+    let mut sd_meta = SlotDex64::<Vec<u8>>::new_in(&ns, 4, false).unwrap();
+    let meta_key = pseudo_key(10, 256);
+    sd_meta.insert(0, meta_key.clone()).unwrap();
+    let meta_id = sd_meta.save_meta().unwrap();
+
+    let mut sd_sst = SlotDex64::<Vec<u8>>::new_in(&ns, 4, false).unwrap();
+    let target_key = pseudo_key(1, 2_560);
+    let tail_key = pseudo_key(2, 2_560);
+    sd_sst.insert(0, target_key.clone()).unwrap();
+    sd_sst.insert(u64::MAX, tail_key).unwrap();
+    let id = sd_sst.save_meta().unwrap();
+    ns.flush();
+    drop(sd_meta);
+    drop(sd_sst);
+    drop(ns);
+    crate::Namespace::close_by_id(ns_id).unwrap();
+
+    let sst = fs::read_dir(ns_path.join("mmdb/shard_00"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|ext| ext == "sst"))
+        .unwrap();
+    let mut bytes = fs::read(&sst).unwrap();
+    for needle in [&meta_key[..32], &target_key[..32]] {
+        let offset = bytes.windows(32).position(|w| w == needle).unwrap();
+        bytes[offset + 8] ^= 0x01;
+    }
+    fs::write(&sst, bytes).unwrap();
+
+    assert!(matches!(
+        SlotDex64::<Vec<u8>>::from_meta(meta_id),
+        Err(VsdbError::Storage {
+            kind: crate::StorageErrorKind::Corruption,
+            ..
+        })
+    ));
+
+    let mut sd_sst = SlotDex64::<Vec<u8>>::from_meta(id).unwrap();
+    for (idx, res) in [
+        sd_sst.insert(0, target_key.clone()),
+        sd_sst.insert_batch([(0, target_key.clone())]),
+        sd_sst.remove(0, &target_key),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert!(
+            matches!(
+                res,
+                Err(VsdbError::Storage {
+                    kind: crate::StorageErrorKind::Corruption,
+                    ..
+                })
+            ),
+            "case {idx}: got {res:?}"
+        );
+    }
+    drop(sd_sst);
+
+    crate::Namespace::close_by_id(ns_id).unwrap();
+    crate::Namespace::destroy(ns_id).unwrap();
+}

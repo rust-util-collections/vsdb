@@ -148,12 +148,6 @@ impl BranchHead {
 }
 
 impl Commit {
-    #[inline]
-    pub(super) fn from_row(id: CommitId, bytes: Option<Vec<u8>>) -> Result<Self> {
-        let raw = bytes.ok_or(VsdbError::CommitNotFound { commit_id: id })?;
-        Self::parse(id, &raw)
-    }
-
     pub(super) fn bytes(&self) -> Vec<u8> {
         let mut raw = Vec::with_capacity(20 + 8 * self.parents.len());
         raw.extend_from_slice(&self.root.to_le_bytes());

@@ -48,15 +48,8 @@ pub(super) type NodeSeeds<'a> = Box<dyn Iterator<Item = Result<u64>> + 'a>;
 /// search paths) and by the staged transaction (for mutation paths,
 /// where reads must observe the operation's own uncommitted writes).
 pub(crate) trait AdjRead {
-    fn neighbors_into(&self, layer: u8, id: u64, out: &mut Vec<u64>) -> Result<()> {
-        out.clear();
-        if let Some(row) = self.adj_row(&adj_key(layer, id)) {
-            extend_neighbors(&row, out)?;
-        }
-        Ok(())
-    }
+    fn neighbors_into(&self, layer: u8, id: u64, out: &mut Vec<u64>) -> Result<()>;
 
-    fn adj_row(&self, key: &[u8]) -> Option<Vec<u8>>;
     /// Supplies live-node seeds for a read-only search that exhausts a component.
     /// Mutation searches retain the ordinary graph-only construction policy.
     fn fallback_nodes(&self) -> Result<Option<NodeSeeds<'_>>> {
@@ -65,9 +58,10 @@ pub(crate) trait AdjRead {
 }
 
 impl AdjRead for MapxRaw {
-    #[inline]
-    fn adj_row(&self, key: &[u8]) -> Option<Vec<u8>> {
-        self.get(key)
+    fn neighbors_into(&self, layer: u8, id: u64, out: &mut Vec<u64>) -> Result<()> {
+        out.clear();
+        self.try_get_with(adj_key(layer, id), |raw| extend_neighbors(raw, out))?;
+        Ok(())
     }
 }
 

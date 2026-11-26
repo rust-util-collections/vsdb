@@ -986,3 +986,29 @@ fn partial_markers_and_intermediate_destroy_preserve_merged_state_and_retry() {
     assert_merged_view(&recovered2);
     assert_merged_view(&survivor2);
 }
+
+#[test]
+fn fallible_dagmap_operations_propagate_corrupt_rows_and_sst_errors() {
+    let mut root = DagMapRaw::new(None);
+    let mut head = DagMapRaw::new(Some(&mut root));
+    let head_id = head.save_meta().unwrap();
+
+    // Malformed data row tag (neither [0] nor [1, ..]) returns Corrupt on prune.
+    head.store.insert([2, b'k'], [9, b'v']);
+    assert!(matches!(head.prune(), Err(VsdbError::Corrupt { .. })));
+
+    // Malformed edge value width returns Corrupt on prune and clone_in.
+    let mut head = DagMapRaw::from_meta(head_id).unwrap();
+    head.store.remove([2, b'k']);
+    head.store.insert(edge_key(77), [1, 2, 3]);
+    let dst = Namespace::create().unwrap();
+    let dst_id = dst.id();
+    assert!(matches!(
+        head.clone_in(&dst),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    assert!(matches!(head.prune(), Err(VsdbError::Corrupt { .. })));
+    drop(dst);
+    Namespace::close_by_id(dst_id).unwrap();
+    Namespace::destroy(dst_id).unwrap();
+}

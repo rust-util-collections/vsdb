@@ -2504,9 +2504,6 @@ fn filtered_visit_limit_skips_the_final_adjacency_read_and_bounds_initial_seeds(
         cap: u64,
     }
     impl AdjRead for CapRows {
-        fn adj_row(&self, _: &[u8]) -> Option<Vec<u8>> {
-            None
-        }
         fn neighbors_into(&self, _: u8, node: u64, out: &mut Vec<u64>) -> Result<()> {
             assert!(node < self.cap);
             self.expanded.set(self.expanded.get() + 1);
@@ -2882,4 +2879,83 @@ fn remove_rejects_missing_node_rows_and_inconsistent_zero_count_entry_point() {
     idx.store.insert(STATE_KEY, saved_state);
     assert!(idx.remove(&1).unwrap());
     assert_eq!(idx.len(), 1);
+}
+
+#[test]
+fn fallible_operations_propagate_sst_corruption_without_panicking() {
+    use std::fs;
+
+    fn pseudo_vec(seed: u64, dim: usize) -> Vec<f32> {
+        (0..dim)
+            .map(|i| {
+                let n = seed * 64 + i as u64;
+                let mixed = n
+                    .wrapping_add(0x9e3779b97f4a7c15)
+                    .wrapping_mul(0xbf58476d1ce4e5b9);
+                ((mixed >> 40) as f32) * 0.000_1 + 1.0
+            })
+            .collect()
+    }
+
+    let ns = crate::Namespace::create_with(crate::NamespaceOpts {
+        shards: 1,
+        mem_budget_mb: Some(64),
+        ..Default::default()
+    })
+    .unwrap();
+    let ns_id = ns.id();
+    let mut idx = VecDex::<Vec<u8>, L2>::new_in(
+        &ns,
+        HnswConfig {
+            dim: 64,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let target_key: Vec<u8> = (0..128u64)
+        .flat_map(|i| {
+            i.wrapping_mul(0x94d049bb133111eb)
+                .wrapping_add(0x123456789abcdef0)
+                .to_le_bytes()
+        })
+        .collect();
+    idx.insert(&target_key, &pseudo_vec(1, 64)).unwrap();
+    for s in 2..40u64 {
+        idx.insert(&s.to_le_bytes().to_vec(), &pseudo_vec(s, 64))
+            .unwrap();
+    }
+    let id = idx.save_meta().unwrap();
+    ns.flush();
+
+    let sst = fs::read_dir(ns.path().join("mmdb/shard_00"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|ext| ext == "sst"))
+        .unwrap();
+    let mut bytes = fs::read(&sst).unwrap();
+    let offset = bytes
+        .windows(32)
+        .position(|w| w == &target_key[..32])
+        .unwrap();
+    bytes[offset + 8] ^= 0x01;
+    fs::write(&sst, bytes).unwrap();
+
+    for res in [
+        idx.remove(&target_key).map(|_| ()),
+        idx.insert(&target_key, &pseudo_vec(99, 64)),
+        idx.compact(),
+    ] {
+        assert!(matches!(
+            res,
+            Err(VsdbError::Storage {
+                kind: crate::StorageErrorKind::Corruption,
+                ..
+            })
+        ));
+    }
+    let _ = id;
+    drop(idx);
+    drop(ns);
+    crate::Namespace::close_by_id(ns_id).unwrap();
+    crate::Namespace::destroy(ns_id).unwrap();
 }

@@ -17,7 +17,7 @@
 
 use std::{collections::BTreeMap, ops::Bound};
 
-use vsdb_core::basic::mapx_raw::MapxRaw;
+use vsdb_core::basic::mapx_raw::{MapxRaw, MapxRawIter};
 
 use super::error::Result;
 
@@ -67,6 +67,7 @@ impl StagedRows {
     }
 
     /// Read-your-writes point lookup: the overlay wins over `store`.
+    #[cfg(test)]
     pub(crate) fn get_over(&self, store: &MapxRaw, key: &[u8]) -> Option<Vec<u8>> {
         match self.staged_value(key) {
             Some(value) => value.map(<[u8]>::to_vec),
@@ -74,9 +75,59 @@ impl StagedRows {
         }
     }
 
+    /// Fallible read-your-writes point lookup preserving engine storage errors.
+    pub(crate) fn try_get_over(
+        &self,
+        store: &MapxRaw,
+        key: &[u8],
+    ) -> Result<Option<Vec<u8>>> {
+        match self.staged_value(key) {
+            Some(value) => Ok(value.map(<[u8]>::to_vec)),
+            None => store.try_get_with(key, |raw| Ok(raw.to_vec())),
+        }
+    }
+
+    /// Fallible read-your-writes existence check preserving engine storage errors.
+    pub(crate) fn try_contains_over(&self, store: &MapxRaw, key: &[u8]) -> Result<bool> {
+        match self.staged_value(key) {
+            Some(value) => Ok(value.is_some()),
+            None => store.try_contains_key(key),
+        }
+    }
+
+    /// Fallible read-your-writes prefix scan preserving engine storage errors.
+    pub(crate) fn try_scan_prefix<'a>(
+        &'a self,
+        store: &'a MapxRaw,
+        prefix: &[u8],
+    ) -> Result<TryMergeScan<'a>> {
+        let lo = prefix.to_vec();
+        let hi = prefix_successor(prefix);
+        let disk = if self.wiped {
+            None
+        } else {
+            let disk_hi = match &hi {
+                Some(h) => Bound::Excluded(h.clone()),
+                None => Bound::Unbounded,
+            };
+            Some(store.try_range((Bound::Included(lo.clone()), disk_hi))?)
+        };
+        let over_hi = match &hi {
+            Some(h) => Bound::Excluded(h.clone()),
+            None => Bound::Unbounded,
+        };
+        let over = self.rows.range((Bound::Included(lo), over_hi));
+        Ok(TryMergeScan {
+            disk,
+            disk_peek: None,
+            over: over.peekable(),
+        })
+    }
+
     /// Read-your-writes prefix scan: merges the committed rows with the
     /// overlay (staged inserts appear, staged deletes disappear), in key
     /// order.
+    #[cfg(test)]
     pub(crate) fn scan_prefix<'a>(
         &'a self,
         store: &'a MapxRaw,
@@ -144,7 +195,55 @@ pub(crate) fn prefix_successor(prefix: &[u8]) -> Option<Vec<u8>> {
     None
 }
 
+pub(crate) struct TryMergeScan<'a> {
+    disk: Option<MapxRawIter<'a>>,
+    disk_peek: Option<(Vec<u8>, Vec<u8>)>,
+    over: std::iter::Peekable<
+        std::collections::btree_map::Range<'a, Vec<u8>, Option<Vec<u8>>>,
+    >,
+}
+
+impl TryMergeScan<'_> {
+    fn fill_disk(&mut self) -> Result<()> {
+        if self.disk_peek.is_none()
+            && let Some(cursor) = self.disk.as_mut()
+        {
+            if let Some((k, v)) = cursor.try_step_next()? {
+                self.disk_peek = Some((k.to_vec(), v.to_vec()));
+            } else {
+                self.disk = None;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn try_next(&mut self) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
+        loop {
+            self.fill_disk()?;
+            let take_over = match (&self.disk_peek, self.over.peek()) {
+                (None, None) => return Ok(None),
+                (Some(_), None) => false,
+                (None, Some(_)) => true,
+                (Some((dk, _)), Some((ok, _))) => *ok <= dk,
+            };
+            if take_over {
+                let (ok, ov) = self.over.next().expect("peeked");
+                if self.disk_peek.as_ref().is_some_and(|(dk, _)| dk == ok) {
+                    self.disk_peek = None;
+                }
+                match ov {
+                    Some(v) => return Ok(Some((ok.clone(), v.clone()))),
+                    None => continue,
+                }
+            } else {
+                return Ok(self.disk_peek.take());
+            }
+        }
+    }
+}
+
 /// Ordered merge of the committed stream with the overlay stream.
+#[cfg(test)]
 struct MergeScan<'a, D>
 where
     D: Iterator<Item = (Vec<u8>, Vec<u8>)>,
@@ -155,6 +254,7 @@ where
     >,
 }
 
+#[cfg(test)]
 impl<D> Iterator for MergeScan<'_, D>
 where
     D: Iterator<Item = (Vec<u8>, Vec<u8>)>,

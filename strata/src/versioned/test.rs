@@ -5878,3 +5878,40 @@ fn failed_publish_with_failing_ref_restore_preserves_live_staged_data_and_heals(
     assert_eq!(map.get(main, &3_000).unwrap(), Some(vec![11u8; 64]));
     map.verify_and_gc().unwrap();
 }
+
+#[test]
+fn fallible_branch_and_reader_operations_propagate_corrupt_rows() {
+    let mut map = VerMap::<u32, u32>::new();
+    let main = map.main_branch();
+    map.insert(main, &1, &10).unwrap();
+    let c1 = map.commit(main).unwrap();
+    let feat = map.create_branch("feat", main).unwrap();
+
+    // Malformed BY_NAME row returns Corrupt on create_branch instead of panicking.
+    let by_name_key = super::store::by_name("broken");
+    map.tree.nodes.insert(&by_name_key, [0xff; 3]);
+    assert!(matches!(
+        map.create_branch("broken", main),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    map.tree.nodes.remove(&by_name_key);
+
+    // Invalid UTF-8 in NAME row returns Corrupt on delete_branch instead of panicking.
+    let feat_name_key = super::store::row(super::store::NAME, feat.raw());
+    let saved_name = map.tree.nodes.get(feat_name_key).unwrap();
+    map.tree.nodes.insert(feat_name_key, [0xff, 0xfe]);
+    assert!(matches!(
+        map.delete_branch(feat),
+        Err(VsdbError::Corrupt { .. })
+    ));
+    map.tree.nodes.insert(feat_name_key, saved_name);
+
+    // VerMapReader::at propagates Corrupt on malformed commit row.
+    let reader = map.reader();
+    let c1_key = super::store::row(COMMIT, c1.raw());
+    let saved_c1 = map.tree.nodes.get(c1_key).unwrap();
+    map.tree.nodes.insert(c1_key, [0xff; 4]);
+    assert!(matches!(reader.at(c1), Err(VsdbError::Corrupt { .. })));
+    map.tree.nodes.insert(c1_key, saved_c1);
+    assert_eq!(reader.at(c1).unwrap().get(&1), Some(10));
+}

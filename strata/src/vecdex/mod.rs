@@ -206,6 +206,17 @@ impl GraphState {
         Self::decode(&bytes)
     }
 
+    fn try_read(store: &MapxRaw) -> Result<Self> {
+        store
+            .try_get_with(STATE_KEY, Self::decode)?
+            .ok_or_else(|| corrupt("missing VecDex state"))
+    }
+
+    fn try_read_view(view: &MapxRawReadView<'_>) -> Result<Self> {
+        view.try_get_with(STATE_KEY, Self::decode)?
+            .ok_or_else(|| corrupt("missing VecDex state"))
+    }
+
     fn decode(bytes: &[u8]) -> Result<Self> {
         if bytes.len() != 34 || bytes[0] > 1 {
             return Err(corrupt("invalid VecDex state record"));
@@ -341,10 +352,6 @@ struct Txn<'a, S> {
 struct SearchRows<'a, 'db>(&'a MapxRawReadView<'db>);
 
 impl AdjRead for SearchRows<'_, '_> {
-    fn adj_row(&self, key: &[u8]) -> Option<Vec<u8>> {
-        self.0.get(key)
-    }
-
     fn neighbors_into(&self, layer: u8, id: u64, out: &mut Vec<u64>) -> Result<()> {
         self.0.neighbors_into(layer, id, out)
     }
@@ -397,11 +404,6 @@ impl<S> AdjRead for Txn<'_, S> {
         })?;
         Ok(())
     }
-
-    #[inline]
-    fn adj_row(&self, key: &[u8]) -> Option<Vec<u8>> {
-        self.rows.get_over(self.store, key)
-    }
 }
 
 impl<'a, S: Scalar> Txn<'a, S> {
@@ -425,8 +427,12 @@ impl<'a, S: Scalar> Txn<'a, S> {
         }
     }
 
-    fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
-        self.rows.get_over(self.store, key)
+    fn try_get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+        self.rows.try_get_over(self.store, key)
+    }
+
+    fn try_contains(&self, key: &[u8]) -> Result<bool> {
+        self.rows.try_contains_over(self.store, key)
     }
 
     fn read_vec(&self, node_id: u64) -> Result<Option<Rc<Vec<S>>>> {
@@ -772,7 +778,7 @@ where
 
     fn validate_store(store: &MapxRaw, binding: &[u8]) -> Result<(HnswConfig, D)> {
         let schema = store
-            .get(META_KEY)
+            .try_get_with(META_KEY, |raw| Ok(raw.to_vec()))?
             .ok_or_else(|| corrupt("missing VecDex schema"))?;
         if binding != schema_binding(&schema) {
             return Err(corrupt("VecDex schema binding mismatch"));
@@ -797,7 +803,7 @@ where
             ef_search: header.ef_search,
         };
         config.validate()?;
-        GraphState::read(store.get(STATE_KEY))?;
+        GraphState::try_read(store)?;
         Ok((config, metric))
     }
 
@@ -876,7 +882,7 @@ where
         ensure_writable(&self.namespace(), "vector index ef update")?;
         let mut txn: Txn<'_, S> = Txn::new(
             &self.store,
-            GraphState::read(self.store.get(STATE_KEY))?,
+            GraphState::try_read(&self.store)?,
             self.config.dim,
         );
         txn.state.ef_search = ef;
@@ -941,14 +947,14 @@ where
         ensure_writable(&self.namespace(), "vector index clear")?;
         let mut txn: Txn<'_, S> = Txn::new(
             &self.store,
-            GraphState::read(self.store.get(STATE_KEY))?.cleared(),
+            GraphState::try_read(&self.store)?.cleared(),
             self.config.dim,
         );
         txn.rows.wipe();
         txn.rows.put(
             META_KEY.to_vec(),
             self.store
-                .get(META_KEY)
+                .try_get_with(META_KEY, |raw| Ok(raw.to_vec()))?
                 .ok_or_else(|| corrupt("missing VecDex schema"))?,
         );
         let rows = txn.finish();
@@ -980,7 +986,7 @@ where
 
         let mut txn = Txn::new(
             &self.store,
-            GraphState::read(self.store.get(STATE_KEY))?,
+            GraphState::try_read(&self.store)?,
             self.config.dim,
         );
         Self::stage_remove(&self.metric, &mut txn, &self.config, &encoded_key)?;
@@ -1058,7 +1064,7 @@ where
         for chunk in dedup.chunks_mut(CHUNK) {
             let mut txn = Txn::with_cache(
                 &self.store,
-                GraphState::read(self.store.get(STATE_KEY))?,
+                GraphState::try_read(&self.store)?,
                 self.config.dim,
                 vec_cache,
             );
@@ -1295,7 +1301,7 @@ where
         key.try_with_encoded_key(|encoded_key| {
             let mut txn = Txn::new(
                 &self.store,
-                GraphState::read(self.store.get(STATE_KEY))?,
+                GraphState::try_read(&self.store)?,
                 self.config.dim,
             );
             if !Self::stage_remove(&self.metric, &mut txn, &self.config, encoded_key)? {
@@ -1313,12 +1319,13 @@ where
         config: &HnswConfig,
         encoded_key: &[u8],
     ) -> Result<bool> {
-        let Some(raw) = txn.get(&user_key(encoded_key)) else {
+        let Some(raw) = txn.try_get(&user_key(encoded_key))? else {
             return Ok(false);
         };
         let node_id = decode_node_id(&raw)?;
         if node_id >= txn.state.next_node_id
-            || txn.get(&node_key(TAG_NODE2KEY, node_id)).as_deref() != Some(encoded_key)
+            || txn.try_get(&node_key(TAG_NODE2KEY, node_id))?.as_deref()
+                != Some(encoded_key)
         {
             return Err(corrupt("VecDex forward and reverse mappings disagree"));
         }
@@ -1326,7 +1333,7 @@ where
             return Err(corrupt("missing VecDex vector for live node"));
         }
         let raw_info = txn
-            .get(&node_key(TAG_INFO, node_id))
+            .try_get(&node_key(TAG_INFO, node_id))?
             .ok_or_else(|| corrupt("missing VecDex node info"))?;
         let max_layer = decode_layer(&raw_info)?;
         if max_layer > txn.state.max_layer {
@@ -1422,11 +1429,11 @@ where
         if entry == removed {
             return Ok(true);
         }
-        if txn.get(&node_key(TAG_VEC, entry)).is_none() {
+        if !txn.try_contains(&node_key(TAG_VEC, entry))? {
             return Ok(true);
         }
         let layer = txn
-            .get(&node_key(TAG_INFO, entry))
+            .try_get(&node_key(TAG_INFO, entry))?
             .as_deref()
             .map(decode_layer)
             .transpose()?;
@@ -1436,9 +1443,12 @@ where
         if txn.state.node_count <= 1 {
             return Ok(false);
         }
-        Ok(!get_neighbors(txn, 0, entry)?
-            .into_iter()
-            .any(|neighbor| txn.get(&node_key(TAG_VEC, neighbor)).is_some()))
+        for neighbor in get_neighbors(txn, 0, entry)? {
+            if txn.try_contains(&node_key(TAG_VEC, neighbor))? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     fn repair_entry_point(
@@ -1449,12 +1459,13 @@ where
         #[cfg(test)]
         ENTRY_REPAIRS.with(|count| count.set(count.get() + 1));
         let mut live = Vec::new();
-        for (key, value) in txn.rows.scan_prefix(txn.store, &[TAG_INFO]) {
+        let mut info_scan = txn.rows.try_scan_prefix(txn.store, &[TAG_INFO])?;
+        while let Some((key, value)) = info_scan.try_next()? {
             let id = decode_info_key(&key)?;
             if id >= txn.state.next_node_id {
                 return Err(corrupt("VecDex node-info ID exceeds the issued range"));
             }
-            if txn.get(&node_key(TAG_VEC, id)).is_some() {
+            if txn.try_contains(&node_key(TAG_VEC, id))? {
                 live.push((id, decode_layer(&value)?));
             }
         }
@@ -1474,9 +1485,13 @@ where
             if layer != true_max {
                 continue;
             }
-            let connected = get_neighbors(txn, 0, id)?
-                .into_iter()
-                .any(|neighbor| txn.get(&node_key(TAG_VEC, neighbor)).is_some());
+            let mut connected = false;
+            for neighbor in get_neighbors(txn, 0, id)? {
+                if txn.try_contains(&node_key(TAG_VEC, neighbor))? {
+                    connected = true;
+                    break;
+                }
+            }
             // max_by_key previously chose the last equally ranked candidate.
             if best.is_none_or(|(_, old)| connected || !old) {
                 best = Some((id, connected));
@@ -1541,45 +1556,56 @@ where
         use rand::seq::SliceRandom;
 
         let view = self.store.read_view();
-        let state = GraphState::read(view.get(STATE_KEY))?;
+        let state = GraphState::try_read_view(&view)?;
         let mut pairs = Vec::new();
-        let mut vectors = view.range(tag_bounds(TAG_VEC));
+        let mut vectors = view.try_range(tag_bounds(TAG_VEC))?;
+        let mut reverse = view.try_range(tag_bounds(TAG_NODE2KEY))?;
         let mut canonical_key = Vec::new();
         // Vector and reverse-map rows share the same big-endian node ID order.
-        for (reverse_key, key) in view.range(tag_bounds(TAG_NODE2KEY)) {
+        while let Some((reverse_key, key)) = reverse.try_step_next()? {
             let id = u64::from_be_bytes(
                 reverse_key[1..]
                     .try_into()
                     .map_err(|_| corrupt("compact: invalid reverse mapping ID"))?,
             );
             let (vector_key, raw) = vectors
-                .next()
+                .try_step_next()?
                 .ok_or_else(|| corrupt("compact: missing vector"))?;
             if vector_key != node_key(TAG_VEC, id) || id >= state.next_node_id {
                 return Err(corrupt("compact: vector and reverse mapping disagree"));
             }
-            if view.get(user_key(&key)).as_deref() != Some(&id.to_le_bytes()) {
+            let forward_matches = view
+                .try_get_with(user_key(key), |v| Ok(v == id.to_le_bytes()))?
+                .unwrap_or(false);
+            if !forward_matches {
                 return Err(corrupt("compact: forward and reverse mappings disagree"));
             }
             canonical_key.clear();
-            K::decode_key(&key)?.encode_key_into(&mut canonical_key)?;
+            K::decode_key(key)?.encode_key_into(&mut canonical_key)?;
             if canonical_key != key {
                 return Err(corrupt("compact: noncanonical key"));
             }
-            let vector = decode_vector::<S>(&raw, self.config.dim)?;
+            let vector = decode_vector::<S>(raw, self.config.dim)?;
             if !vector.iter().all(|component| component.is_finite()) {
                 return Err(corrupt(
                     "compact: stored vector contains nonfinite components",
                 ));
             }
-            pairs.push((key, vector));
+            pairs.push((key.to_vec(), vector));
         }
-        if vectors.next().is_some()
+        let mut forward = view.try_range(tag_bounds(TAG_KEY2NODE))?;
+        let mut forward_count = 0usize;
+        while forward.try_step_next()?.is_some() {
+            forward_count += 1;
+        }
+        if vectors.try_step_next()?.is_some()
             || pairs.len() as u64 != state.node_count
-            || view.range(tag_bounds(TAG_KEY2NODE)).count() != pairs.len()
+            || forward_count != pairs.len()
         {
             return Err(corrupt("compact: inconsistent vector or mapping count"));
         }
+        drop(forward);
+        drop(reverse);
         drop(vectors);
         drop(view);
         pairs.shuffle(&mut rand::rng());
@@ -1589,7 +1615,7 @@ where
         txn.rows.put(
             META_KEY.to_vec(),
             self.store
-                .get(META_KEY)
+                .try_get_with(META_KEY, |raw| Ok(raw.to_vec()))?
                 .ok_or_else(|| corrupt("missing VecDex schema"))?,
         );
         for (key, vec) in pairs {
@@ -1721,10 +1747,6 @@ impl AdjRead for MapxRawReadView<'_> {
         out.clear();
         self.try_get_with(adj_key(layer, id), |raw| hnsw::extend_neighbors(raw, out))?;
         Ok(())
-    }
-
-    fn adj_row(&self, key: &[u8]) -> Option<Vec<u8>> {
-        self.get(key)
     }
 }
 

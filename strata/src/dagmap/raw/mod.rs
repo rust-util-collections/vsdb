@@ -102,10 +102,13 @@ fn live_bytes(bytes: &[u8]) -> Vec<u8> {
     tagged
 }
 fn value(bytes: &[u8]) -> Option<&[u8]> {
+    try_value(bytes).expect("invalid DAG data row")
+}
+fn try_value(bytes: &[u8]) -> Result<Option<&[u8]>> {
     match bytes {
-        [0] => None,
-        [1, value @ ..] => Some(value),
-        _ => panic!("invalid DAG data row"),
+        [0] => Ok(None),
+        [1, value @ ..] => Ok(Some(value)),
+        _ => Err(corrupt("invalid DAG data row")),
     }
 }
 
@@ -162,15 +165,16 @@ impl DagMapRaw {
         Ok(node)
     }
     fn meta(&self) -> Result<NodeMeta> {
-        let raw = self
-            .store
-            .get(META)
-            .ok_or_else(|| corrupt("missing DAG node metadata"))?;
-        let (meta, rest) = postcard::take_from_bytes::<NodeMeta>(&raw)?;
-        if !rest.is_empty() || meta.magic != MAGIC || meta.dag_id != self.dag_id {
-            return Err(corrupt("DAG node identity mismatch"));
-        }
-        Ok(meta)
+        self.store
+            .try_get_with(META, |raw| {
+                let (meta, rest) = postcard::take_from_bytes::<NodeMeta>(raw)?;
+                if !rest.is_empty() || meta.magic != MAGIC || meta.dag_id != self.dag_id
+                {
+                    return Err(corrupt("DAG node identity mismatch"));
+                }
+                Ok(meta)
+            })?
+            .ok_or_else(|| corrupt("missing DAG node metadata"))
     }
     fn set_meta(&mut self, meta: NodeMeta) -> Result<()> {
         let mut batch = self.store.batch();
@@ -210,19 +214,53 @@ impl DagMapRaw {
             (edge, map)
         })
     }
+    fn try_links(&self) -> Result<Vec<(u64, u64)>> {
+        let mut cursor = self.store.try_range(EDGE..DATA)?;
+        let mut out = Vec::new();
+        while let Some((k, v)) = cursor.try_step_next()? {
+            let edge = k
+                .get(1..)
+                .and_then(|s| s.try_into().ok())
+                .map(u64::from_be_bytes)
+                .ok_or_else(|| corrupt("invalid DAG edge key"))?;
+            let map = v
+                .try_into()
+                .map(u64::from_le_bytes)
+                .map_err(|_| corrupt("invalid DAG child id"))?;
+            out.push((edge, map));
+        }
+        Ok(out)
+    }
     fn edge_target(&self, edge: u64) -> Option<u64> {
         self.store
             .get(edge_key(edge))
             .map(|v| u64::from_le_bytes(v.try_into().expect("invalid DAG child id")))
     }
+    fn try_edge_target(&self, edge: u64) -> Result<Option<u64>> {
+        self.store.try_get_with(edge_key(edge), |v| {
+            v.try_into()
+                .map(u64::from_le_bytes)
+                .map_err(|_| corrupt("invalid DAG child id"))
+        })
+    }
+    #[cfg(test)]
     fn owned(&self, edge: u64, id: u64) -> Option<Self> {
-        let (child, meta) = self.open_with_meta(id).ok()?;
-        (meta.state.owner()
+        self.try_owned(edge, id).ok().flatten()
+    }
+    fn try_owned(&self, edge: u64, id: u64) -> Result<Option<Self>> {
+        let (child, meta) = match self.open_with_meta(id) {
+            Ok(pair) => pair,
+            Err(err @ (VsdbError::Storage { .. } | VsdbError::Io(_))) => {
+                return Err(err);
+            }
+            Err(_) => return Ok(None),
+        };
+        Ok((meta.state.owner()
             == Some(Parent {
                 map: self.id(),
                 edge,
             }))
-        .then_some(child)
+        .then_some(child))
     }
     fn register(&mut self, mut meta: NodeMeta, child: u64) -> Result<u64> {
         let edge = meta.next_edge_id;
@@ -415,7 +453,11 @@ impl DagMapRaw {
             if meta.state == State::Destroyed {
                 continue;
             }
-            pending.extend(node.links().filter_map(|(edge, id)| node.owned(edge, id)));
+            for (edge, id) in node.try_links()? {
+                if let Some(child) = node.try_owned(edge, id)? {
+                    pending.push(child);
+                }
+            }
             let mut batch = node.store.batch();
             if !matches!(meta.state, State::Clearing { .. }) {
                 meta.state = State::Destroying(meta.state.owner());
@@ -433,11 +475,18 @@ impl DagMapRaw {
             }
             node.finish_destroy()?;
         }
-        if let Some(link) = owner
-            && let Ok(mut p) = self.open(link.map)
-            && p.edge_target(link.edge) == Some(self.id())
-        {
-            p.unlink(link.edge)?;
+        if let Some(link) = owner {
+            match self.open(link.map) {
+                Ok(mut p) => {
+                    if p.try_edge_target(link.edge)? == Some(self.id()) {
+                        p.unlink(link.edge)?;
+                    }
+                }
+                Err(err @ (VsdbError::Storage { .. } | VsdbError::Io(_))) => {
+                    return Err(err);
+                }
+                Err(_) => {}
+            }
         }
         self.finish_destroy()
     }
@@ -458,7 +507,7 @@ impl DagMapRaw {
             .expect("DAG destruction")
     }
     fn remove_branch(&mut self, edge: u64, child: u64) -> Result<()> {
-        if let Some(mut node) = self.owned(edge, child) {
+        if let Some(mut node) = self.try_owned(edge, child)? {
             return node.destroy_subtree();
         }
         self.unlink(edge)
@@ -469,7 +518,7 @@ impl DagMapRaw {
         include: bool,
     ) -> Result<()> {
         let set: HashSet<_> = targets.iter().map(AsRef::as_ref).collect();
-        for (e, id) in self.links().collect::<Vec<_>>() {
+        for (e, id) in self.try_links()? {
             if set.contains(token(e).as_slice()) == include {
                 self.remove_branch(e, id)?
             }
@@ -503,7 +552,7 @@ impl DagMapRaw {
                 _ => return Err(corrupt("mainline does not reach a live root")),
             };
             let p = node.open(owner.map)?;
-            if p.edge_target(owner.edge) != Some(node.id()) {
+            if p.try_edge_target(owner.edge)? != Some(node.id()) {
                 match (state, p.meta()?.state) {
                     (State::Clearing { genesis, .. }, State::Root)
                         if genesis == p.id() => {}
@@ -533,20 +582,25 @@ impl DagMapRaw {
     fn fold(line: &[Self], root: &mut Self) -> Result<()> {
         let mut rows = StagedRows::new();
         for node in line.iter().rev() {
-            for (k, v) in node.store.range(DATA..END) {
-                if value(&v).is_none() {
-                    rows.del(k)
+            let mut cursor = node.store.try_range(DATA..END)?;
+            while let Some((k, v)) = cursor.try_step_next()? {
+                if try_value(v)?.is_none() {
+                    rows.del(k.to_vec())
                 } else {
-                    rows.put(k, v)
+                    rows.put(k.to_vec(), v.to_vec())
                 }
             }
         }
         rows.commit(&mut root.store)
     }
     fn reparent(&self, root: &mut Self) -> Result<()> {
-        let registered: HashMap<_, _> = root.links().map(|(e, id)| (id, e)).collect();
-        for (e, id) in self.links().collect::<Vec<_>>() {
-            let Some(mut child) = self.owned(e, id) else {
+        let registered: HashMap<_, _> = root
+            .try_links()?
+            .into_iter()
+            .map(|(e, id)| (id, e))
+            .collect();
+        for (e, id) in self.try_links()? {
+            let Some(mut child) = self.try_owned(e, id)? else {
                 continue;
             };
             let mut meta = child.meta()?;
@@ -596,11 +650,11 @@ impl DagMapRaw {
         while i <= line.len() {
             let owner = if i == 0 { root } else { &line[i - 1] };
             let mut found = Vec::new();
-            for (edge, id) in owner.links() {
+            for (edge, id) in owner.try_links()? {
                 if seen.contains(&id) {
                     continue;
                 }
-                let Some(node) = owner.owned(edge, id) else {
+                let Some(node) = owner.try_owned(edge, id)? else {
                     continue;
                 };
                 if matches!(node.meta()?.state, State::Clearing{genesis,..} if genesis==root.id())
@@ -622,11 +676,11 @@ impl DagMapRaw {
             out: &mut Vec<DagMapRaw>,
         ) -> Result<bool> {
             let mut has_marked = false;
-            for (edge, id) in node.links() {
+            for (edge, id) in node.try_links()? {
                 if !seen.insert(id) {
                     continue;
                 }
-                let Some(child) = node.owned(edge, id) else {
+                let Some(child) = node.try_owned(edge, id)? else {
                     continue;
                 };
                 let child_marked = matches!(
@@ -665,7 +719,8 @@ impl DagMapRaw {
         }
         let consumed: HashSet<_> = line.iter().map(Self::id).collect();
         let stale: Vec<_> = root
-            .links()
+            .try_links()?
+            .into_iter()
             .filter(|(_, id)| consumed.contains(id))
             .map(|(edge, _)| edge)
             .collect();
@@ -691,13 +746,15 @@ impl DagMapRaw {
                 head_live && Self::collect_marked_below_head(&mut line, root.id())?;
             if head_live && !resumed_from_ancestor {
                 let (head, ancestors) = line.split_first_mut().unwrap();
+                let head_links = head.try_links()?;
                 let protected: HashSet<_> = std::iter::once(head.id())
                     .chain(ancestors.iter().map(Self::id))
-                    .chain(head.links().map(|(_, id)| id))
+                    .chain(head_links.into_iter().map(|(_, id)| id))
                     .collect();
                 for node in ancestors.iter_mut().chain(std::iter::once(&mut root)) {
                     let doomed = node
-                        .links()
+                        .try_links()?
+                        .into_iter()
                         .filter(|(_, id)| !protected.contains(id))
                         .collect::<Vec<_>>();
                     for (e, id) in doomed {
@@ -729,7 +786,7 @@ impl DagMapRaw {
             if let Some(p) = meta.state.owner() {
                 let parent = node.open(p.map)?;
                 if matches!(meta.state, State::Child(_))
-                    && parent.edge_target(p.edge) != Some(node.id())
+                    && parent.try_edge_target(p.edge)? != Some(node.id())
                 {
                     return Err(corrupt("DAG clone owner mismatch"));
                 }
@@ -742,8 +799,8 @@ impl DagMapRaw {
                 }
                 pending.push(root);
             }
-            for (e, id) in node.links() {
-                if let Some(child) = node.owned(e, id) {
+            for (e, id) in node.try_links()? {
+                if let Some(child) = node.try_owned(e, id)? {
                     pending.push(child)
                 }
             }
@@ -780,7 +837,7 @@ impl DagMapRaw {
                 let copy = copies.get_mut(&id).expect("allocated");
                 // All user rows have already been copied in bounded batches.
                 // Remap structural links in place on the unpublished graph.
-                for (edge, child) in node.links() {
+                for (edge, child) in node.try_links()? {
                     let mut batch = copy.store.batch();
                     if let Some(target) = ids.get(&child) {
                         batch.insert(edge_key(edge), target.to_le_bytes());

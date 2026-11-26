@@ -33,8 +33,8 @@
 
 mod query;
 mod slot_type;
+use query::Query;
 pub use query::SlotDexIter;
-use query::{Query, level0_range};
 use slot_type::sealed::SlotBytes;
 
 pub use slot_type::SlotType;
@@ -219,6 +219,25 @@ fn slot_entry_cnt<S: SlotType>(
     row.map_or(0, |v| decode_cnt(&v))
 }
 
+fn try_slot_entry_cnt<S: SlotType>(store: &MapxRaw, slot: S) -> Result<EntryCnt> {
+    let decode = |raw: &[u8]| {
+        raw.try_into()
+            .map(EntryCnt::from_le_bytes)
+            .map_err(|_| VsdbError::Corrupt {
+                detail: "invalid SlotDex tier count width".into(),
+            })
+    };
+    let row = if S::Bytes::LEN <= 32 {
+        let mut key = [0; 34];
+        key[0] = TAG_LEVEL;
+        key[2..2 + S::Bytes::LEN].copy_from_slice(slot.to_bytes().as_ref());
+        store.try_get_with(&key[..2 + S::Bytes::LEN], decode)?
+    } else {
+        store.try_get_with(level_key(0, &slot), decode)?
+    };
+    Ok(row.unwrap_or(0))
+}
+
 fn total_record(total: u64, generation: u64) -> [u8; 16] {
     let mut record = [0; 16];
     record[..8].copy_from_slice(&total.to_le_bytes());
@@ -226,15 +245,37 @@ fn total_record(total: u64, generation: u64) -> [u8; 16] {
     record
 }
 
+fn decode_total(raw: &[u8]) -> Result<(u64, u64)> {
+    if raw.len() != 16 {
+        return Err(VsdbError::Corrupt {
+            detail: "SlotDex: invalid total row length".into(),
+        });
+    }
+    Ok((decode_cnt(&raw[..8]), decode_cnt(&raw[8..])))
+}
+
 fn read_total(row: Option<Vec<u8>>) -> Result<(u64, u64)> {
     match row.as_deref() {
-        Some(raw) if raw.len() == 16 => {
-            Ok((decode_cnt(&raw[..8]), decode_cnt(&raw[8..])))
-        }
-        _ => Err(VsdbError::Corrupt {
+        Some(raw) => decode_total(raw),
+        None => Err(VsdbError::Corrupt {
             detail: "SlotDex: invalid total row length".into(),
         }),
     }
+}
+
+fn try_read_total(store: &MapxRaw) -> Result<(u64, u64)> {
+    store
+        .try_get_with(TOTAL_KEY, decode_total)?
+        .ok_or_else(|| VsdbError::Corrupt {
+            detail: "SlotDex: invalid total row length".into(),
+        })
+}
+
+fn try_read_total_view(view: &MapxRawReadView<'_>) -> Result<(u64, u64)> {
+    view.try_get_with(TOTAL_KEY, decode_total)?
+        .ok_or_else(|| VsdbError::Corrupt {
+            detail: "SlotDex: invalid total row length".into(),
+        })
 }
 
 // =========================================================================
@@ -388,11 +429,16 @@ where
         tier_capacity: u32,
     ) -> Result<(EntryCnt, u64, Vec<Level<S>>, EntryCnt)> {
         let view = store.read_view();
-        let (total_cache, generation) = read_total(view.get(TOTAL_KEY))?;
+        let (total_cache, generation) = try_read_total_view(&view)?;
         let levels = Self::load_levels(&view, tier_capacity)?;
         let slot_rows = if levels.is_empty() {
-            view.range(level_prefix(0)..level_prefix(1))
-                .try_fold(0, |n, (k, v)| checked_level_row::<S>(&k, &v).map(|_| n + 1))?
+            let mut cursor = view.try_range(level_prefix(0)..level_prefix(1))?;
+            let mut n = 0;
+            while let Some((k, v)) = cursor.try_step_next()? {
+                checked_level_row::<S>(k, v)?;
+                n += 1;
+            }
+            n
         } else {
             0
         };
@@ -403,29 +449,40 @@ where
         view: &MapxRawReadView<'_>,
         tier_capacity: u32,
     ) -> Result<Vec<Level<S>>> {
-        let mut rows = view
-            .range(level_prefix(1).as_slice()..TOTAL_KEY.as_slice())
-            .peekable();
+        let mut cursor =
+            view.try_range(level_prefix(1).as_slice()..TOTAL_KEY.as_slice())?;
         let mut levels = Vec::new();
-        while let Some((key, _)) = rows.peek() {
-            let level = key[1];
+        let mut pending = cursor
+            .try_step_next()?
+            .map(|(k, v)| (k.to_vec(), v.to_vec()));
+        while let Some((first_key, first_val)) = pending.take() {
+            let level = first_key[1];
             if usize::from(level) != levels.len() + 1 {
                 return Err(VsdbError::Corrupt {
                     detail: "missing SlotDex tier".into(),
                 });
             }
             let mut cache = Level::new(level, tier_capacity);
-            let mut buckets =
-                std::iter::from_fn(|| rows.next_if(|(key, _)| key[1] == level))
-                    .map(|(key, value)| checked_level_row::<S>(&key, &value));
-            // Tier rows arrive in slot order. Bulk-building a BTreeMap avoids
-            // a search per initial bucket. Bound the number collected at once
-            // so opening a large tier does not require a second full copy.
             let initial = (64 * 1024 / size_of::<(S, EntryCnt)>()).max(1);
-            cache.buckets = buckets.by_ref().take(initial).collect::<Result<_>>()?;
-            for bucket in buckets {
-                let (floor, count) = bucket?;
-                cache.buckets.insert(floor, count);
+            let mut initial_vec = Vec::new();
+            initial_vec.push(checked_level_row::<S>(&first_key, &first_val)?);
+            while let Some((key, value)) = cursor.try_step_next()? {
+                if key[1] != level {
+                    pending = Some((key.to_vec(), value.to_vec()));
+                    break;
+                }
+                let entry = checked_level_row::<S>(key, value)?;
+                if cache.buckets.is_empty() && initial_vec.len() < initial {
+                    initial_vec.push(entry);
+                } else {
+                    if cache.buckets.is_empty() {
+                        cache.buckets = initial_vec.drain(..).collect();
+                    }
+                    cache.buckets.insert(entry.0, entry.1);
+                }
+            }
+            if cache.buckets.is_empty() {
+                cache.buckets = initial_vec.into_iter().collect();
             }
             levels.push(cache);
         }
@@ -436,7 +493,7 @@ where
     pub fn clone_in(&self, ns: &crate::common::Namespace) -> Result<Self> {
         let mut store = self.store.clone_in(ns)?;
         let init = (|| -> Result<_> {
-            let (total, _) = read_total(store.get(TOTAL_KEY))?;
+            let (total, _) = try_read_total(&store)?;
             let mut batch = store.batch();
             batch.insert(TOTAL_KEY, total_record(total, 0));
             batch.commit()?;
@@ -461,7 +518,7 @@ where
     }
 
     fn check_generation(&self) -> Result<()> {
-        let (_, generation) = read_total(self.store.get(TOTAL_KEY))?;
+        let (_, generation) = try_read_total(&self.store)?;
         if generation != self.generation {
             return Err(VsdbError::Other {
                 detail: format!(
@@ -544,15 +601,15 @@ where
         let slot = self.to_storage_slot(slot);
 
         let ekey = entry_key(&slot, &k);
-        if self.store.contains_key(&ekey) {
+        if self.store.try_contains_key(&ekey)? {
             return Ok(());
         }
 
         let mut staged = StagedRows::new();
-        let grown = self.stage_level_growth(&mut staged);
+        let grown = self.stage_level_growth(&mut staged)?;
 
         staged.put(ekey, vec![]);
-        let slot_cnt = slot_entry_cnt(slot, |k| self.store.get(k));
+        let slot_cnt = try_slot_entry_cnt(&self.store, slot)?;
         staged.put(level_key(0, &slot), encode_cnt(slot_cnt + 1).to_vec());
 
         // Bucket increments for every level, including a just-staged one.
@@ -641,7 +698,7 @@ where
         for (slot, k) in items {
             let slot = self.to_storage_slot(slot);
             let ekey = entry_key(&slot, &k);
-            if staged.get_over(&self.store, &ekey).is_some() {
+            if staged.try_contains_over(&self.store, &ekey)? {
                 continue;
             }
 
@@ -664,19 +721,22 @@ where
                 &bumps,
                 &pending_new_floors,
                 pending_slot_rows,
-            ) {
+            )? {
                 grown.push(lv);
                 pending_new_floors.push(0);
             }
 
             staged.put(ekey, vec![]);
-            let slot_cnt = l0_bumps.entry(slot).or_insert_with(|| {
-                let prev = slot_entry_cnt(slot, |k| self.store.get(k));
-                if 0 == prev {
-                    pending_slot_rows += 1;
+            let slot_cnt = match l0_bumps.entry(slot) {
+                std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    let prev = try_slot_entry_cnt(&self.store, slot)?;
+                    if prev == 0 {
+                        pending_slot_rows += 1;
+                    }
+                    entry.insert(prev)
                 }
-                prev
-            });
+            };
             *slot_cnt += 1;
 
             for (i, lv) in self
@@ -751,7 +811,7 @@ where
         let slot = self.to_storage_slot(slot);
 
         let ekey = entry_key(&slot, k);
-        if !self.store.contains_key(&ekey) {
+        if !self.store.try_contains_key(&ekey)? {
             return Ok(());
         }
 
@@ -770,7 +830,7 @@ where
             kept -= 1;
         }
 
-        let slot_cnt = slot_entry_cnt(slot, |k| self.store.get(k));
+        let slot_cnt = try_slot_entry_cnt(&self.store, slot)?;
         if slot_cnt <= 1 {
             staged.del(level_key(0, &slot));
         } else {
@@ -793,6 +853,19 @@ where
             }
         }
 
+        let had_tiers = !self.levels.is_empty();
+        let reseeded_slot_rows = if kept == 0 && had_tiers {
+            let mut scan = staged.try_scan_prefix(&self.store, &level_prefix(0))?;
+            let mut n: EntryCnt = 0;
+            while let Some((rk, rv)) = scan.try_next()? {
+                checked_level_row::<S>(&rk, &rv)?;
+                n += 1;
+            }
+            Some(n)
+        } else {
+            None
+        };
+
         let generation = self.next_generation()?;
         staged.put(
             TOTAL_KEY.to_vec(),
@@ -801,7 +874,6 @@ where
         staged.commit(&mut self.store)?;
         self.generation = generation;
 
-        let had_tiers = !self.levels.is_empty();
         self.levels.truncate(kept);
         for (i, floor, v) in decs {
             match v {
@@ -813,14 +885,8 @@ where
                 }
             }
         }
-        if 0 == kept && had_tiers {
-            // Truncation just re-entered the tier-less state, where the
-            // growth gate relies on `slot_rows` being exact — re-seed it
-            // from the committed rows. Bounded: dropping level 1 required
-            // it to hold at most one bucket, i.e. every populated slot
-            // lies within one `tier_capacity`-wide window.
-            self.slot_rows = level0_range(&self.store.read_view(), S::MIN, S::MAX)
-                .count() as EntryCnt;
+        if let Some(slot_rows) = reseeded_slot_rows {
+            self.slot_rows = slot_rows;
         } else if slot_cnt <= 1 {
             // This remove deleted the slot's level-0 row.
             self.slot_rows = self.slot_rows.saturating_sub(1);
@@ -863,7 +929,7 @@ where
     /// `tier_capacity` buckets, build the next coarser level from it and
     /// stage its rows. Returns the new level's cache; the caller pushes
     /// it onto `self.levels` after the batch commits.
-    fn stage_level_growth(&self, staged: &mut StagedRows) -> Option<Level<S>> {
+    fn stage_level_growth(&self, staged: &mut StagedRows) -> Result<Option<Level<S>>> {
         self.stage_level_growth_over(staged, &[], &BTreeMap::new(), &[], 0)
     }
 
@@ -881,7 +947,7 @@ where
         bumps: &BTreeMap<(usize, S), EntryCnt>,
         pending_new_floors: &[usize],
         pending_slot_rows: EntryCnt,
-    ) -> Option<Level<S>> {
+    ) -> Result<Option<Level<S>>> {
         let n = self.levels.len() + grown.len();
         let top = grown.last().or_else(|| self.levels.last());
         let rows = if let Some(top) = top {
@@ -891,10 +957,12 @@ where
             self.slot_rows + pending_slot_rows
         };
         if rows <= u64::from(self.tier_capacity) {
-            return None;
+            return Ok(None);
         }
 
-        let new_level_no = u8::try_from(n + 1).ok()?;
+        let Some(new_level_no) = u8::try_from(n + 1).ok() else {
+            return Ok(None);
+        };
         let mut newtop = Level::new(new_level_no, self.tier_capacity);
         if let Some(top) = top {
             let top_idx = n - 1;
@@ -912,8 +980,9 @@ where
         } else {
             // No tiers yet: build from the merged (committed ⊕ staged)
             // level-0 stream so earlier keys in this batch are included.
-            for (rk, rv) in staged.scan_prefix(&self.store, &level_prefix(0)) {
-                let (slot, cnt) = decode_level_row::<S>(&rk, &rv);
+            let mut scan = staged.try_scan_prefix(&self.store, &level_prefix(0))?;
+            while let Some((rk, rv)) = scan.try_next()? {
+                let (slot, cnt) = checked_level_row::<S>(&rk, &rv)?;
                 let floor = aligned(slot, newtop.floor_base);
                 *newtop.buckets.entry(floor).or_insert(0) += cnt;
             }
@@ -922,7 +991,7 @@ where
         for (floor, cnt) in &newtop.buckets {
             staged.put(level_key(new_level_no, floor), encode_cnt(*cnt).to_vec());
         }
-        Some(newtop)
+        Ok(Some(newtop))
     }
 
     // =====================================================================

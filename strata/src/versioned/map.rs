@@ -637,7 +637,17 @@ where
         source_branch: BranchId,
     ) -> Result<BranchId> {
         self.ensure_writable("branch creation")?;
-        if self.branch_id(name).is_some() {
+        let exists = self
+            .tree
+            .nodes
+            .try_get_with(by_name(name), |raw| {
+                if raw.len() != 8 {
+                    return Err(corrupt("invalid reverse branch row"));
+                }
+                Ok(())
+            })?
+            .is_some();
+        if exists {
             return Err(VsdbError::BranchAlreadyExists {
                 name: name.to_owned(),
             });
@@ -673,12 +683,19 @@ where
     /// their last reader releases them and a later batch drains the queue.
     pub fn delete_branch(&mut self, branch: BranchId) -> Result<()> {
         self.ensure_writable("branch deletion")?;
-        if branch == self.main_branch() {
+        let hdr = Header::get(&self.tree.nodes)?;
+        if branch == hdr.main_branch {
             return Err(VsdbError::CannotDeleteMainBranch);
         }
         let state = self.get_branch(branch)?;
         let name = self
-            .branch_name(branch)
+            .tree
+            .nodes
+            .try_get_with(row(NAME, branch.raw()), |raw| {
+                std::str::from_utf8(raw)
+                    .map(str::to_owned)
+                    .map_err(|_| corrupt("invalid branch name"))
+            })?
             .ok_or_else(|| corrupt("missing branch name"))?;
         let mut edits = Edits::default();
         edits.delete_head(branch);
@@ -686,7 +703,7 @@ where
         edits.rows.insert(by_name(&name), None);
         edits.retire.push(state.dirty_root);
         self.adjust_commit(&mut edits, state.head, false)?;
-        self.publish(Header::get(&self.tree.nodes)?, edits, true)
+        self.publish(hdr, edits, true)
     }
 
     /// Lists all branches as `(BranchId, name)`.
@@ -1336,23 +1353,27 @@ where
     ) -> Result<R> {
         let nodes = &self.tree.nodes;
         let head_key = row(HEAD, branch.raw());
-        let head = |bytes: Option<Vec<u8>>| {
-            let bytes = bytes.ok_or(VsdbError::BranchNotFound { branch_id: branch })?;
-            Ok(BranchHead::decode(&bytes)?.head)
-        };
         for _ in 0..2 {
             let generation = Header::get(nodes)?.generation;
             // The branch cache may still contain the head from before the
             // write, so select it directly from the same store as the commits.
-            let result = head(nodes.get(head_key))
+            let result = nodes
+                .try_get_with(head_key, |raw| Ok(BranchHead::decode(raw)?.head))
+                .and_then(|opt| {
+                    opt.ok_or(VsdbError::BranchNotFound { branch_id: branch })
+                })
                 .and_then(|tip| read(tip, &|id| self.get_commit_inner(id)));
             if Header::get(nodes)?.generation == generation {
                 return result;
             }
         }
         let view = nodes.read_view();
-        read(head(view.get(head_key))?, &|id| {
-            Commit::from_row(id, view.get(row(COMMIT, id.raw())))
+        let tip = view
+            .try_get_with(head_key, |raw| Ok(BranchHead::decode(raw)?.head))?
+            .ok_or(VsdbError::BranchNotFound { branch_id: branch })?;
+        read(tip, &|id| {
+            view.try_get_with(row(COMMIT, id.raw()), |raw| Commit::parse(id, raw))?
+                .ok_or(VsdbError::CommitNotFound { commit_id: id })
         })
     }
 
