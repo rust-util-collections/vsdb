@@ -122,6 +122,18 @@ fn try_value(bytes: &[u8]) -> Result<Option<&[u8]>> {
     }
 }
 
+// Infallible reads treat a node that fails authentication as absent and a
+// storage failure as fatal.
+fn authenticated<T>(read: Result<T>) -> Option<T> {
+    match read {
+        Ok(value) => Some(value),
+        Err(err @ (VsdbError::Storage { .. } | VsdbError::Io(_))) => {
+            panic!("vsdb: DAG metadata read failed: {err}")
+        }
+        Err(_) => None,
+    }
+}
+
 // External edge tokens are 128-bit little-endian integers.
 fn token(edge: u64) -> Vec<u8> {
     u128::from(edge).to_le_bytes().to_vec()
@@ -175,6 +187,8 @@ impl DagMapRaw {
         Ok(node)
     }
     fn meta(&self) -> Result<NodeMeta> {
+        #[cfg(test)]
+        test::before_meta_read(self.id())?;
         self.store
             .try_get_with(META, |raw| {
                 let (meta, rest) = postcard::take_from_bytes::<NodeMeta>(raw)?;
@@ -371,15 +385,24 @@ impl DagMapRaw {
         self.links().map(|(e, _)| token(e)).collect()
     }
     /// Returns a direct child's registry token in constant time.
+    ///
+    /// # Panics
+    ///
+    /// Panics if reading the child's metadata fails in storage.
     pub fn child_id(&self, child: &Self) -> Option<RawBytes> {
         if self.dag_id != child.dag_id || !self.store.is_colocated_with(&child.store) {
             return None;
         }
-        let owner = child.meta().ok()?.state.owner()?;
+        let owner = authenticated(child.meta())?.state.owner()?;
         (owner.map == self.id() && self.edge_target(owner.edge) == Some(child.id()))
             .then(|| token(owner.edge))
     }
     /// Reads the closest override in the parent chain.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a storage read failure. A parent that fails authentication
+    /// ends the lookup instead.
     pub fn get(&self, key: impl AsRef<[u8]>) -> Option<RawBytes> {
         let key = data_key(key.as_ref());
         if let Some(v) = self.store.get(&key) {
@@ -387,12 +410,12 @@ impl DagMapRaw {
         }
         let mut seen = HashSet::new();
         let mut id = self.id();
-        let mut state = self.meta().ok()?.state;
+        let mut state = authenticated(self.meta())?.state;
         while let State::Child(owner) = state {
             if !seen.insert(id) {
                 return None;
             }
-            let (p, meta) = self.open_with_meta(owner.map).ok()?;
+            let (p, meta) = authenticated(self.open_with_meta(owner.map))?;
             if p.edge_target(owner.edge) != Some(id) {
                 return None;
             }

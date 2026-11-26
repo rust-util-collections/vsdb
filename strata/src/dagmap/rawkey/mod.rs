@@ -194,6 +194,11 @@ where
     }
 
     /// Retrieves a value from the DAG map.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a storage read failure or a value that cannot be decoded
+    /// (see [`DagMapRaw::get`]).
     #[inline(always)]
     pub fn get(&self, key: impl AsRef<[u8]>) -> Option<V> {
         self.inner.get(key).map(|v| V::decode_value(&v).unwrap())

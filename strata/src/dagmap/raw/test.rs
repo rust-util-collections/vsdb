@@ -1141,3 +1141,42 @@ fn fallible_dagmap_operations_propagate_corrupt_rows_and_sst_errors() {
     Namespace::close_by_id(dst_id).unwrap();
     Namespace::destroy(dst_id).unwrap();
 }
+
+thread_local! {
+    static FAIL_META_READ: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+pub(super) fn before_meta_read(id: u64) -> Result<()> {
+    if FAIL_META_READ.with(|target| target.get() == Some(id)) {
+        return Err(std::io::Error::other("injected DAG metadata read failure").into());
+    }
+    Ok(())
+}
+
+#[test]
+fn fallback_reads_treat_metadata_storage_failures_as_fatal() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let mut root = DagMapRaw::new(None);
+    root.insert("k", "v");
+    let mut child = DagMapRaw::new(Some(&mut root));
+    let grandchild = DagMapRaw::new(Some(&mut child));
+    assert_eq!(grandchild.get("k").as_deref(), Some(b"v".as_slice()));
+
+    FAIL_META_READ.with(|target| target.set(Some(root.id())));
+    let read = catch_unwind(AssertUnwindSafe(|| grandchild.get("k")));
+    FAIL_META_READ.with(|target| target.set(Some(child.id())));
+    let token = catch_unwind(AssertUnwindSafe(|| root.child_id(&child)));
+    FAIL_META_READ.with(|target| target.set(None));
+    assert!(
+        read.is_err(),
+        "an unreadable ancestor was reported as absent"
+    );
+    assert!(
+        token.is_err(),
+        "an unreadable child was reported as unowned"
+    );
+
+    assert_eq!(grandchild.get("k").as_deref(), Some(b"v".as_slice()));
+    assert!(root.child_id(&child).is_some());
+}

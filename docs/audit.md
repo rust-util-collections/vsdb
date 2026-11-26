@@ -11,14 +11,6 @@
 
 ## Open
 
-### [MEDIUM] dagmap: get reports unreadable node metadata as an absent key
-- **Where**: `strata/src/dagmap/raw/mod.rs` (`get`, `child_id`)
-- **What**: `get` maps any error from its own `meta()` or from a parent's `open_with_meta` to `None` with `.ok()?`. That includes `VsdbError::Storage` and `Io` from a failed metadata block read, while edge and data reads in the same loop panic. `child_id` does the same.
-- **Why**: A storage failure on an ancestor's metadata row silently hides every inherited value. Other storage failures on this infallible read path panic instead. `try_owned` already distinguishes storage errors from authentication failures.
-- **Suggested fix**: Panic on `Storage` and `Io`, or add a fallible `try_get`, and return `None` only for authentication failures. Regression test: a parent metadata block with SST corruption, built as in the SlotDex SST fixtures, must not read as `Ok(None)`. No format change.
-
----
-
 ### [MEDIUM] namespace lifecycle: destroy fails after deleting an adopted root's contents
 - **Where**: `core/src/common/namespace.rs` (`Namespace::destroy`)
 - **What**: `create_with` adopts an existing empty root, and mount points are a documented case. `destroy` removes the registry entry, then calls `remove_dir_all` on the root itself. When the root can't be removed (`EBUSY` on a mount point, `EACCES` under a non-writable parent), the namespace is already unregistered and empty, yet `destroy` returns the error.

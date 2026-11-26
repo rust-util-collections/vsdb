@@ -51,6 +51,10 @@ impl<K: KeyEnDe, V: ValueEnDe> DagMap<K, V> {
         Self::wrap(DagMapRawKey::new_in(ns, parent.map(|p| &mut p.inner)))
     }
     /// Reads the closest visible value.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a storage read failure or a value that cannot be decoded.
     pub fn get(&self, key: &K) -> Option<V> {
         key.with_encoded_key(|k| self.inner.get(k))
     }
