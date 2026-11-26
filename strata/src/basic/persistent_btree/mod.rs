@@ -352,10 +352,9 @@ impl RefState {
         if let Some(&head) = self.heads.get(&branch) {
             return Ok(head);
         }
-        let bytes = nodes
-            .get(row(HEAD, branch.raw()))
+        let head = nodes
+            .try_get_with(row(HEAD, branch.raw()), BranchHead::decode)?
             .ok_or(VsdbError::BranchNotFound { branch_id: branch })?;
-        let head = BranchHead::decode(&bytes)?;
         self.heads.insert(branch, head);
         Ok(head)
     }
@@ -368,10 +367,9 @@ impl RefState {
         if let Some(&head) = self.heads.get(&branch) {
             return Ok(head);
         }
-        let bytes = nodes
-            .get(row(HEAD, branch.raw()))
+        let head = nodes
+            .try_get_with(row(HEAD, branch.raw()), BranchHead::decode)?
             .ok_or(VsdbError::BranchNotFound { branch_id: branch })?;
-        let head = BranchHead::decode(&bytes)?;
         self.heads.insert(branch, head);
         Ok(head)
     }
@@ -802,23 +800,20 @@ impl<'de> Deserialize<'de> for PersistentBTree {
                 let invalid = || VsdbError::Corrupt {
                     detail: "invalid standalone tree allocator".into(),
                 };
-                if !extra.is_empty() || nodes.contains_key([0]) {
+                if !extra.is_empty() || nodes.try_contains_key([0])? {
                     return Err(invalid());
                 }
-                let raw = nodes.get(STANDALONE_ALLOCATOR).ok_or_else(invalid)?;
-                let next_id = u64::from_le_bytes(raw.try_into().map_err(|_| invalid())?);
+                let next_id = nodes
+                    .try_get_with(STANDALONE_ALLOCATOR, |raw| {
+                        raw.try_into()
+                            .map(u64::from_le_bytes)
+                            .map_err(|_| invalid())
+                    })?
+                    .ok_or_else(invalid)?;
                 if next_id == 0 || next_id > LEAF {
                     return Err(invalid());
                 }
-                for class in [0, LEAF, BLOB_LEAF, BLOB] {
-                    if let Some((k, _)) = nodes.get_le(object_key(class | !CLASS_MASK))
-                        && let Some(id) = object_id(&k)
-                        && id & CLASS_MASK == class
-                        && id & !CLASS_MASK >= next_id
-                    {
-                        return Err(invalid());
-                    }
-                }
+                persist::check_nodes_ceiling(&nodes, next_id, |_| invalid())?;
                 let runtime = tree_runtime(
                     nodes.instance_id(),
                     next_id,
@@ -1715,15 +1710,18 @@ impl PersistentBTree {
         // the engine; allocating over them would mutate live (or pending
         // lazy-delete) nodes in place and corrupt shared snapshots.
         let mut max_id = 0;
-        let dead_keys: Vec<Vec<u8>> = self
-            .nodes
-            .iter()
-            .filter_map(|(k, _)| {
-                let id = object_id(&k)?;
-                max_id = max_id.max(id & !CLASS_MASK);
-                (!new_refs.contains_key(&id)).then_some(k)
-            })
-            .collect();
+        let mut dead_keys = Vec::new();
+        let mut cursor = self.nodes.try_range(..)?;
+        while let Some((k, _)) = cursor.try_step_next()? {
+            let Some(id) = object_id(k) else {
+                continue;
+            };
+            max_id = max_id.max(id & !CLASS_MASK);
+            if !new_refs.contains_key(&id) {
+                dead_keys.push(k.to_vec());
+            }
+        }
+        drop(cursor);
 
         self.runtime.next_id.fetch_max(
             max_id

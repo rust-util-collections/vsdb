@@ -304,7 +304,10 @@ impl<K, V> VerMap<K, V> {
     }
 
     pub(crate) fn get_commit_inner(&self, id: CommitId) -> Result<Commit> {
-        Commit::from_row(id, self.tree.nodes.get(row(COMMIT, id.raw())))
+        self.tree
+            .nodes
+            .try_get_with(row(COMMIT, id.raw()), |raw| Commit::parse(id, raw))?
+            .ok_or(VsdbError::CommitNotFound { commit_id: id })
     }
 
     pub(super) fn publish_edits(&mut self, edits: Edits, sync: bool) -> Result<()> {
@@ -356,13 +359,15 @@ impl<K, V> VerMap<K, V> {
     fn restore_visible_refs(&self) -> Result<()> {
         // A failed WAL sync can have an ambiguous durable outcome. Restore
         // in-memory counts against the visible graph without issuing writes.
-
-        let mut roots = self
-            .records(HEAD)
-            .map(|(_, row)| BranchHead::decode(&row).map(|h| h.dirty_root))
-            .collect::<Result<Vec<_>>>()?;
-        for record in self.commit_rows() {
-            roots.push(record?.1.root);
+        let mut roots = Vec::new();
+        let mut heads = self.try_tag_range(HEAD)?;
+        while let Some((_, row)) = heads.try_step_next()? {
+            roots.push(BranchHead::decode(row)?.dirty_root);
+        }
+        let mut commits = self.try_tag_range(COMMIT)?;
+        while let Some((k, v)) = commits.try_step_next()? {
+            let id = CommitId::from_raw(super::repair::record_id(k)?);
+            roots.push(Commit::parse(id, v)?.root);
         }
         self.tree.restore_runtime_refs(&roots)
     }

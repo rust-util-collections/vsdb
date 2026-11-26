@@ -5654,3 +5654,68 @@ fn rejected_final_publication_reclaims_spilled_stage_markers_and_blobs() {
     let stats = reopened.verify_and_gc().unwrap();
     assert_eq!(stats.live_objects, 1);
 }
+
+#[test]
+fn verify_and_gc_propagates_sst_corruption_without_panicking() {
+    use std::fs;
+
+    fn payload(id: u64) -> Vec<u8> {
+        let mut bytes = vec![0u8; 256];
+        for (j, out) in bytes.as_chunks_mut::<8>().0.iter_mut().enumerate() {
+            let n = id * 32 + j as u64;
+            let mixed = n.wrapping_add(0x9e3779b97f4a7c15);
+            let mixed = (mixed ^ (mixed >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+            let mixed = (mixed ^ (mixed >> 27)).wrapping_mul(0x94d049bb133111eb);
+            out.copy_from_slice(&(mixed ^ (mixed >> 31)).to_le_bytes());
+        }
+        bytes
+    }
+
+    let ns = crate::Namespace::create_with(crate::NamespaceOpts {
+        shards: 1,
+        mem_budget_mb: Some(128),
+        ..Default::default()
+    })
+    .unwrap();
+    let ns_id = ns.id();
+    let mut map = VerMap::<u64, Vec<u8>>::new_in(&ns);
+    let main = map.main_branch();
+    map.bulk_load(main, (0..5_000u64).map(|k| (k, payload(k))))
+        .unwrap();
+    map.commit(main).unwrap();
+    let id = map.save_meta().unwrap();
+    ns.flush();
+
+    let files: Vec<_> = fs::read_dir(ns.path().join("mmdb/shard_00"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|ext| ext == "sst"))
+        .collect();
+    assert_eq!(files.len(), 1);
+    let mut contents = fs::read(&files[0]).unwrap();
+    let needle = payload(2_500);
+    let offset = contents
+        .windows(32)
+        .position(|w| w == &needle[..32])
+        .unwrap();
+    contents[offset + 16] ^= 1;
+    fs::write(&files[0], contents).unwrap();
+
+    for result in [
+        map.verify_and_gc().map(|_| ()),
+        VerMap::<u64, Vec<u8>>::from_meta_verified(id).map(|_| ()),
+    ] {
+        assert!(matches!(
+            result,
+            Err(VsdbError::Storage {
+                kind: crate::StorageErrorKind::Corruption,
+                ..
+            })
+        ));
+    }
+
+    drop(map);
+    drop(ns);
+    crate::Namespace::close_by_id(ns_id).unwrap();
+    crate::Namespace::destroy(ns_id).unwrap();
+}

@@ -5,7 +5,7 @@ use crate::versioned::{
     BranchId,
     store::{BranchHead, Header, RETIRED, STAGE, row},
 };
-use std::collections::BTreeMap;
+use std::{borrow::Cow, collections::BTreeMap};
 
 /// Structural writers are serialized by the version store's alias contract.
 struct HistoryPublication<'a>(&'a TreeRuntime);
@@ -146,19 +146,9 @@ impl PersistentBTree {
     }
 
     pub(crate) fn check_ceiling(&self, next: u64) -> Result<()> {
-        for class in [0, LEAF, BLOB_LEAF, BLOB] {
-            let max = class | (!CLASS_MASK);
-            if let Some((key, _)) = self.nodes.get_le(object_key(max))
-                && let Some(id) = object_id(&key)
-                && id & CLASS_MASK == class
-                && id & !CLASS_MASK >= next
-            {
-                return Err(VsdbError::Corrupt {
-                    detail: format!("object ID {id} exceeds allocation ceiling {next}"),
-                });
-            }
-        }
-        Ok(())
+        check_nodes_ceiling(&self.nodes, next, |id| VsdbError::Corrupt {
+            detail: format!("object ID {id} exceeds allocation ceiling {next}"),
+        })
     }
 
     pub(super) fn flush_stage(&mut self) -> Result<()> {
@@ -533,7 +523,10 @@ impl PersistentBTree {
             let invalid = || VsdbError::Corrupt {
                 detail: format!("invalid child ordering or occupancy at page {id}"),
             };
-            let raw = self.nodes.get(object_key(id)).ok_or_else(invalid)?;
+            let raw = self
+                .nodes
+                .try_get_with(object_key(id), |bytes| Ok(bytes.to_vec()))?
+                .ok_or_else(invalid)?;
             let page = NodeView::open(&raw)?;
             if page.len == 0 {
                 return Err(invalid());
@@ -572,4 +565,23 @@ impl PersistentBTree {
         }
         Ok(())
     }
+}
+
+pub(super) fn check_nodes_ceiling(
+    nodes: &MapxRaw,
+    next: u64,
+    corrupt: impl Fn(u64) -> VsdbError,
+) -> Result<()> {
+    for class in [0, LEAF, BLOB_LEAF, BLOB] {
+        let max = object_key(class | !CLASS_MASK);
+        let mut cursor = nodes.try_range(..=Cow::Borrowed(max.as_slice()))?;
+        if let Some((key, _)) = cursor.try_step_prev()?
+            && let Some(id) = object_id(key)
+            && id & CLASS_MASK == class
+            && id & !CLASS_MASK >= next
+        {
+            return Err(corrupt(id));
+        }
+    }
+    Ok(())
 }

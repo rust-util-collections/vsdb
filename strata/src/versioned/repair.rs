@@ -31,12 +31,14 @@ impl<K, V> VerMap<K, V> {
         Self::open_meta(id.into(), true)
     }
 
+    #[cfg(test)]
     pub(super) fn records(&self, tag: u8) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> {
         self.tree
             .nodes
             .range([tag].as_slice()..[tag + 1].as_slice())
     }
 
+    #[cfg(test)]
     pub(super) fn commit_rows(
         &self,
     ) -> impl Iterator<Item = Result<(CommitId, Commit)>> {
@@ -46,16 +48,27 @@ impl<K, V> VerMap<K, V> {
         })
     }
 
+    pub(super) fn try_tag_range(
+        &self,
+        tag: u8,
+    ) -> Result<vsdb_core::basic::mapx_raw::MapxRawIter<'_>> {
+        self.tree
+            .nodes
+            .try_range([tag].as_slice()..[tag + 1].as_slice())
+    }
+
     pub(super) fn validate_commit_graph(&self) -> Result<HashMap<CommitId, u32>> {
         let mut refs = HashMap::<CommitId, u32>::new();
         let mut work = Vec::new();
-        for (key, v) in self.records(HEAD) {
-            record_id(&key)?;
-            let head = BranchHead::decode(&v)?.head;
+        let mut heads = self.try_tag_range(HEAD)?;
+        while let Some((key, v)) = heads.try_step_next()? {
+            record_id(key)?;
+            let head = BranchHead::decode(v)?.head;
             if head != NO_COMMIT {
                 work.push(head);
             }
         }
+        drop(heads);
         while let Some(id) = work.pop() {
             let count = refs.entry(id).or_default();
             *count = count
@@ -79,15 +92,20 @@ impl<K, V> VerMap<K, V> {
         self.tree.clear_cached_heads();
         let hdr = Header::get(&self.tree.nodes)?;
         self.tree.check_ceiling(hdr.next_id)?;
-        let counts = self
-            .validate_commit_graph()
-            .map_err(|err| corrupt(err.to_string()))?;
+        let counts = match self.validate_commit_graph() {
+            Ok(counts) => counts,
+            Err(err @ crate::VsdbError::CommitNotFound { .. }) => {
+                return Err(corrupt(err.to_string()));
+            }
+            Err(err) => return Err(err),
+        };
         let mut roots = Vec::new();
         let mut names = HashMap::new();
         let mut edits = Edits::default();
         let mut main_found = false;
-        for (key, v) in self.records(HEAD) {
-            let id = record_id(&key)?;
+        let mut heads = self.try_tag_range(HEAD)?;
+        while let Some((key, v)) = heads.try_step_next()? {
+            let id = record_id(key)?;
             if id == 0 || id >= hdr.next_branch {
                 return Err(corrupt("invalid branch ID ceiling"));
             }
@@ -95,35 +113,47 @@ impl<K, V> VerMap<K, V> {
             let name = self
                 .tree
                 .nodes
-                .get(row(NAME, id))
+                .try_get_with(row(NAME, id), |raw| {
+                    std::str::from_utf8(raw)
+                        .map(str::to_owned)
+                        .map_err(|_| corrupt("invalid branch name"))
+                })?
                 .ok_or_else(|| corrupt("missing branch name"))?;
-            let name =
-                String::from_utf8(name).map_err(|_| corrupt("invalid branch name"))?;
             if names.insert(by_name(&name), id).is_some() {
                 return Err(corrupt("duplicate branch name"));
             }
-            roots.push(BranchHead::decode(&v)?.dirty_root);
+            roots.push(BranchHead::decode(v)?.dirty_root);
         }
+        drop(heads);
         if !main_found {
             return Err(corrupt("missing main branch"));
         }
-        for (key, _) in self.records(NAME) {
-            let id = record_id(&key)?;
-            if !self.tree.nodes.contains_key(row(HEAD, id)) {
-                edits.rows.insert(key, None);
+        let mut name_rows = self.try_tag_range(NAME)?;
+        while let Some((key, _)) = name_rows.try_step_next()? {
+            let id = record_id(key)?;
+            if !self.tree.nodes.try_contains_key(row(HEAD, id))? {
+                edits.rows.insert(key.to_vec(), None);
             }
         }
-        for (key, v) in self.records(BY_NAME) {
+        drop(name_rows);
+        let mut by_name_rows = self.try_tag_range(BY_NAME)?;
+        while let Some((key, v)) = by_name_rows.try_step_next()? {
             if names
-                .get(&key)
+                .get(key)
                 .is_none_or(|n| n.to_le_bytes().as_slice() != v)
             {
-                edits.rows.insert(key, None);
+                edits.rows.insert(key.to_vec(), None);
             }
         }
+        drop(by_name_rows);
         for (k, id) in names {
             let raw = id.to_le_bytes();
-            if self.tree.nodes.get(&k).as_deref() != Some(&raw) {
+            let matches = self
+                .tree
+                .nodes
+                .try_get_with(&k, |v| Ok(v == raw.as_slice()))?
+                .unwrap_or(false);
+            if !matches {
                 edits.rows.insert(k, Some(raw.to_vec()));
             }
         }
@@ -131,8 +161,10 @@ impl<K, V> VerMap<K, V> {
             return Err(corrupt("branch name index requires writable repair"));
         }
         let mut removed_commits = 0;
-        for record in self.commit_rows() {
-            let (id, mut commit) = record?;
+        let mut commit_rows = self.try_tag_range(COMMIT)?;
+        while let Some((k, v)) = commit_rows.try_step_next()? {
+            let id = CommitId::from_raw(record_id(k)?);
+            let mut commit = Commit::parse(id, v)?;
             if id == NO_COMMIT || id.raw() >= hdr.next_commit {
                 return Err(corrupt("invalid commit ID ceiling"));
             }
@@ -147,39 +179,41 @@ impl<K, V> VerMap<K, V> {
                 removed_commits += 1;
             }
         }
+        drop(commit_rows);
         for root in roots
             .iter()
             .copied()
             .filter(|r| *r != EMPTY_ROOT)
             .collect::<HashSet<_>>()
         {
-            let bytes = self
+            let leaf = self
                 .tree
                 .nodes
-                .get(object_key(root))
+                .try_get_with(object_key(root), |bytes| Ok(NodeView::open(bytes)?.leaf))?
                 .ok_or_else(|| corrupt(format!("missing reachable root {root}")))?;
-            let page = NodeView::open(&bytes)?;
-            if root & CLASS_MASK == BLOB || (root & CLASS_MASK == 0) == page.leaf {
+            if root & CLASS_MASK == BLOB || (root & CLASS_MASK == 0) == leaf {
                 return Err(corrupt("invalid root page class"));
             }
         }
         let mut has_anchors = false;
         for tag in [RETIRED, STAGE] {
-            for (k, _) in self.records(tag) {
-                let id = record_id(&k)?;
+            let mut anchors = self.try_tag_range(tag)?;
+            while let Some((k, _)) = anchors.try_step_next()? {
+                let id = record_id(k)?;
                 has_anchors = true;
                 if tag != RETIRED || !self.tree.keep_pin_marker(id) {
-                    edits.rows.insert(k, None);
+                    edits.rows.insert(k.to_vec(), None);
                 }
             }
         }
         let cached = if deep || has_anchors {
             None
+        } else if let Some(bytes) =
+            self.tree.nodes.try_get_with(REFS, |raw| Ok(raw.to_vec()))?
+        {
+            self.tree.load_refs(&bytes, hdr.generation, &roots)
         } else {
-            self.tree
-                .nodes
-                .get(REFS)
-                .and_then(|bytes| self.tree.load_refs(&bytes, hdr.generation, &roots))
+            None
         };
         let live_objects = match cached {
             Some(n) => n,
@@ -229,7 +263,7 @@ impl<K, V> VerMap<K, V> {
     }
 }
 
-fn record_id(k: &[u8]) -> Result<u64> {
+pub(super) fn record_id(k: &[u8]) -> Result<u64> {
     let bytes = k
         .get(1..)
         .and_then(|v| v.try_into().ok())

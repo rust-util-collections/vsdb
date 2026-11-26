@@ -74,9 +74,11 @@ impl Header {
         }
     }
     pub(crate) fn get(store: &MapxRaw) -> Result<Self> {
-        let bytes = store
-            .get(HEADER)
-            .ok_or_else(|| corrupt("missing version store header"))?;
+        store
+            .try_get_with(HEADER, Self::decode)?
+            .ok_or_else(|| corrupt("missing version store header"))
+    }
+    fn decode(bytes: &[u8]) -> Result<Self> {
         if bytes.len() != 41 || bytes[0] != 18 {
             return Err(corrupt("invalid version store header"));
         }
