@@ -31,14 +31,21 @@ pub struct ValueGuard<V: ValueEnDe, S: RawValueSlot> {
 
 impl<V: ValueEnDe, S: RawValueSlot> ValueGuard<V, S> {
     pub(crate) fn occupied(slot: S) -> Self {
-        let value = V::decode_value(&slot).expect("vsdb: decode entry");
-        Self::new(slot, value, false)
+        Self::try_occupied(slot).expect("vsdb: decode entry")
+    }
+    pub(crate) fn try_occupied(slot: S) -> Result<Self> {
+        let value = V::decode_value(&slot)?;
+        Ok(Self::new(slot, value, false))
     }
     pub(crate) fn new(slot: S, value: V, vacant: bool) -> Self {
         Self {
             #[cfg(debug_assertions)]
             initial: (!vacant && !std::thread::panicking())
-                .then(|| value.encode_value()),
+                .then(|| {
+                    let mut bytes = Vec::new();
+                    value.encode_value_into(&mut bytes).ok().map(|()| bytes)
+                })
+                .flatten(),
             value: Some(value),
             slot: Some(slot),
             dirty: false,
@@ -68,10 +75,15 @@ impl<V: ValueEnDe, S: RawValueSlot> ValueGuard<V, S> {
         if !std::thread::panicking()
             && let Some(initial) = &self.initial
         {
-            let current = value.encode_value();
+            let mut current = Vec::new();
+            let mut second = Vec::new();
             // A codec that assigns a fresh tag on each encode cannot detect
             // interior mutations by byte comparison.
-            if &current != initial && current == value.encode_value() {
+            if value.encode_value_into(&mut current).is_ok()
+                && &current != initial
+                && value.encode_value_into(&mut second).is_ok()
+                && current == second
+            {
                 debug_assert_eq!(
                     &current, initial,
                     "interior mutation requires a mutable dereference"

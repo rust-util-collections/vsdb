@@ -110,12 +110,11 @@ where
         K: OrderedKeyLookup<Q>,
     {
         crate::common::ensure_writable(&self.namespace(), "value update")?;
-        let Some(mut guard) = self.get_mut(key) else {
-            return Ok(None);
-        };
-        let result = f(&mut guard);
-        guard.commit()?;
-        Ok(Some(result))
+        Ok(
+            K::with_ordered_lookup(key, |bytes| self.inner.update(bytes, f))
+                .transpose()?
+                .flatten(),
+        )
     }
 
     /// Checks if the map contains a value for the specified key (borrowed

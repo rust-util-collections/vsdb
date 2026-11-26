@@ -345,7 +345,24 @@ impl Mapx {
         let prefix = self.prefix_bytes();
         let v = self.ns.engine().get(prefix, key)?;
 
-        Some(self.value_slot(key.to_vec(), v, false))
+        Some(self.value_slot_with_prefix(prefix, key.to_vec(), v, false))
+    }
+
+    pub(crate) fn try_get_mut(&mut self, key: &[u8]) -> Result<Option<ValueMut<'_>>> {
+        let prefix = self.try_prefix()?.to_le_bytes();
+        let Some(v) = self
+            .ns
+            .engine()
+            .try_get_with(prefix, key, |bytes| Ok(bytes.to_vec()))?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(self.value_slot_with_prefix(
+            prefix,
+            key.to_vec(),
+            v,
+            false,
+        )))
     }
 
     pub(crate) fn value_slot(
@@ -354,9 +371,20 @@ impl Mapx {
         value: RawValue,
         dirty: bool,
     ) -> ValueMut<'_> {
+        let prefix = self.prefix_bytes();
+        self.value_slot_with_prefix(prefix, key, value, dirty)
+    }
+
+    fn value_slot_with_prefix(
+        &mut self,
+        prefix: PreBytes,
+        key: RawKey,
+        value: RawValue,
+        dirty: bool,
+    ) -> ValueMut<'_> {
         ValueMut {
             ns: self.ns.clone(),
-            prefix: self.prefix_bytes(),
+            prefix,
             key,
             value,
             dirty,

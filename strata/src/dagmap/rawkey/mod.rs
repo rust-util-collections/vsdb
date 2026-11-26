@@ -204,7 +204,12 @@ where
         edit: impl FnOnce(&mut V) -> R,
     ) -> Result<Option<R>> {
         crate::common::ensure_writable(&self.namespace(), "value update")?;
-        let Some(mut guard) = self.get_mut(key) else {
+        let Some(mut guard) = self
+            .inner
+            .try_get_mut(key.as_ref())?
+            .map(ValueMut::try_occupied)
+            .transpose()?
+        else {
             return Ok(None);
         };
         let result = edit(&mut guard);

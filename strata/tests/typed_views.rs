@@ -1,5 +1,8 @@
 mod common;
-use vsdb::{Mapx, MapxOrd, Orphan, basic::mapx_ord::Entry};
+use vsdb::{
+    DagMap, DagMapRawKey, Mapx, MapxOrd, MapxOrdRawKey, Namespace, Orphan, VsdbError,
+    basic::mapx_ord::Entry,
+};
 
 #[test]
 fn reader_pins_sequence_and_entries_write_once() {
@@ -89,4 +92,88 @@ fn guard_created_by_unwind_cleanup_observes_writeback_rules() {
     assert!(unwind.is_err());
     assert_eq!(map.get(&1).unwrap().into_inner(), 1);
     assert_eq!(map.get(&2).unwrap().into_inner(), 42);
+}
+
+#[test]
+fn update_propagates_stored_value_decode_error_before_callback() {
+    use vsdb::{KeyEnDe, MapxRaw, ValueEnDe};
+
+    common::setup();
+    let retired_ns = Namespace::create().unwrap();
+    let retired_id = retired_ns.id();
+    let nested = Mapx::<u32, u32>::new_in(&retired_ns);
+    let nested_bytes = nested.encode_value();
+
+    let mut mapx = Mapx::<u32, Mapx<u32, u32>>::new();
+    mapx.insert(&1, &nested);
+    let mut mapx_ord = MapxOrd::<u32, Mapx<u32, u32>>::new();
+    mapx_ord.insert(&1, &nested);
+    let mut rawkey = MapxOrdRawKey::<Mapx<u32, u32>>::new();
+    rawkey.insert(b"k", &nested);
+    let mut orphan = Orphan::<Mapx<u32, u32>>::new(nested);
+
+    let nested2 = Mapx::<u32, u32>::new_in(&retired_ns);
+    let expected_bytes = nested2.encode_value();
+    let mut dag_rawkey = DagMapRawKey::<Mapx<u32, u32>>::new(None);
+    dag_rawkey.insert(b"k", &nested2);
+    let mut dag = DagMap::<u32, Mapx<u32, u32>>::new(None);
+    dag.insert(&1, &nested2);
+
+    drop(nested2);
+    retired_ns.close().unwrap();
+    Namespace::destroy(retired_id).unwrap();
+
+    assert!(matches!(rawkey.try_get(b"k"), Err(VsdbError::Encoding(_))));
+
+    let mut callbacks = 0usize;
+    assert!(matches!(
+        mapx.update(&1, |_| callbacks += 1),
+        Err(VsdbError::Encoding(_))
+    ));
+    assert!(matches!(
+        mapx_ord.update(&1, |_| callbacks += 1),
+        Err(VsdbError::Encoding(_))
+    ));
+    assert!(matches!(
+        rawkey.update(b"k", |_| callbacks += 1),
+        Err(VsdbError::Encoding(_))
+    ));
+    assert!(matches!(
+        orphan.update(|_| callbacks += 1),
+        Err(VsdbError::Encoding(_))
+    ));
+    assert!(matches!(
+        dag_rawkey.update(b"k", |_| callbacks += 1),
+        Err(VsdbError::Encoding(_))
+    ));
+    assert!(matches!(
+        dag.update(&1, |_| callbacks += 1),
+        Err(VsdbError::Encoding(_))
+    ));
+    assert_eq!(callbacks, 0);
+
+    // Confirm the original encoded payloads were untouched on disk.
+    use serde::{
+        Deserialize,
+        de::value::{BytesDeserializer, Error as ValueError},
+    };
+    let open_raw = |id: vsdb::InstanceId| -> MapxRaw {
+        let frame = [
+            b"VSMAPX02".as_slice(),
+            &id.map_id.to_le_bytes(),
+            &id.ns.unwrap_or_default().to_le_bytes(),
+        ]
+        .concat();
+        MapxRaw::deserialize(BytesDeserializer::<ValueError>::new(&frame)).unwrap()
+    };
+    assert_eq!(
+        open_raw(rawkey.instance_id()).get(b"k").as_deref(),
+        Some(nested_bytes.as_slice())
+    );
+    let mut dag_key = vec![2u8];
+    dag_key.extend_from_slice(&1u32.encode_key());
+    assert_eq!(
+        &open_raw(dag.instance_id()).get(&dag_key).unwrap()[1..],
+        expected_bytes.as_slice()
+    );
 }

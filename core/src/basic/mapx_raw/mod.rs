@@ -371,6 +371,14 @@ impl MapxRaw {
         self.inner.get_mut(key.as_ref())
     }
 
+    #[doc(hidden)]
+    pub fn try_value_mut(
+        &mut self,
+        key: impl AsRef<[u8]>,
+    ) -> Result<Option<ValueMut<'_>>> {
+        self.inner.try_get_mut(key.as_ref())
+    }
+
     /// Edits a present value and reports any storage error during write-back.
     pub fn update<R>(
         &mut self,
@@ -382,7 +390,7 @@ impl MapxRaw {
                 operation: "value update",
             });
         }
-        let Some(mut guard) = self.get_mut(key) else {
+        let Some(mut guard) = self.try_value_mut(key)? else {
             return Ok(None);
         };
         let result = edit(&mut guard);

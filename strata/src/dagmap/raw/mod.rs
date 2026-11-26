@@ -355,21 +355,30 @@ impl DagMapRaw {
     }
     /// Edits a local value; parent rows and tombstones are excluded.
     pub fn get_mut(&mut self, key: impl AsRef<[u8]>) -> Option<ValueMut<'_>> {
-        assert!(
-            self.meta().expect("DAG metadata").state.live(),
-            "DAG node has been consumed"
-        );
-        let key = data_key(key.as_ref());
-        let mut val = self.store.get(&key)?;
-        value(&val)?;
-        val.remove(0);
-        Some(ValueMut {
+        self.try_get_mut(key.as_ref())
+            .expect("DAG local value read")
+    }
+    pub(super) fn try_get_mut(&mut self, key: &[u8]) -> Result<Option<ValueMut<'_>>> {
+        assert!(self.meta()?.state.live(), "DAG node has been consumed");
+        let key = data_key(key);
+        let Some(mut val) = self.store.try_get_with(&key, |bytes| Ok(bytes.to_vec()))?
+        else {
+            return Ok(None);
+        };
+        match val.as_slice() {
+            [0] => return Ok(None),
+            [1, ..] => {
+                val.remove(0);
+            }
+            _ => return Err(corrupt("invalid DAG data row")),
+        }
+        Ok(Some(ValueMut {
             value: val,
             store: &mut self.store,
             key,
             dirty: false,
             unwind: UnwindMark::new(),
-        })
+        }))
     }
     /// Stores a local override, including an empty byte string.
     pub fn insert(&mut self, key: impl AsRef<[u8]>, v: impl AsRef<[u8]>) {

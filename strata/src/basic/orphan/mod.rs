@@ -161,12 +161,12 @@ where
 
     pub fn update<R>(&mut self, f: impl FnOnce(&mut T) -> R) -> Result<R> {
         crate::common::ensure_writable(&self.namespace(), "value update")?;
-        let inner = self
-            .inner
-            .get_mut([])
-            .ok_or_else(|| crate::VsdbError::Corrupt {
-                detail: "missing orphan value".into(),
-            })?;
+        let inner =
+            self.inner
+                .try_get_mut(&[])?
+                .ok_or_else(|| crate::VsdbError::Corrupt {
+                    detail: "missing orphan value".into(),
+                })?;
         let mut guard = ValueMut { inner };
         let result = f(&mut guard);
         guard.commit()?;

@@ -85,13 +85,20 @@ where
         self.inner.get_mut(key).map(ValueMut::occupied)
     }
 
+    pub(crate) fn try_get_mut(&mut self, key: &[u8]) -> Result<Option<ValueMut<'_, V>>> {
+        self.inner
+            .try_value_mut(key)?
+            .map(ValueMut::try_occupied)
+            .transpose()
+    }
+
     pub fn update<R>(
         &mut self,
         key: impl AsRef<[u8]>,
         f: impl FnOnce(&mut V) -> R,
     ) -> Result<Option<R>> {
         crate::common::ensure_writable(&self.namespace(), "value update")?;
-        let Some(mut guard) = self.get_mut(key) else {
+        let Some(mut guard) = self.try_get_mut(key.as_ref())? else {
             return Ok(None);
         };
         let result = f(&mut guard);

@@ -83,7 +83,7 @@ fn registry_directory_sync_retries(root: &Path) {
 }
 
 fn prefix_directory_sync_retries(root: &Path) {
-    let map = MapxRaw::new();
+    let mut map = MapxRaw::new();
     let path = root.join("__SYSTEM__/__prefix_ceiling__");
     let ceiling = || u64::from_le_bytes(fs::read(&path).unwrap().try_into().unwrap());
     let arm = root.join("arm");
@@ -92,12 +92,19 @@ fn prefix_directory_sync_retries(root: &Path) {
     let fails = |r: vsdb_core::Result<InstanceId>| {
         assert!(matches!(r, Err(VsdbError::Io(e)) if e.raw_os_error() == Some(EIO)));
     };
-    fails(map.try_instance_id());
+    let mut callbacks = 0usize;
+    assert!(matches!(
+        map.update(b"k", |_| callbacks += 1),
+        Err(VsdbError::Io(e)) if e.raw_os_error() == Some(EIO)
+    ));
+    assert_eq!(callbacks, 0);
     let visible = ceiling();
     assert!(visible > start);
     fails(map.try_instance_id());
     assert_eq!(ceiling(), visible);
     fs::remove_file(&arm).unwrap();
+    assert_eq!(map.update(b"k", |_| callbacks += 1).unwrap(), None);
+    assert_eq!(callbacks, 0);
     assert_eq!(map.try_instance_id().unwrap().map_id, start);
 
     // Each new thread must claim a window. The first failed refill leaves
