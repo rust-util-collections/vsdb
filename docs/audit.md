@@ -19,14 +19,6 @@
 
 ---
 
-### [LOW] collections: keys() copies every value
-- **Where**: `strata/src/basic/mapx_ord_rawkey/mod.rs` (`keys`), `strata/src/basic/mapx/mod.rs` (`keys`), `strata/src/basic/mapx_ord/mod.rs` (`keys`), `core/src/common/engine/mmdb.rs` (`MmdbIter::next`)
-- **What**: The rustdoc says value bytes are skipped entirely. In fact `keys()` maps the owned `(key, value)` iterator, and `MmdbIter::next` copies each lent value with `to_vec()` before dropping it.
-- **Why**: Each value costs an allocation and a copy on an iteration hot path. Reproduced: listing eight keys whose values are 256 KiB each allocated about 2.1 MB. Results are unaffected.
-- **Suggested fix**: Return a key-only adapter over `try_step_next` and `try_step_prev` that copies only keys and keeps the existing panic behavior, or correct the three rustdocs. Regression test: an allocation-counting test binary.
-
----
-
 ### [LOW] engine: flush panics on shard errors without documenting it
 - **Where**: `core/src/common/engine/mmdb.rs` (`MmDB::flush`), `core/src/common/namespace.rs` (`Namespace::flush`, `flush_all_open`), `core/src/common/mod.rs` (`vsdb_flush`)
 - **What**: `MmDB::flush` calls `db.flush().expect(..)`. mmdb returns an error when a fail-stop error has latched, when a shard is closed, or when flush I/O fails.

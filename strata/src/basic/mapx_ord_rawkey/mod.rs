@@ -158,14 +158,14 @@ where
 
     /// Returns an iterator over the map's raw keys, in ascending order.
     ///
-    /// Unlike `iter().map(|(k, _)| k)`, this never decodes `V` — each
-    /// entry's value bytes are skipped entirely instead of being
+    /// Unlike `iter().map(|(k, _)| k)`, this never copies or decodes `V` —
+    /// each entry's value bytes are skipped entirely instead of being
     /// decoded and immediately discarded, avoiding wasted work on a hot
     /// path (this matters most for nested-VSDB-collection value types,
     /// whose "decode" is itself an engine `deserialize` call).
     #[inline(always)]
     pub fn keys(&self) -> impl DoubleEndedIterator<Item = RawKey> + '_ {
-        self.inner.iter().map(|(k, _)| k)
+        RawKeys(self.inner.iter())
     }
 
     /// Returns a mutable iterator over the map's entries.
@@ -378,6 +378,28 @@ impl<'a, V: ValueEnDe> Entry<'a, V> {
             f(e.get_mut());
         }
         self
+    }
+}
+
+// Copies each key from the lent cursor row and skips its value bytes.
+struct RawKeys<'a>(MapxRawIter<'a>);
+
+impl Iterator for RawKeys<'_> {
+    type Item = RawKey;
+    fn next(&mut self) -> Option<RawKey> {
+        self.0
+            .try_step_next()
+            .expect("vsdb: mmdb iteration failed")
+            .map(|(k, _)| k.to_vec())
+    }
+}
+
+impl DoubleEndedIterator for RawKeys<'_> {
+    fn next_back(&mut self) -> Option<RawKey> {
+        self.0
+            .try_step_prev()
+            .expect("vsdb: mmdb iteration failed")
+            .map(|(k, _)| k.to_vec())
     }
 }
 
