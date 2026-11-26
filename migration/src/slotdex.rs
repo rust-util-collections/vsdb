@@ -1,4 +1,6 @@
 //! Upgrade fixed-width v17 SlotDex indices without moving their data.
+mod resize;
+
 use crate::{LegacyRaw, legacy_payload, try_get, typed_handle};
 use std::{any::TypeId, fs};
 use vsdb::{InstanceId, KeyEnDeOrdered, Namespace, Result, SlotDex, SlotType, VsdbError};
@@ -10,13 +12,20 @@ fn invalid(detail: &str) -> VsdbError {
     }
 }
 
-/// Converts saved v17 metadata and the eight-byte total row. Existing keys,
-/// per-slot counts, and upper tiers retain their exact bytes. Run offline.
-/// The total upgrade is fenced before publishing the new metadata.
+#[derive(Clone, Copy)]
+enum Capacity {
+    Builtin(Option<u32>),
+    Custom(u32),
+}
+
+/// Converts saved v17 metadata offline. Oversized unsigned capacities use
+/// `u32::MAX` unless an earlier conversion selected a replacement. Entry
+/// keys and per-slot counts stay in place. The total and any rebuilt tiers
+/// are durable before publishing the handle.
 pub fn migrate_v17<S: SlotType, K: KeyEnDeOrdered>(
     id: impl Into<InstanceId>,
 ) -> Result<SlotDex<S, K>> {
-    convert(id.into(), None)
+    convert(id.into(), Capacity::Builtin(None))
 }
 
 /// Use when the application confirms the old codec always used the current
@@ -28,13 +37,13 @@ pub fn migrate_custom_v17<S: SlotType, K: KeyEnDeOrdered>(
     id: impl Into<InstanceId>,
     capacity: u32,
 ) -> Result<SlotDex<S, K>> {
-    convert(id.into(), Some(capacity))
+    convert(id.into(), Capacity::Custom(capacity))
 }
 
 /// Converts a postcard-serialized v17 `SlotDex` handle (and its underlying
 /// eight-byte total row) without requiring an `__instance_meta__` file.
 pub fn migrate_handle_v17<S: SlotType, K: KeyEnDeOrdered>(bytes: &[u8]) -> Result<Vec<u8>> {
-    convert_bytes::<S, K>(bytes, None, None).map(|(_, h)| h)
+    convert_bytes::<S, K>(bytes, None, Capacity::Builtin(None)).map(|(_, h)| h)
 }
 
 /// [`migrate_custom_v17`] for a postcard-serialized `SlotDex` handle stored
@@ -43,12 +52,29 @@ pub fn migrate_custom_handle_v17<S: SlotType, K: KeyEnDeOrdered>(
     bytes: &[u8],
     capacity: u32,
 ) -> Result<Vec<u8>> {
-    convert_bytes::<S, K>(bytes, None, Some(capacity)).map(|(_, h)| h)
+    convert_bytes::<S, K>(bytes, None, Capacity::Custom(capacity)).map(|(_, h)| h)
+}
+
+/// Selects a v18 capacity of at least two for a built-in unsigned index
+/// whose v17 capacity exceeds `u32::MAX`. Repeat the same choice for aliases.
+pub fn migrate_v17_with_capacity<S: SlotType, K: KeyEnDeOrdered>(
+    id: impl Into<InstanceId>,
+    capacity: u32,
+) -> Result<SlotDex<S, K>> {
+    convert(id.into(), Capacity::Builtin(Some(capacity)))
+}
+
+/// [`migrate_v17_with_capacity`] for a serialized handle.
+pub fn migrate_handle_v17_with_capacity<S: SlotType, K: KeyEnDeOrdered>(
+    bytes: &[u8],
+    capacity: u32,
+) -> Result<Vec<u8>> {
+    convert_bytes::<S, K>(bytes, None, Capacity::Builtin(Some(capacity))).map(|(_, h)| h)
 }
 
 fn convert<S: SlotType, K: KeyEnDeOrdered>(
     id: InstanceId,
-    requested: Option<u32>,
+    requested: Capacity,
 ) -> Result<SlotDex<S, K>> {
     let id = InstanceId::new(id.map_id, id.ns.unwrap_or_default());
     let ns = Namespace::open(id.ns.unwrap_or_default())?;
@@ -71,7 +97,7 @@ fn convert<S: SlotType, K: KeyEnDeOrdered>(
 fn convert_bytes<S: SlotType, K: KeyEnDeOrdered>(
     bytes: &[u8],
     expected: Option<InstanceId>,
-    requested: Option<u32>,
+    requested: Capacity,
 ) -> Result<(SlotDex<S, K>, Vec<u8>)> {
     let (frame, tail) = postcard::take_from_bytes::<&[u8]>(bytes)?;
     if !tail.is_empty() {
@@ -87,9 +113,16 @@ fn convert_bytes<S: SlotType, K: KeyEnDeOrdered>(
         if expected.is_some_and(|e| dex.instance_id() != e) {
             return Err(invalid("invalid v18 SlotDex identity"));
         }
+        if let Capacity::Builtin(Some(wanted)) = requested {
+            // The runtime decoder above validated the complete prefix frame.
+            let (_, stored, _): (u8, u32, bool) = crate::exactly(&frame[36..])?;
+            if stored != wanted {
+                return Err(invalid("different SlotDex replacement capacity"));
+            }
+        }
         return Ok((dex, bytes.to_vec()));
     }
-    if requested.is_none()
+    if !matches!(requested, Capacity::Custom(_))
         && ![
             TypeId::of::<u32>(),
             TypeId::of::<u64>(),
@@ -110,38 +143,68 @@ fn convert_bytes<S: SlotType, K: KeyEnDeOrdered>(
         });
     }
     let id = store.instance_id();
-    let (capacity, swap, tail) = if let Some(capacity) = requested {
-        let ((old, swap), tail) = postcard::take_from_bytes::<(S, bool)>(rest)?;
-        if S::tier_stride(capacity, 1) != Some(old) {
-            return Err(invalid("custom v17 SlotDex capacity mismatch"));
-        }
-        (capacity, swap, tail)
-    } else {
-        let ((cap, swap), tail) = postcard::take_from_bytes::<(u128, bool)>(rest)?;
-        let cap = u32::try_from(cap).map_err(|_| invalid("v17 SlotDex capacity exceeds u32"))?;
-        (cap, swap, tail)
-    };
-    if !tail.is_empty() || version != 2 || capacity < 2 || expected.is_some_and(|e| id != e) {
+    if version != 2 || expected.is_some_and(|e| id != e) {
         return Err(invalid("invalid v17 SlotDex configuration or identity"));
     }
-    let total = match try_get(&store, [2])?.as_deref() {
-        None if store.try_range(..)?.try_step_next()?.is_none() => 0,
-        Some(raw) if raw.len() == 8 => u64::from_le_bytes(raw.try_into().unwrap()),
-        Some(raw) if raw.len() == 16 && raw[8..] == [0; 8] => {
-            u64::from_le_bytes(raw[..8].try_into().unwrap())
+    let (old, swap): (S, bool) = crate::exactly(rest)?;
+    let capacity = match requested {
+        Capacity::Custom(capacity) => {
+            if S::tier_stride(capacity, 1) != Some(old) {
+                return Err(invalid("custom v17 SlotDex capacity mismatch"));
+            }
+            capacity
         }
-        _ => return Err(invalid("invalid v17 SlotDex total row")),
+        Capacity::Builtin(replacement) => {
+            // All three built-in unsigned coordinates use postcard's unsigned varint.
+            let (old, _): (u128, bool) = crate::exactly(rest)?;
+            let Ok(capacity) = u32::try_from(old) else {
+                return resize::convert::<S, K>(&mut store, old, swap, replacement);
+            };
+            if replacement.is_some_and(|r| r != capacity) {
+                return Err(invalid(
+                    "capacity replacement requires an oversized v17 SlotDex",
+                ));
+            }
+            capacity
+        }
     };
-    if requested.is_some() {
-        verify_custom::<S, K>(&store, capacity, total)?;
+    if capacity < 2 {
+        return Err(invalid("invalid v17 SlotDex capacity"));
     }
-    let handle =
-        typed_handle::<SlotDex<S, K>>(id, &postcard::to_allocvec(&(3u8, capacity, swap))?)?;
+    let (total, generation) = read_total(&store)?;
+    if generation.is_some_and(|g| g != 0) {
+        return Err(invalid("v18 SlotDex already modified"));
+    }
+    if matches!(requested, Capacity::Custom(_)) {
+        verify_entries::<S, K>(&store, total)?;
+        verify_tiers(&store, |level| Ok(S::tier_stride(capacity, level)))?;
+    }
+    let handle = target_handle::<S, K>(id, capacity, swap)?;
     let mut batch = store.batch();
     batch.insert([2], [total.to_le_bytes(), [0; 8]].concat());
     batch.commit_sync()?;
     let dex: SlotDex<S, K> = crate::exactly(&handle)?;
     Ok((dex, handle))
+}
+
+fn target_handle<S: SlotType, K: KeyEnDeOrdered>(
+    id: InstanceId,
+    capacity: u32,
+    swap: bool,
+) -> Result<Vec<u8>> {
+    typed_handle::<SlotDex<S, K>>(id, &postcard::to_allocvec(&(3u8, capacity, swap))?)
+}
+
+fn read_total(store: &MapxRaw) -> Result<(u64, Option<u64>)> {
+    match try_get(store, [2])?.as_deref() {
+        None if store.try_range(..)?.try_step_next()?.is_none() => Ok((0, None)),
+        Some(raw) if raw.len() == 8 => Ok((u64::from_le_bytes(raw.try_into().unwrap()), None)),
+        Some(raw) if raw.len() == 16 => Ok((
+            u64::from_le_bytes(raw[..8].try_into().unwrap()),
+            Some(u64::from_le_bytes(raw[8..].try_into().unwrap())),
+        )),
+        _ => Err(invalid("invalid v17 SlotDex total row")),
+    }
 }
 
 fn coordinate<S: SlotType>(raw: &[u8]) -> Result<S> {
@@ -166,15 +229,25 @@ fn count(raw: &[u8]) -> Result<u64> {
     }
     Ok(n)
 }
-fn verify_custom<S: SlotType, K: KeyEnDeOrdered>(
-    store: &MapxRaw,
-    capacity: u32,
-    total: u64,
-) -> Result<()> {
+fn verify_entries<S: SlotType, K: KeyEnDeOrdered>(store: &MapxRaw, total: u64) -> Result<u64> {
+    if store
+        .try_range(..[0].as_slice())?
+        .try_step_next()?
+        .is_some()
+        || store.try_contains_key([1])?
+        || store
+            .try_range([2, 0].as_slice()..)?
+            .try_step_next()?
+            .is_some()
+    {
+        return Err(invalid("unexpected v17 SlotDex row"));
+    }
+    let mut slots = 0;
     let mut entries = store.try_range([0]..[1])?;
     let mut level0 = store.try_range([1, 0]..[1, 1])?;
     let mut seen = 0u64;
     while let Some((key, val)) = level0.try_step_next()? {
+        slots += 1;
         let slot = coordinate::<S>(&key[2..])?;
         let n = count(val)?;
         seen = seen
@@ -196,14 +269,16 @@ fn verify_custom<S: SlotType, K: KeyEnDeOrdered>(
     if seen != total || entries.try_step_next()?.is_some() {
         return Err(invalid("v17 SlotDex total mismatch"));
     }
-    drop(entries);
-    drop(level0);
+    Ok(slots)
+}
+
+fn verify_tiers<S: SlotType>(
+    store: &MapxRaw,
+    stride: impl Fn(u8) -> Result<Option<S>>,
+) -> Result<()> {
     let mut previous = 0u8;
-    let mut rows = store.try_range([1, 1]..[2, 0])?;
-    let mut cur_row = rows
-        .try_step_next()?
-        .filter(|(k, _)| k.first() == Some(&1))
-        .map(|(k, v)| (k.to_vec(), v.to_vec()));
+    let mut rows = store.try_range([1, 1].as_slice()..[2].as_slice())?;
+    let mut cur_row = rows.try_step_next()?.map(|(k, v)| (k.to_vec(), v.to_vec()));
     while let Some((ref first_k, _)) = cur_row {
         let level = *first_k
             .get(1)
@@ -211,17 +286,14 @@ fn verify_custom<S: SlotType, K: KeyEnDeOrdered>(
         if previous.checked_add(1u8) != Some(level) {
             return Err(invalid("missing v17 tier"));
         }
-        let stride = S::tier_stride(capacity, level);
+        let stride = stride(level)?;
         let mut lower = store.try_range([1, previous]..[1, level])?;
         let mut cur_low = lower
             .try_step_next()?
             .map(|(k, v)| (k.to_vec(), v.to_vec()));
         while cur_row.as_ref().is_some_and(|(k, _)| k[1] == level) {
             let (k, v) = cur_row.take().expect("checked");
-            cur_row = rows
-                .try_step_next()?
-                .filter(|(k, _)| k.first() == Some(&1))
-                .map(|(k, v)| (k.to_vec(), v.to_vec()));
+            cur_row = rows.try_step_next()?.map(|(k, v)| (k.to_vec(), v.to_vec()));
             let floor = coordinate::<S>(&k[2..])?;
             let mut sum = 0u64;
             while let Some((ref low, _)) = cur_low {
