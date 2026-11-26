@@ -17,22 +17,14 @@ class EvidenceTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.folder = Path(self.temp.name)
-        for regime in ("warm", "device", "singleton", "secondary", "device-width8", "landed", "distance-cache", "width8-repeat", "final", "policy"):
-            if regime == "secondary":
-                pairs = [("v4", ("v4", "1")), ("width8", ("1", "8"))]
-            elif regime == "width8-repeat":
+        for regime in ("warm", "device", "singleton", "device-width8", "distance-cache", "width8-repeat", "policy"):
+            if regime == "width8-repeat":
                 pairs = [("AA", ("shipped","shipped")), ("AB", ("shipped","8"))]
             elif regime == "distance-cache":
                 pairs = [("AA", ("shipped","shipped")), ("AB", ("shipped","cached"))]
             elif regime == "policy":
                 pairs = [("AA", ("policy","policy")), ("AB", ("final","policy")),
                          ("v4AA", ("v4","v4")), ("upgrade", ("v4","policy"))]
-            elif regime == "final":
-                pairs = [("AA", ("final","final")), ("AB", ("shipped","final")),
-                         ("v4AA", ("v4","v4")), ("upgrade", ("v4","final"))]
-            elif regime == "landed":
-                pairs = [("AA", ("1","1")), ("AB", ("1","shipped")),
-                         ("v4AA", ("v4","v4")), ("upgrade", ("v4","shipped"))]
             elif regime == "device-width8":
                 pairs = [("diagnostic-width8", ("8",))]
             else:
@@ -45,7 +37,7 @@ class EvidenceTests(unittest.TestCase):
                         samples = 100_000 if regime == "singleton" else 10_000
                         if regime=="width8-repeat":
                             samples = 30_000
-                        seed = 261126 + round_no + {"width8-repeat":100_000, "final":200_000, "policy":300_000}.get(regime,0)
+                        seed = 261126 + round_no + {"width8-repeat":100_000, "policy":300_000}.get(regime,0)
                         disk_hits = 9_500 if regime.startswith("device") else 0
                         rows.append(dict(round=round_no, pair=pair, arm=role, order=order,
                                          seed=seed, binary=binary, regime=regime,
@@ -54,7 +46,7 @@ class EvidenceTests(unittest.TestCase):
                                          storage_bytes=4096 * disk_hits, io_positive=disk_hits))
             self.save(regime, rows)
 
-        for filename, arms in (("rss.csv", ("1","8","32","shipped","v4")), ("rss-final.csv", ("final",)), ("rss-policy.csv", ("policy",))):
+        for filename, arms in (("rss.csv", ("1","8","32","shipped","v4")), ("rss-policy.csv", ("policy",))):
             rows = []
             for n in range(1,4):
                 for regime in ("warm","device"):
@@ -109,7 +101,7 @@ class EvidenceTests(unittest.TestCase):
 
 
     def test_missing_process_peak_rejected(self):
-        path = self.folder / "rss-final.csv"
+        path = self.folder / "rss-policy.csv"
         with path.open() as f:
             rows = list(csv.DictReader(f))
         rows[0]["gnu_time_peak_kib"] = "0"

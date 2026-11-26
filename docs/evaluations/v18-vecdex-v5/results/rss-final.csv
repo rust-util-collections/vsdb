@@ -1,7 +1,0 @@
-round,regime,arm,seed,samples,gnu_time_peak_kib,sampled_process_vmhwm_kib,storage_bytes,io_positive,digest,nearest
-1,warm,final,741127,1000,13228,13304,0,0,441ae75c9cde8388,873
-1,device,final,741127,500,12080,7268,609566720,500,ecae44036bdf5f02,433
-2,warm,final,741128,1000,13080,13312,0,0,d250163cb156c97a,866
-2,device,final,741128,500,12076,7172,601858048,500,ded2937e62cbbc53,434
-3,warm,final,741129,1000,12976,13280,0,0,424f2aefa42da7a2,874
-3,device,final,741129,500,12084,7200,613228544,500,6f957a223566186f,439

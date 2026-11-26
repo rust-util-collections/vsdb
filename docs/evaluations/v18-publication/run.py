@@ -24,22 +24,19 @@ if args.default_dag and args.final_edits:
     parser.error("choose one supplemental workload")
 # Each tuple selects the control executable and operation, then the comparison.
 cases = {
-    "child": ("v5-previous", "dag", "v5-pinned", "dag"),
-    "dependent": ("v5-pinned", "individual", "v5-pinned", "overlay"),
-    "precomputed": ("v5-pinned", "batch", "v5-pinned", "overlay"),
-    "v4-child": ("v4", "dag", "v5-pinned", "dag"),
-    "v4-individual": ("v4", "individual", "v5-pinned", "individual"),
-    "v4-batch": ("v4", "batch", "v5-pinned", "batch"),
     "placement": ("v5-pinned", "mixed-hot", "v5-pinned", "mixed-split"),
     "v4-hot": ("v4", "mixed-hot", "v5-pinned", "mixed-hot"),
     "v4-split": ("v4", "mixed-split", "v5-pinned", "mixed-split"),
 }
+diagnostics = []
 if args.default_dag:
+    diagnostics = [("diag-previous", "dag16"), ("diag-pinned", "dag16")]
     cases = {
         "default-child": ("v5-previous", "dag16", "v5-pinned", "dag16"),
         "default-v4-child": ("v4", "dag16", "v5-pinned", "dag16"),
     }
 if args.final_edits:
+    diagnostics = [("diag-final", op) for op in ("individual", "overlay", "batch", "empty")]
     cases = {
         "final-dependent": ("v5-final", "individual", "v5-final", "overlay"),
         "final-precomputed": ("v5-final", "batch", "v5-final", "overlay"),
@@ -55,9 +52,9 @@ with (args.output / "host.txt").open("x") as info:
     info.write(f"{platform.platform()}\nCPU affinity {args.cpus}\n")
     for cmd in (["rustc", "+stable", "-Vv"], ["findmnt", "-T", str(args.scratch), "-no", "SOURCE,FSTYPE,OPTIONS"]):
         info.write(subprocess.check_output(cmd, text=True))
-    labels = (["v5-final", "diag-final"] if args.final_edits else
-              ["v4", "v5-previous", "v5-pinned", "diag-pinned", "diag-previous"])
-    for label in labels:
+    labels = {label for control, _, compared, _ in cases.values() for label in (control, compared)}
+    labels.update(label for label, _ in diagnostics)
+    for label in sorted(labels):
         info.write(f"{label} {digest(args.binaries / label)}\n")
 def run(label, mode, n, seed):
     with tempfile.TemporaryDirectory(dir=args.scratch) as d:
@@ -94,11 +91,6 @@ with args.lock.open("a") as lock, (args.output/"trials.csv").open("x") as f:
                     observe(arm,spec,10000,seed_base+iteration,case=name,round=iteration,pair=pair,order=order)
             finally:fcntl.flock(lock,fcntl.LOCK_UN)
         print("completed round",iteration,flush=True)
-    diagnostics = ([("diag-previous","dag16"),("diag-pinned","dag16")] if args.default_dag else
-                   [("diag-previous","dag"),("diag-pinned","dag"),("diag-pinned","individual"),
-                    ("diag-pinned","overlay"),("diag-pinned","batch")])
-    if args.final_edits:
-        diagnostics = [("diag-final",op) for op in ("individual","overlay","batch","empty")]
     for label, mode in diagnostics:
         fcntl.flock(lock,fcntl.LOCK_EX)
         try:observe("diagnostic",(label,mode),1000,20261127,case="submissions",round=0,pair="diagnostic",order=1)

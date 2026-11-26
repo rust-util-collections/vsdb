@@ -382,8 +382,7 @@ impl MmDB {
         }
     }
 
-    /// One engine-property reading per shard, in shard order
-    /// (measurement pre-work of the shared-mem-pool RFC, step 0).
+    /// One engine-property reading per shard, in shard order.
     ///
     /// Property names are mmdb's `DB::get_property` names; `None` marks
     /// a name unknown to the engine. Per-shard cache telemetry stays

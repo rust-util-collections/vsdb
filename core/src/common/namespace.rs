@@ -7,7 +7,7 @@
 //! queue, or memtable budget contention); the only shared components are
 //! cold-path metadata (the global prefix allocator and the registry).
 //!
-//! Design: `docs/proposals/namespaces.md`. The load-bearing rules:
+//! See `docs/namespaces.md` for namespace placement and lifetime rules.
 //!
 //! * **Anonymous placement groups.** Users never name a namespace, never
 //!   persist an id for one, never pass a path on the normal tier. The
@@ -577,8 +577,7 @@ fn validate_explicit_root(
 /// dataset's prefixes have unknown provenance (the allocator ceiling
 /// lives under THIS universe's default base), so new allocations could
 /// collide with the adopted data — and `destroy` would later delete
-/// whatever else lived there. Importing/attaching foreign roots is an
-/// explicit non-goal (see the deferred-work section of docs/proposals/namespaces.md).
+/// whatever else lived there. See `docs/namespaces.md` for placement and relocation.
 fn ensure_root_adoptable(root: &Path) -> Result<bool> {
     match fs::read_dir(root) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),

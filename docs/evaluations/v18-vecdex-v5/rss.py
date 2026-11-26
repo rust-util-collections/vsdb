@@ -46,9 +46,7 @@ p.add_argument("fixtures", type=Path)
 p.add_argument("output", type=Path)
 p.add_argument("--lock", required=True, type=Path)
 p.add_argument("--cpus", required=True)
-group = p.add_mutually_exclusive_group()
-group.add_argument("--final-only", action="store_true")
-group.add_argument("--policy-warm-only", action="store_true")
+p.add_argument("--policy-warm-only", action="store_true")
 args = p.parse_args()
 bins = args.bin_dir.resolve()
 fixtures = args.fixtures.resolve()
@@ -64,8 +62,6 @@ with args.output.open("x") as out, args.lock.open("a") as lock:
             arms = ["1", "8", "32", "shipped"] + (["v4"] if regime == "warm" else [])
             if args.policy_warm_only:
                 arms = ["policy"]
-            if args.final_only:
-                arms = ["final"]
             if i % 2 == 0:
                 arms.reverse()
             samples = 500 if regime == "device" else 1000

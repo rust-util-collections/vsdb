@@ -89,8 +89,9 @@ tree root they captured and support reads while the branch advances.
 A namespace owns an MMDB engine. The default engine has 16 shards. Additional
 namespaces can choose a directory, shard count and memory budget at creation.
 `ns.scope(|| Mapx::new())` and `Mapx::new_in(&ns)` select the engine for a new
-collection. Reads and restores use the namespace recorded in its handle. An
-atomic write batch covers one map prefix on one shard. [Namespace design](docs/proposals/namespaces.md)
+collection. Reads and restores use the namespace recorded in its handle.
+Ordinary batches publish within one prefix, and a checked co-located insert
+can publish across two prefixes on one shard. [Namespace design](docs/namespaces.md)
 
 ### Read-only mode
 
@@ -103,11 +104,12 @@ in the process. [Read-only guide](strata/docs/read-only.md)
 The default engine budget is 2 GiB. Each additional namespace defaults to
 512 MiB. These budgets size caches and write buffers. Process memory also
 includes pinned blocks, runtime metadata and application allocations.
-[Memory sizing and overrides](docs/proposals/shared-mem-pool.md)
+[Memory sizing and overrides](docs/storage.md#memory-sizing)
 
 ## Documentation
 
-- [v18 documentation index](docs/README.md) — API guides, storage design, migration and benchmark records.
+- [v18 design and measured performance](docs/v18.md) — storage behavior, migration guarantees and operation-specific upgrade results.
+- [Documentation index](docs/README.md) — collection APIs, configuration and benchmark data.
 - [Working on VSDB](AGENTS.md) — workspace layout, build commands, conventions and project skills.
 - [Changelog](CHANGELOG.md) — release history and v18 API changes.
 

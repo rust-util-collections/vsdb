@@ -202,7 +202,7 @@ effective 8 MiB minimum in that namespace, including on reopen.
 All MB-named options use binary MiB. Budgets size caches and
 write buffers with floors and caps. Process RSS also includes pinned blocks,
 metadata and application allocations.
-See the [memory design](../../docs/proposals/shared-mem-pool.md).
+See the [memory design](../../docs/storage.md#memory-sizing).
 
 ## Namespaces
 

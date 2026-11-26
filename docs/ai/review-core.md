@@ -117,7 +117,7 @@ and v5-backed VSDB executables, corpus, cache regime and comparison metric.
 Report saturated foreground operations separately from total bytes and paced
 request latency. Compare candidate gains to control/control variation. A result
 from an archived experimental patch describes the binary built from that patch.
-[VSDB v18 implementation and measured decisions](../proposals/v18-mmdb-v5-execution.md)
+[VSDB v18 implementation and measured decisions](../v18.md)
 
 **Design:** Locks, ownership, queues, multi-step install, degrade, public/on-disk
 → applicable D-\* in `design-patterns.md`; skip empty families.

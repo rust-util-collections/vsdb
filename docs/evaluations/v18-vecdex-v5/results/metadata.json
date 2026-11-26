@@ -151,7 +151,7 @@
     "max": 32
   },
   "shipped_revision": "1300ad2dd802d88c1cffbfa8dfed0a74c737644f",
-  "trial_harness": "d84eb24; landed suite db8c72a",
+  "trial_harness": "d84eb24",
   "normal_arms": [
     "v4",
     "1",
@@ -169,7 +169,6 @@
   ],
   "distance_cache_patch_sha256": "e2c0a3eb39a9a1027ed7b682b3b67cf575b626a90857dd86642f264b35f29f63",
   "final_revision": "3b220e7b8410e033b15429bca40f0b982dc89a48",
-  "final_confirmation_seed_base": 461126,
   "stock_policy_revision": "685427371e5e538592db946b258ead6dce3cc42c",
   "stock_policy_seed_base": 561126,
   "policy_warm_fixture_check": {

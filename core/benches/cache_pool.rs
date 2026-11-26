@@ -1,6 +1,5 @@
-//! Q1 gate for the engine-level block-cache pool (the telemetry section of
-//! docs/proposals/shared-mem-pool.md): measures SST-backed random point-reads under a bounded
-//! budget in the two load shapes that matter —
+//! Measures SST-backed random point reads with a bounded engine-level cache pool.
+//! See `docs/storage.md` for cache sizing. The workloads are
 //!
 //! - **skew**: one hot map = one hot shard (`prefix % shards` routing
 //!   puts a collection entirely inside one shard). Working set ~10 MB

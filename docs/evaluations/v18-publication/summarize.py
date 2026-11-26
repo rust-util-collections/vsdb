@@ -18,7 +18,7 @@ with open(sys.argv[1]) as fp:
 default_dag = len(sys.argv)==3 and sys.argv[2]=="--default-dag"
 final_edits = len(sys.argv)==3 and sys.argv[2]=="--final-edits"
 expected = ({"final-dependent","final-precomputed"} if final_edits else {"default-child","default-v4-child"} if default_dag else
-            {"child","dependent","precomputed","v4-child","v4-individual","v4-batch","placement","v4-hot","v4-split"})
+            {"placement","v4-hot","v4-split"})
 assert set(cases)==expected
 writer=csv.writer(sys.stdout,lineterminator="\n")
 writer.writerow("case,control_p99_us,compared_p99_us,paired_gain_pct,min_gain_pct,max_gain_pct,max_aa_pct,favorable_pairs,qualified_pairs,control_median_ops_s,compared_median_ops_s".split(","))
@@ -62,6 +62,4 @@ if final_edits:
 if default_dag:
     assert len(diag)==2 and counts=={("diag-previous","dag16"):2,("diag-pinned","dag16"):1}
     sys.exit(0)
-assert len(diag)==len(counts)==5
-assert counts["diag-previous","dag"]==2 and counts["diag-pinned","dag"]==1
-assert counts["diag-pinned","overlay"]==counts["diag-pinned","batch"]<counts["diag-pinned","individual"]
+assert not diag, "placement trials use ordinary builds"

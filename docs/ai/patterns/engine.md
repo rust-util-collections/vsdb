@@ -42,7 +42,7 @@ separate segmented and overflow capacities per engine. The shard entries
 track current memtables and L0 pins. Compare caller-held pins, per-tree
 caches, RSS and compaction debt separately. The string property
 `block-cache-usage` measures entries and repeats the shared component on
-each shard. [Sizing and units](../../proposals/shared-mem-pool.md)
+each shard. [Sizing and units](../../storage.md#memory-sizing)
 
 **E11 Clone** — A fallible clone can hit a source error after writing
 destination chunks. Use checked cursor steps, wipe the new target on failure

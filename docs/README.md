@@ -3,7 +3,7 @@
 The workspace contains two runtime crates and an offline converter. Applications
 use [vsdb](../strata/README.md), which builds its collections on
 [vsdb_core](../core/README.md). The converter depends on both runtime crates and
-runs in a separate upgrade program. [Migrating from v17](../migration/README.md)
+runs in a separate upgrade program. [Migrating from v17/v4 or v18/v4](../migration/README.md)
 
 ## Using the database
 
@@ -19,38 +19,23 @@ runs in a separate upgrade program. [Migrating from v17](../migration/README.md)
 
 ## Storage design
 
-| Topic | What the document covers |
+| Topic | Guide |
 | --- | --- |
-| [v18 roadmap](proposals/v18-roadmap.md) | Storage design by subsystem, the initial performance evaluation, and the status of follow-up work |
-| [Joint MMDB v5 and VSDB v18 proposal](https://github.com/rust-util-collections/mmdb/blob/master/docs/proposals/mmdb-v5-vsdb-v18-improvements.md) | Shard-local publication, graph reads, memory budgets and the upgrade sequence. The [MMDB execution record](https://github.com/rust-util-collections/mmdb/blob/master/docs/proposals/mmdb-v5-execution-plan.md) records the engine decisions. The [VSDB port and verification](proposals/v18-mmdb-v5-execution.md) covers the actual adapter, collections and offline migration. Both documents are in `../mmdb/docs/proposals/` in sibling checkouts. |
-| [Namespaces](proposals/namespaces.md) | Placement, universe and engine identities, prefix allocation and recovery |
-| [Namespace close](proposals/ns-close.md) | Engine ownership, close refusal and in-process teardown |
-| [Memory sizing](proposals/shared-mem-pool.md) | Per-engine block cache, per-shard buffers, telemetry and proposed extensions |
-| [Synchronous batches and read views](proposals/durable-batches-and-read-views.md) | Single-prefix durability, snapshot lifetimes and reader handles |
+| v18 collection formats, backend integration and validation | [v18 on MMDB v5](v18.md) |
+| Placement, universe and engine identity, prefix allocation, close and relocation | [Namespaces](namespaces.md) |
+| Shard-local publication, fences, captured reads and per-namespace memory | [Storage operations and sizing](storage.md) |
 
 ## Performance evidence
 
-The initial v18 evaluations compare against v17 code at `da9a325`. Each report
-records the workload and build used for its measurements. Later implementation
-work is tracked in the [roadmap](proposals/v18-roadmap.md).
+The v18/v4 and v18/v5 measurements use identical logical workloads on
+x86_64 Linux. Each report identifies the source binaries, fixture, units
+and control variation. [Upgrade results by operation](v18.md#measured-performance)
 
-The MMDB v5 port also has matched v4/v5 application runs. Each report
-identifies its source and the logical workload that its results describe.
-
-- [DagMap publication, dependent VerMap edits and contended foreground writes](evaluations/v18-publication/README.md)
-- [Adapter allocations and 16-shard memory](evaluations/v18-adapter/README.md)
-- [VecDex complete-query latency and pin costs](evaluations/v18-vecdex-v5/README.md)
-- [B+ tree lookups and bounded scans](evaluations/v18-tree-v5/README.md)
-
-The original collection-layout evaluations remain available:
-
-- [Basic map operations](evaluations/v18-basic.md)
-- [SlotDex and DagMap](evaluations/v18-slotdex-dagmap.md)
-- [Merkle tries and VecDex](evaluations/v18-trie-vecdex.md)
-- [VerMap and reference-count persistence](evaluations/v18-versioned.md)
-
-Earlier records cover [ACC migration primitives](evaluations/acc-migration-primitives.md)
-and [Hotmint integration on v17](evaluations/hotmint-v17.md).
+- [Adapter allocations, write throughput and 16-shard memory](evaluations/v18-adapter/README.md)
+- [DagMap child publication, VerMap working edits and foreground writes](evaluations/v18-publication/README.md)
+- [Stock B+ tree point and range reads](evaluations/v18-tree-v5/stock/README.md)
+- [Complete VecDex queries, storage reads and pin ownership](evaluations/v18-vecdex-v5/README.md)
+- [v17 to v18 collection-layout comparisons with MMDB v4 held constant](evaluations/v18-collection-layouts.md)
 
 ## Maintaining the workspace
 

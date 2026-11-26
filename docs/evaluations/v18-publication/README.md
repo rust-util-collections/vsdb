@@ -1,152 +1,67 @@
-# Publication and foreground write profile
+# DagMap and VerMap publication costs
 
-Use the same Rust driver against the v4-backed adapter at `6ddaed9`, the
-native v5 adapter before atomic DAG registration at `504630f`, and the
-candidate with bounded VerMap edits at `0481462`. All three resolve the
-same value codecs. Build the standalone Cargo manifest in this directory
-with `cargo +stable build --release` in each worktree, copying this
-directory into earlier revisions. Enable `--features working-edit` for
-the candidate. Name the saved executables `v4`, `v5-previous` and
-`v5-pinned`. Build the last two again with the additional `counters`
-feature, saving them as `diag-previous` and `diag-pinned`.
-Diagnostic runs count write and fence submissions on the issuing thread.
-They exclude reads. The ordinary
-latency binaries use the regular dependency feature set.
+**A DagMap child now takes one engine write submission.** In the default
+16-shard namespace, child-creation p99 fell **33.38%** against the v4-backed
+v18 runtime. On v5, atomically inserting the child's metadata, the parent
+edge and the advanced allocator reduced p99 **31.05%** against the prior
+two-write implementation. All five pairs favored the atomic batch. The probe
+also checked the edge and child count. [Raw trials](results/default-namespace/trials.csv) · [Paired summary](results/default-namespace/summary.csv)
 
-The child case creates 10,000 children on one existing parent. The
-dependent operation reads and increments two keys twice, either serially
-or inside one bounded working edit. A precomputed write_batch sets the
-same final values. Each process verifies all final values or the graph
-size and last edge. History commit time is outside those measurements.
+| Operation | Control p99 | Compared p99 | Median paired p99 change | Max control variation |
+|---|---:|---:|---:|---:|
+| DagMap child, v4 → v5 | 13.48 µs | 9.13 µs | −33.38% | 7.68% |
+| DagMap child on v5, two writes → one | 13.30 µs | 9.17 µs | −31.05% | 7.41% |
+| Four dependent VerMap updates on v5, individual → working edit | 70.54 µs | 31.72 µs | −52.51% | 39.58% |
+| Two known final values on v5, precomputed batch → working edit with four reads and writes | 27.22 µs | 32.45 µs | +19.21% | 44.60% |
 
-For placement, one writer issues 10,000 128-byte map updates against a
-paced clock. A second writer changes 1,024 256-byte values in VerMap for
-each 128 foreground arrivals. Both runs start with 4,096 seeded entries
-per collection. The namespace has two shards. Choosing the small map's
-prefix controls whether the writers share a shard. Wait for both streams
-to finish. Record arrival-to-ack and service p99, throughput, process RSS
-and L0 at both ends of the timed interval. The predeclared offer is 3,000
-foreground puts/s, with floor/ceil checks for the outstanding foreground
-and bulk requests at half and end (at most 100 and two respectively).
-Rows failing that qualification are descriptive only.
+**Use a VerMap working edit when later writes depend on earlier reads.**
+On the checked implementation at `2ae6149`, each group of four dependent
+updates incremented two keys twice and produced one working-root
+publication. Instrumented builds counted four write submissions for the
+individual updates, one for the working edit, and one for the precomputed
+batch. A read-only callback submitted zero writes or fences. History
+commit was outside the measurement. [Raw trials and operation counts](results/verified-leaf/trials.csv) · [Paired summary](results/verified-leaf/summary.csv)
 
-Use a fresh output directory and uncompressed scratch on the target device:
+## Foreground writes during bulk publication
+
+One foreground producer issued 10,000 128-byte map writes at 3,000/s. One
+VerMap producer changed 1,024 values of 256 bytes per 128 foreground
+arrivals. Both placements sustained the offered load. On v5, using a
+second shard reduced median run foreground arrival-to-ack p99 from
+1,075.88 µs to 79.54 µs. The paired improvement of 85.71% was within the
+240.50% maximum difference between repeated controls. Call-only p99 was
+22.24 µs versus 14.51 µs, with a 32.25% paired improvement against
+99.31% variation. The fixture did not resolve a repeatable latency benefit
+from changing shard placement. [Placement and upgrade trials](results/trials.csv) · [Summary](results/summary.csv)
+
+## Reproduce
+
+All comparisons used x86_64 Linux on a Ryzen 9 5900X, cores 4–7, independent
+fresh processes, and matching seeds inside each pair. The table gives medians
+of the five within-run p99s and the median change calculated within the five
+pairs. Each process completed 10,000 logical operations. The CSVs record
+separate control/control pairs. [Placement binaries](results/host.txt) · [DagMap binaries](results/default-namespace/host.txt) · [VerMap binaries](results/verified-leaf/host.txt)
+
+To recompute the tables from this directory:
 
 ```sh
-python3 run.py /path/to/binaries /path/to/output --cpus 4-7 --scratch /path/to/scratch --lock /tmp/vsdb-profile.lock
-python3 summarize.py /path/to/output/trials.csv
+python3 summarize.py results/trials.csv
+python3 summarize.py results/default-namespace/trials.csv --default-dag
+python3 summarize.py results/verified-leaf/trials.csv --final-edits
 ```
 
-Each paired p99 uses 10,000 complete logical operations. The largest
-absolute A/A change measures run-to-run variation. Throughput measures
-the complete operation loop. An idle or empty working edit is covered by
-the generation-unchanged unit test. Root generation is checked directly
-by the versioned tests; the separately instrumented submissions measure
-calls actually received by the engine.
+To collect new observations, copy this directory into detached worktrees for
+the measured revisions. Build its Cargo manifest with `cargo +stable build --release` using a separate target directory for each build. Save ordinary
+binaries as `v4` (`6ddaed9`), `v5-previous` (`504630f`),
+`v5-pinned` (`0481462`, feature `working-edit`), and `v5-final`
+(`2ae6149`, feature `working-edit`). Also build the three v5 binaries with
+the additional `counters` feature, naming them `diag-previous`, `diag-pinned`
+and `diag-final`. The [runner](run.py) takes a binary directory, fresh output
+directory, CPU list, scratch directory and timing lock, e.g.:
 
-## Results on x86_64 Linux
+```sh
+python3 run.py /path/to/bin /path/to/new-output --cpus 4-7 --scratch /path/to/scratch --lock /tmp/vsdb-profile.lock --default-dag
+```
 
-The Ryzen 9 5900X runs used four pinned cores on NVMe with Btrfs
-compression disabled in the benchmark directory. All 180 timed processes
-completed and the five diagnostics verified the engine submission counts.
-The source worktrees and binary fingerprints are retained with the trials.
-[Host and executables](results/host.txt) · [All process observations](results/trials.csv) · [Paired statistics](results/summary.csv)
-
-| Logical operation | Control p99 | Compared p99 | Median paired improvement | Largest A/A change | Favorable pairs |
-|---|---:|---:|---:|---:|---:|
-| DagMap child, v5 two writes versus one atomic batch | 12.79 µs | 8.28 µs | 31.38% | 25.39% | 5/5 |
-| Four dependent VerMap edits, individual versus working session | 63.67 µs | 26.13 µs | 56.18% | 26.95% | 5/5 |
-| Two known final values, write_batch versus a session performing four reads and edits | 23.76 µs | 26.35 µs | −5.64% | 14.45% | 0/5 |
-| DagMap child, v4-backed v18 versus v5-backed v18 | 13.13 µs | 9.09 µs | 34.19% | 11.41% | 5/5 |
-
-Column medians describe the individual arms. The gain is calculated inside
-each matched pair. The new DagMap path made 1,000 engine submissions for
-1,000 children; the previous v5 implementation made 2,000. Individual
-VerMap updates made 4,000 submissions, the working overlay and precomputed
-batch each made 1,000. Use a working session for dependent updates. A
-caller with precomputed edits already has the same publication count and
-can continue using `write_batch`.
-
-For the one-shard child trial, A/A uses the first control as the
-denominator. Calling the faster control the denominator in every pair
-(`max(a, b) / min(a, b) - 1`) gives a 34.02% maximum spread, above the
-31.38% measured gain. The independent default 16-shard trial gives 7.41%
-under either convention. Its 31.05% gain clears both spreads in five favorable
-pairs. The two-to-one submission count is independent of this timing
-sensitivity. [One-shard pairs](results/trials.csv) · [Default-shard pairs](results/default-namespace/trials.csv)
-
-Service time starts when `MapxRaw::insert` begins. Recomputing the same
-five placement pairs from `service_ns` gives median run p99 of 22.24 µs
-on one shard and 14.51 µs on split shards, a 32.25% median paired gain
-with four favorable pairs. Its A/A maximum was 99.31%. The primary
-arrival-to-acknowledgement measure below also includes time waiting for
-the scheduled foreground call to run. Both comparisons have substantial
-control variation. [Per-process arrival and service observations](results/trials.csv)
-
-All small puts and bulk operations met the matched-load screens for the
-mixed workload. Routing a foreground map away from VerMap reduced median
-run p99 from 1,075.88 to 79.54 µs on v5. The 85.71% median paired gain
-was smaller than the 240.50% control variation, with four favorable pairs.
-The v4/v5 same-shard and split-shard comparisons also had wide control
-variation. This trace establishes neither a guaranteed tail reduction nor
-a reason to change persistent shard routing. The CSV retains the individual
-arrival/service p99s, L0 debt, bulk row counts and RSS. On equivalent
-individual VerMap calls and precomputed batches, v4/v5 median p99 changes
-also stayed inside control variation.
-
-### Default 16-shard namespace
-
-A separate repeat placed the DagMap parent in the actual default namespace.
-The native before/after p99 was **13.30 / 9.17 µs**, a median within-pair
-gain of **31.05%** (28.27–36.55%; A/A 7.41%). Against v18 on MMDB v4,
-the paired gain was 33.38% (29.59–36.42%; A/A 7.68%). All five pairs
-favored the new write shape in both comparisons. The two diagnostic runs
-again counted two versus one engine submission per child. With these
-sequentially issued IDs, every 10,000-child run advanced the global prefix
-by 160,000. Preserving co-location consumes prefix space; the current
-allocator still met the observed child-operation improvement without a new
-reservation format. Rebuild the same five binaries with the current driver
-and pass `--default-dag` to both the runner and summarizer to reproduce
-this repeat. [Default-namespace runs](results/default-namespace/trials.csv) · [Matched summary](results/default-namespace/summary.csv) · [Binary digests](results/default-namespace/host.txt)
-
-The separate `empty` diagnostic ran 1,000 read-only working callbacks on a
-nonempty branch and recorded **zero native write or fence submissions**.
-Each callback performed one checked point read. The write counter excludes reads. The test in the versioned suite checks that an empty successful
-callback leaves the branch generation unchanged. To repeat the diagnostic,
-build the candidate with `--features working-edit,counters` and run
-`publication-profile empty 1000 20261127` with a fresh `VSDB_BASE_DIR`.
-[Diagnostic observation](results/empty-working.txt)
-
-### Checked working-root reads
-
-The integrated working-edit path at `470b462` handles missing tree objects
-and invalid pages through typed errors. The callback-abort test verifies
-that a late failed read publishes nothing. A separate five-seed comparison
-on this implementation repeated the full callback sequence. Individual
-calls versus the working edit measured p99 **66.33 / 26.52 µs**, with a
-57.31% median paired improvement (53.26–65.15%, 5/5, maximum A/A 29.72%).
-With known final values, the precomputed batch remained faster than the
-callback doing four dependent reads and writes (−6.55% median paired
-improvement, maximum A/A 20.78%). Each group of four individual updates
-used four engine submissions. The overlay and precomputed batch used one
-each, and an empty callback used zero.
-
-Build ordinary and counter binaries at `470b462` as described above,
-named `v5-final` and `diag-final`. Pass `--final-edits` to `run.py`
-and `summarize.py`. Output covers 40 ordinary processes and four diagnostics.
-[Raw data](results/checked-working/trials.csv) · [Paired statistics](results/checked-working/summary.csv) · [Binary digests and host](results/checked-working/host.txt)
-
-The measured tree validation at `2ae6149` also checks the leaf's
-stored inline/blob class against the slots before decoding a working
-value. On that revision, dependent edits measured **70.54 / 31.72 µs**
-p99 (individual / working), with **52.51%** paired improvement
-(50.53–65.33%, five favorable pairs, A/A 39.58%). For precomputed
-values the ordinary batch measured 27.22 µs versus 32.45 µs for the
-session doing its extra reads. Each still made one native submission.
-The same `--final-edits` procedure was run with binaries from `2ae6149`.
-[Final raw trials](results/verified-leaf/trials.csv) · [Final paired summary](results/verified-leaf/summary.csv) · [Build and host](results/verified-leaf/host.txt)
-
-A subsequent committed-root check at `a331ecc` rejects a referenced page
-with zero slots. Valid empty trees use the distinguished empty root. All
-pages reached by the timing fixture are nonempty; the quoted latency
-measurements identify the exact earlier executable used for the comparison.
+Use `--final-edits` for VerMap and omit both workload flags for the mixed
+placement trace. Confirm the result with the corresponding summarizer command.

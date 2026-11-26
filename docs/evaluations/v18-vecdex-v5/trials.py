@@ -8,7 +8,7 @@ p = argparse.ArgumentParser(description=__doc__)
 p.add_argument("bin_dir", type=Path)
 p.add_argument("fixtures", type=Path)
 p.add_argument("output", type=Path)
-p.add_argument("regime", choices=["warm", "device", "singleton", "secondary", "device-width8", "landed", "distance-cache", "width8-repeat", "final", "policy"])
+p.add_argument("regime", choices=["warm", "device", "singleton", "device-width8", "distance-cache", "width8-repeat", "policy"])
 p.add_argument("--cpus", required=True)
 p.add_argument("--lock", type=Path)
 p.add_argument("--samples", type=int, default=10_000)
@@ -27,8 +27,7 @@ with args.output.open("x") as out:
     writer.writeheader()
     out.flush()
     for n in range(1,6):
-        pairings=([("v4", "v4", "1"),("width8","1","8")] if args.regime=="secondary"
-                  else [("AA","1","1"),("AB","1","32")])
+        pairings = [("AA", "1", "1"), ("AB", "1", "32")]
         if args.regime == "width8-repeat":
             pairings = [("AA", "shipped", "shipped"), ("AB", "shipped", "8")]
         if args.regime == "distance-cache":
@@ -36,12 +35,6 @@ with args.output.open("x") as out:
         if args.regime == "policy":
             pairings = [("AA", "policy", "policy"), ("AB", "final", "policy"),
                         ("v4AA", "v4", "v4"), ("upgrade", "v4", "policy")]
-        if args.regime == "final":
-            pairings = [("AA", "final", "final"), ("AB", "shipped", "final"),
-                        ("v4AA", "v4", "v4"), ("upgrade", "v4", "final")]
-        if args.regime == "landed":
-            pairings = [("AA", "1", "1"), ("AB", "1", "shipped"),
-                        ("v4AA", "v4", "v4"), ("upgrade", "v4", "shipped")]
         if args.regime == "device-width8":
             pairings = [("diagnostic-width8", "8", "8")]
         if n%2==0: pairings.reverse()

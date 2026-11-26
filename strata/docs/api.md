@@ -180,7 +180,7 @@ v18 typed handles use `VSTYPE04`. Convert v17 handles offline using the
   default engine; `NamespaceOpts::mem_budget_mb` configures others. Units are
   binary MiB. These inputs are not hard RSS limits: floors, caps, pinned
   blocks, and runtime metadata affect actual memory use. See the
-  [memory design](../../docs/proposals/shared-mem-pool.md).
+  [memory design](../../docs/storage.md#memory-sizing).
 
 ## Durability fences
 

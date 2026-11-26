@@ -22,8 +22,8 @@ DagMap child p99 by 33.38% versus v18/v4. The same-graph warm VecDex
 upgrade comparison with the selected profile at `6854273` had 37.48% higher
 p99. Stock B+ tree point hit and miss p99 rose 12.03% and 11.83% on the
 32,768-key warm fixture. The scan p99 comparison had high control variation.
-The reports give control variation, request sizes, and later candidate trials.
-[Publication measurements](docs/evaluations/v18-publication/README.md) · [VecDex queries](docs/evaluations/v18-vecdex-v5/README.md) · [B+ tree controls](docs/evaluations/v18-tree-v5/README.md)
+The reports give the workload, request sizes and control variation.
+[Publication measurements](docs/evaluations/v18-publication/README.md) · [VecDex queries](docs/evaluations/v18-vecdex-v5/README.md) · [Stock B+ tree results](docs/evaluations/v18-tree-v5/stock/README.md)
 
 ### Public API migration notes
 
@@ -1044,7 +1044,7 @@ Post-release audit fixes (registry: `docs/audit.md`).
 ## [v16.1.0]
 
 In-process namespace `close()` — the ownership-inverted engine
-lifecycle (RFC: `docs/proposals/ns-close.md`).
+lifecycle. [Namespace close](docs/namespaces.md#close-reopen-relocate-and-destroy)
 
 ### Added
 
@@ -1155,7 +1155,7 @@ registry: `docs/audit.md`).
 
 ## [v16.0.0]
 
-Design: `docs/proposals/namespaces.md` (rev 10).
+[Namespace layout and lifecycle](docs/namespaces.md)
 
 ### Added (P1 — namespaces)
 
@@ -1236,7 +1236,7 @@ Design: `docs/proposals/namespaces.md` (rev 10).
   silent data corruption. Downgrade stays unsupported by policy; this
   makes the violation fail loudly instead of silently, and makes
   v15.0.2+ the safe landing point for out-of-contract rollbacks.
-  (Design: `docs/proposals/namespaces.md` §7.)
+  [Namespace identity and routing](docs/namespaces.md)
 
 ### Changed
 
