@@ -1,0 +1,14 @@
+Linux-7.0.0-44-generic-x86_64-with-glibc2.43
+CPU affinity 4-7
+rustc 1.100.0 (0ef1bc386 2026-11-09)
+binary: rustc
+commit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a
+commit-date: 2026-11-09
+host: x86_64-unknown-linux-gnu
+release: 1.100.0
+LLVM version: 23.1.5
+/dev/nvme1n1 btrfs rw,noatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvolid=5,subvol=/
+v5-final fe094afb79968579e7eba308aa8a6bfd82b576c77d3c3e4b6143e584584f74b8
+diag-final f2aac5d51430466bb7f82a14d2e94ac7be6348df09fb98c101cef6f1c481df62
+Model name:                              AMD Ryzen 9 5900X 12-Core Processor
+compression=none

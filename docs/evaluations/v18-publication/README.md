@@ -134,3 +134,13 @@ Build ordinary and counter binaries at `470b462` as described above,
 named `v5-final` and `diag-final`. Pass `--final-edits` to `run.py`
 and `summarize.py`. Output covers 40 ordinary processes and four diagnostics.
 [Raw data](results/checked-working/trials.csv) · [Paired statistics](results/checked-working/summary.csv) · [Binary digests and host](results/checked-working/host.txt)
+
+The exact selected tree validation at `2ae6149` also checks the leaf's
+stored inline/blob class against the slots before decoding a working
+value. With that final code, dependent edits measured **70.54 / 31.72 µs**
+p99 (individual / working), with **52.51%** paired improvement
+(50.53–65.33%, five favorable pairs, A/A 39.58%). For precomputed
+values the ordinary batch measured 27.22 µs versus 32.45 µs for the
+session doing its extra reads. Each still made one native submission.
+The same `--final-edits` procedure was run with binaries from `2ae6149`.
+[Final raw trials](results/verified-leaf/trials.csv) · [Final paired summary](results/verified-leaf/summary.csv) · [Build and host](results/verified-leaf/host.txt)
