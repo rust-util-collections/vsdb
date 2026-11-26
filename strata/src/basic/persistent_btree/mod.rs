@@ -1161,28 +1161,61 @@ impl PersistentBTree {
     }
 
     fn object(&self, id: NodeId) -> PageBytes<'_> {
+        self.try_object(id).expect("B+ tree object read failed")
+    }
+
+    fn try_object(&self, id: NodeId) -> Result<PageBytes<'_>> {
         #[cfg(test)]
         NODE_READS.with(|c| c.set(c.get() + 1));
         if let Some(raw) = self.pending.get(&id) {
-            return PageBytes::Borrowed(raw);
+            return Ok(PageBytes::Borrowed(raw));
         }
-        if id & CLASS_MASK == 0 {
-            if let Some(cached) = self.runtime.page_cache.get(id) {
-                return PageBytes::Shared(cached);
-            }
-            let raw: Arc<[u8]> = self
-                .nodes
-                .get(object_key(id))
-                .unwrap_or_else(|| panic!("missing B+ tree object {id}"))
-                .into();
-            self.runtime.page_cache.insert(id, Arc::clone(&raw));
-            return PageBytes::Shared(raw);
+        if id & CLASS_MASK == 0
+            && let Some(cached) = self.runtime.page_cache.get(id)
+        {
+            return Ok(PageBytes::Shared(cached));
         }
-        PageBytes::Owned(
-            self.nodes
-                .get(object_key(id))
-                .unwrap_or_else(|| panic!("missing B+ tree object {id}")),
-        )
+        self.nodes
+            .try_get_with(object_key(id), |bytes| {
+                if id & CLASS_MASK == 0 {
+                    let raw = Arc::from(bytes);
+                    self.runtime.page_cache.insert(id, Arc::clone(&raw));
+                    Ok(PageBytes::Shared(raw))
+                } else {
+                    Ok(PageBytes::Owned(bytes.to_vec()))
+                }
+            })?
+            .ok_or_else(|| VsdbError::Corrupt {
+                detail: format!("missing B+ tree object {id}"),
+            })
+    }
+
+    fn with_checked_page<T>(
+        &self,
+        id: NodeId,
+        read: impl FnOnce(&NodeView<'_>) -> T,
+    ) -> Result<T> {
+        let raw = self.try_object(id)?;
+        NodeView::open(&raw)
+            .and_then(|page| {
+                page.check_id(id)?;
+                // A deletion may temporarily allocate an empty leaf or a one-child root.
+                if page.len == 0 && !matches!(raw, PageBytes::Borrowed(_)) {
+                    return Err(VsdbError::Corrupt {
+                        detail: format!("empty committed B+ tree page {id}"),
+                    });
+                }
+                Ok(read(&page))
+            })
+            .inspect_err(|_| {
+                if id & CLASS_MASK == 0 {
+                    self.runtime.page_cache.remove(id);
+                }
+            })
+    }
+
+    fn try_node(&self, id: NodeId) -> Result<Node> {
+        self.with_checked_page(id, |page| page.materialize())
     }
 
     pub(crate) fn node(&self, id: NodeId) -> Node {
@@ -1190,12 +1223,17 @@ impl PersistentBTree {
     }
 
     pub(crate) fn leaf_val_eq(&self, existing: &LeafVal, new_bytes: &[u8]) -> bool {
-        match existing {
+        self.try_leaf_val_eq(existing, new_bytes)
+            .expect("B+ tree value read failed")
+    }
+
+    fn try_leaf_val_eq(&self, existing: &LeafVal, new_bytes: &[u8]) -> Result<bool> {
+        Ok(match existing {
             LeafVal::Bytes(b) => b.as_slice() == new_bytes,
             LeafVal::Blob(id) => {
-                new_bytes.len() > 1024 && self.object(*id).as_ref() == new_bytes
+                new_bytes.len() > 1024 && self.try_object(*id)?.as_ref() == new_bytes
             }
-        }
+        })
     }
 
     /// Drains the write buffer into a single engine write batch.
@@ -1692,18 +1730,8 @@ impl PersistentBTree {
             return Ok(Vec::new());
         }
         let page = NodeView::open(bytes)?;
-        let class = page.validated_class()?;
-        let children = page.edges();
-        if class != id & CLASS_MASK
-            || children
-                .iter()
-                .any(|&c| c & !CLASS_MASK >= id & !CLASS_MASK || c & !CLASS_MASK == 0)
-        {
-            return Err(VsdbError::Corrupt {
-                detail: format!("invalid child or class on page {id}"),
-            });
-        }
-        Ok(children)
+        page.check_id(id)?;
+        Ok(page.edges())
     }
 
     fn count_nodes(
