@@ -181,7 +181,39 @@ the same seeds. Each of the five rounds has a fresh v4/v4 pair, independent
 from a v4/selected-v5 pair in the same placement and load. The verifier
 checks the executable fingerprint and actual buffer size in the recorded
 roles. The operations, qualification, nominal budget and endpoint
-definitions are the same as the original matrix.
+definitions are the same as the original matrix. Each placement completed
+all of the offered work in all five independent A/A and A/B pairs. Stock
+v5 peaked at 664.28 MiB RSS in this direct write-only comparison.
+[All 80 processes](upgrade.jsonl.gz) · [Computed paired outcomes](upgrade.csv)
+
+| Placement and metric | v4 median | Stock v5 median | Median paired change | Within-pair range | Max v4 A/A difference |
+|---|---:|---:|---:|---:|---:|
+| Hot paced put p99, ms | 44.737 | 1.824 | 95.88% lower | 26.76–96.16% lower | 12.78% |
+| Hot saturated MiB/s | 183.37 | 294.33 | +59.53% | +57.35 to +76.35% | 6.90% |
+| Hot saturated small puts/s | 771 | 2,108 | +172.81% | +53.92 to +553.81% | 72.52% |
+| All-active paced put p99, ms | 22.704 | 6.905 | 73.64% lower | 8.33% higher to 89.41% lower | 37.53% |
+| All-active saturated MiB/s | 507.29 | 499.24 | −2.26% | −38.15 to −1.39% | 14.75% |
+| All-active saturated small puts/s | 13,310 | 11,575 | −31.63% | −46.44 to −10.03% | 21.77% |
+| All-active saturated batches/s | 31,861 | 31,365 | −2.23% | −38.13 to −1.26% | 14.77% |
+| All-active complete-mix MiB/s | 424.15 | 368.86 | −27.22% | −46.44 to −10.03% | 21.77% |
+
+The hot-shard put p99 and total saturation throughput improved by more
+than their respective A/A bands and in all five matched trials. At
+all-active saturation the small writer completed fewer puts in all five
+pairs. Its median regression and the loss in complete-mix rate both exceed
+the observed control spread, while the median change in gross byte throughput
+falls inside its wider A/A band. A/A variability also limits precision of
+any 5% no-regression claim on this host. On this write mix, batching and
+WAL/flush behavior can affect the work share of competing classes.
+
+At the end of all-active saturation v5 had a median of 25 L0 files and
+17 pending immutable generations, compared with 31 L0 files on v4's
+synchronous flush path. V5 performed 112 flushes and 26 compactions during
+the timed window against 169 and 38 on v4. Both started with 16 L0 files.
+At the all-active fixed offer, both ended with 32 L0 files after 16 flushes
+and zero compactions. V5 finished those paced runs with zero pending
+immutables. Saturation throughput uses the end of the worker window;
+background work can continue afterward.
 
 ## Reproduce
 
