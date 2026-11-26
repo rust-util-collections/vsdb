@@ -1,8 +1,8 @@
 mod geometry;
 
 use crate::common::{
-    MMDB_SHARD_LEVELS, PREFIX_ALLOC_START, PREFIX_SIZE, Pre, PreBytes, RawKey,
-    RawRangeBounds, RawValue, atomic_write_file, configured_mem_budget_mb,
+    ColocatedEdits, MMDB_SHARD_LEVELS, PREFIX_ALLOC_START, PREFIX_SIZE, Pre, PreBytes,
+    RawKey, RawRangeBounds, RawValue, atomic_write_file, configured_mem_budget_mb,
     create_dir_all_durable,
     error::{Result, VsdbError, corrupt, from_mmdb_err},
     vsdb_freeze_base_dir, vsdb_get_base_dir, vsdb_is_read_only,
@@ -350,6 +350,34 @@ impl MmDB {
             }
         }
         self.shard(&first).write(batch).map_err(from_mmdb_err)
+    }
+
+    pub(crate) fn write_colocated(
+        &self,
+        writes: &[(PreBytes, ColocatedEdits<'_>)],
+    ) -> Result<()> {
+        let Some(((anchor, _), rest)) = writes.split_first() else {
+            return Ok(());
+        };
+        let shard = self.shard_of(anchor);
+        if rest
+            .iter()
+            .any(|(prefix, _)| self.shard_of(prefix) != shard)
+        {
+            return Err(VsdbError::InvalidConfig {
+                detail: "co-located write requires every prefix on one shard".into(),
+            });
+        }
+        let mut batch = WriteBatch::new();
+        for (prefix, edits) in writes {
+            for &(key, value) in *edits {
+                match value {
+                    Some(value) => batch.put_prefixed(prefix, key, value),
+                    None => batch.delete_prefixed(prefix, key),
+                }
+            }
+        }
+        self.shard(anchor).write(batch).map_err(from_mmdb_err)
     }
 
     /// See the module-level [`reserve_recovered_prefix`].

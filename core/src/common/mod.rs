@@ -39,6 +39,9 @@ pub type RawBytes = Vec<u8>;
 pub type RawKey = RawBytes;
 /// A type alias for a raw value, represented as a vector of bytes.
 pub type RawValue = RawBytes;
+/// One map's edits in a co-located write: `Some` stores a value and `None`
+/// removes the key.
+pub type ColocatedEdits<'a> = &'a [(&'a [u8], Option<&'a [u8]>)];
 
 /// A type alias for a prefix, represented as a `u64`.
 pub type Pre = u64;

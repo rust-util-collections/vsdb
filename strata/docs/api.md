@@ -431,7 +431,10 @@ Serialize structural changes to each connected graph. Every node has one
 tagged map on the root's shard. A successful prune removes ancestor side branches, folds the mainline,
 reparents surviving head children,
 clears consumed nodes and fences that
-shard's WAL. Retrying on the consumed head finishes any interrupted cleanup.
+shard's WAL. The fold, the reparented children and the consumed-node
+markers are published in one batch. An error consumes the head handle, so
+save or serialize the head before pruning; pruning that restored head again
+finishes any interrupted cleanup.
 `clone` copies the connected graph. `clone_in` places the copy in another
 namespace and preserves each parent's child tokens.
 

@@ -20,11 +20,16 @@
   A stale index entry may be removed locally. Parentless roots and nodes
   owned by another parent keep their data.
 - Authenticate fallback reads and guard parent chains against cycles.
-- Prune destroys side branches, folds the mainline atomically into the root
-  and reparents live head children — while finishing `destroy_subtree()` on any owned `!state.live()` (`Destroying`) child of the head — before writing any clearing marker or wiping the head's `[01..02)` discovery edges. The marker
-  retains the original owner and root identities. Retrying on the head
-  completes marker publication before wiping local data. Keep discovery
-  edges until the data pass completes. Fence the single shard before return.
+- Prune destroys side branches and finishes `destroy_subtree()` on any
+  owned `!state.live()` (`Destroying`) child of the head. One co-located
+  batch then publishes the fold, the reparented live head children and a
+  clearing marker on every mainline node, so no folded node stays live.
+  The marker retains the original owner and root identities. Retrying on
+  the head completes marker publication before wiping local data. Keep
+  discovery edges until the data pass completes. Fence the single shard
+  before return. A prune entering at a live ancestor resumes an unmarked
+  prune left by earlier releases when a live descendant's edge names a
+  child of the root.
 - Destroy marks and wipes owned descendants with discovery edges intact.
   Finish descendant registries before unlinking the target. A retried
   destroy can use the owner saved in its destroying state.

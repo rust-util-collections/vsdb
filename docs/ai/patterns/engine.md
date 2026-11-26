@@ -17,8 +17,11 @@
 **E5 Batch scope** — Ordinary batches bind one prefix. `insert_colocated`
 checks engine identity and shard before either map's rows are appended. If
 both handles name the same map, its `here` puts precede its `there` puts.
-DagMap child creation uses one write for all three rows. Pruning retains its
-recovery records across phases. [Co-location tests](../../../core/tests/colocated.rs)
+`write_colocated` applies the same checks to any number of maps before
+appending puts and removals in order. DagMap child creation uses one write
+for all three rows. A prune publishes its fold, reparented children and
+clearing markers in one write and retains its recovery records across the
+later phases. [Co-location tests](../../../core/tests/colocated.rs)
 
 **E6 Iter prefix bound** — stop at prefix end (incl. `u64::MAX` upper-bound care).
 
@@ -92,7 +95,7 @@ generations and adds no mutation. [Public batch contract](../../../core/docs/api
 - [ ] Identical routing all paths
 - [ ] Prefixed keys + bounded iters (`u64::MAX` OK)
 - [ ] Default once; one engine per non-default id
-- [ ] Ordinary batches stay within their prefix. Co-located writes publish both row sets together and reject mismatched placement before writing.
+- [ ] Ordinary batches stay within their prefix. Co-located writes publish every row set together and reject mismatched placement before writing.
 - [ ] Lifecycle under documented locks
 - [ ] Marker ↔ shards ↔ CURRENT agree
 - [ ] Handle ns independent of ambient create

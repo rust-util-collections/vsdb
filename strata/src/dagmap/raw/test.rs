@@ -947,30 +947,100 @@ fn get_mut_and_update_reject_consumed_clearing_nodes() {
 }
 
 thread_local! {
-    static FAIL_META_COMMIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static FAIL_PRUNE_PUBLICATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-pub(super) fn before_meta_commit() -> Result<()> {
-    if FAIL_META_COMMIT.with(|flag| flag.replace(false)) {
-        return Err(std::io::Error::other("injected DAG metadata write failure").into());
+pub(super) fn before_prune_publication() -> Result<()> {
+    if FAIL_PRUNE_PUBLICATION.with(|flag| flag.replace(false)) {
+        return Err(
+            std::io::Error::other("injected DAG prune publication failure").into(),
+        );
     }
     Ok(())
 }
 
 #[test]
-fn prune_returns_marker_write_error_and_can_resume() {
+fn prune_returns_publication_error_and_can_resume() {
     let mut root = DagMapRaw::new(None);
     let mut head = DagMapRaw::new(Some(&mut root));
     head.insert(b"edited", b"value");
     let saved = head.save_meta().unwrap();
 
-    FAIL_META_COMMIT.with(|flag| flag.set(true));
+    FAIL_PRUNE_PUBLICATION.with(|flag| flag.set(true));
     assert!(matches!(head.prune(), Err(VsdbError::Io(_))));
     let head = DagMapRaw::from_meta(saved).unwrap();
     assert!(root.child_id(&head).is_some());
     let merged = head.prune().unwrap();
     assert_eq!(merged.get(b"edited").as_deref(), Some(b"value".as_slice()));
     assert!(merged.child_ids().is_empty());
+}
+
+#[test]
+fn failed_prune_publication_folds_nothing_and_keeps_the_line_live() {
+    // Pruning an ancestor after the failure keeps the head's children.
+    let (root, mut mid, mut head) = build_prune_fixture();
+    let mut survivor = DagMapRaw::new(Some(&mut head));
+    survivor.insert("survivor", "value");
+    let saved = head.save_meta().unwrap();
+    FAIL_PRUNE_PUBLICATION.with(|flag| flag.set(true));
+    assert!(matches!(head.prune(), Err(VsdbError::Io(_))));
+    assert_eq!(root.get("k1"), None);
+    assert_eq!(root.get("k2"), None);
+    let head = DagMapRaw::from_meta(saved).unwrap();
+    assert!(head.child_id(&survivor).is_some());
+    assert_merged_view(&survivor);
+    mid.insert("late", "edit");
+    let merged = mid.open(mid.id()).unwrap().prune().unwrap();
+    assert_eq!(merged.id(), root.id());
+    assert_eq!(merged.get("k1").as_deref(), Some(b"v1".as_slice()));
+    assert_eq!(merged.get("late").as_deref(), Some(b"edit".as_slice()));
+    assert!(merged.child_id(&head).is_some());
+    assert_merged_view(&survivor);
+    assert_eq!(survivor.get("late").as_deref(), Some(b"edit".as_slice()));
+    assert_eq!(
+        survivor.get("survivor").as_deref(),
+        Some(b"value".as_slice())
+    );
+
+    // The documented retry folds edits made to the line after the failure.
+    let (root, mut mid, mut head) = build_prune_fixture();
+    let survivor = DagMapRaw::new(Some(&mut head));
+    let saved = head.save_meta().unwrap();
+    FAIL_PRUNE_PUBLICATION.with(|flag| flag.set(true));
+    assert!(head.prune().is_err());
+    mid.insert("late", "edit");
+    let merged = DagMapRaw::from_meta(saved).unwrap().prune().unwrap();
+    assert_eq!(merged.id(), root.id());
+    assert_merged_view(&merged);
+    assert_merged_view(&survivor);
+    assert_eq!(merged.get("late").as_deref(), Some(b"edit".as_slice()));
+    assert!(mid.is_dead());
+}
+
+#[test]
+fn ancestor_prune_resumes_an_unmarked_prune_left_by_earlier_releases() {
+    let (root, mid, mut head) = build_prune_fixture();
+    let mut survivor = DagMapRaw::new(Some(&mut head));
+    survivor.insert("survivor", "value");
+    {
+        // Earlier releases published the fold and each reparented child
+        // before writing any clearing marker.
+        let (line, mut genesis) = head.open(head.id()).unwrap().mainline().unwrap();
+        DagMapRaw::fold(&line, &mut genesis).unwrap();
+        line[0].reparent(&mut genesis).unwrap();
+    }
+    assert_merged_view(&survivor);
+    let recovered = mid.open(mid.id()).unwrap().prune().unwrap();
+    assert_eq!(recovered.id(), root.id());
+    assert_merged_view(&recovered);
+    assert_merged_view(&survivor);
+    assert_eq!(
+        survivor.get("survivor").as_deref(),
+        Some(b"value".as_slice())
+    );
+    assert!(recovered.child_id(&survivor).is_some());
+    assert!(mid.is_dead());
+    assert!(head.is_dead());
 }
 
 #[test]

@@ -47,7 +47,8 @@
 mod test;
 
 use crate::common::{
-    DEFAULT_NS_ID, InstanceId, Namespace, RawKey, RawRangeBounds, RawValue, engine,
+    ColocatedEdits, DEFAULT_NS_ID, InstanceId, Namespace, RawKey, RawRangeBounds,
+    RawValue, engine,
     error::{Result, VsdbError},
 };
 use serde::{Deserialize, Serialize};
@@ -314,6 +315,40 @@ impl MapxRaw {
         let first = self.try_instance_id()?.map_id.to_le_bytes();
         let second = other.try_instance_id()?.map_id.to_le_bytes();
         ns.engine().insert_colocated(first, second, here, there)
+    }
+
+    /// Applies puts and removals to several maps with one asynchronous WAL
+    /// batch. The maps must belong to the same open engine and route to the
+    /// same shard. Keys are local to their respective map, and edits apply in
+    /// order, so the last edit to a key wins, including across entries that
+    /// name the same map. A rejected placement writes no rows.
+    pub fn write_colocated(
+        writes: &mut [(&mut Self, ColocatedEdits<'_>)],
+    ) -> Result<()> {
+        let Some(((anchor, _), rest)) = writes.split_first() else {
+            return Ok(());
+        };
+        let ns = anchor.namespace();
+        if ns.is_read_only() {
+            return Err(VsdbError::ReadOnly {
+                operation: "co-located write",
+            });
+        }
+        if rest
+            .iter()
+            .any(|(map, _)| !std::ptr::eq(ns.engine(), map.namespace().engine()))
+        {
+            return Err(VsdbError::InvalidConfig {
+                detail: "co-located write requires maps in one namespace".into(),
+            });
+        }
+        let prefixed = writes
+            .iter()
+            .map(|(map, edits)| {
+                Ok((map.try_instance_id()?.map_id.to_le_bytes(), *edits))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        ns.engine().write_colocated(&prefixed)
     }
 
     /// Deep-copies every entry into a fresh instance co-located with

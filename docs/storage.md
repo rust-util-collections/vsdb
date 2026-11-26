@@ -28,7 +28,11 @@ non-idempotent effects. [Batch and fence tests](../core/src/common/engine/mmdb/v
 that both map to the same engine and shard, then submits a single
 asynchronous WAL batch using each handle's own prefix. If the handles
 name the same map, the rows in `here` precede the rows in `there`. DagMap uses this operation to publish a child's owner,
-its edge and the parent's next edge ID together. [Co-location tests](../core/tests/colocated.rs) · [DagMap](../strata/src/dagmap/raw/mod.rs)
+its edge and the parent's next edge ID together. `MapxRaw::write_colocated`
+applies puts and removals to any number of such handles with the same
+checks and one batch; edits apply in order. DagMap uses it to publish a
+prune's folded rows, reparented children and clearing markers together.
+[Co-location tests](../core/tests/colocated.rs) · [DagMap](../strata/src/dagmap/raw/mod.rs)
 
 ## Captured reads
 

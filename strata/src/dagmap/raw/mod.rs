@@ -9,16 +9,15 @@ use crate::{
     common::{
         InstanceId, PrefixFrame, UnwindMark, ensure_writable,
         error::{Result, VsdbError},
-        staged::StagedRows,
     },
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     ops::{Deref, DerefMut},
     result::Result as StdResult,
 };
-use vsdb_core::{MapxRaw, common::RawBytes};
+use vsdb_core::{ColocatedEdits, MapxRaw, common::RawBytes};
 
 const META: [u8; 1] = [0];
 const EDGE: [u8; 1] = [1];
@@ -59,6 +58,15 @@ impl State {
     fn live(self) -> bool {
         matches!(self, Self::Root | Self::Child(_))
     }
+}
+
+// What a prune entering at a live node finds among its owned descendants.
+enum BelowHead {
+    Clean,
+    Marked,
+    // A descendant whose line was folded and whose children were reparented
+    // by an earlier release before any marker was written.
+    Interrupted(DagMapRaw),
 }
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
@@ -179,8 +187,6 @@ impl DagMapRaw {
     fn set_meta(&mut self, meta: NodeMeta) -> Result<()> {
         let mut batch = self.store.batch();
         batch.insert(META, meta.bytes());
-        #[cfg(test)]
-        test::before_meta_commit()?;
         batch.commit()
     }
     fn unlink(&mut self, edge: u64) -> Result<()> {
@@ -262,6 +268,7 @@ impl DagMapRaw {
             }))
         .then_some(child))
     }
+    #[cfg(test)]
     fn register(&mut self, mut meta: NodeMeta, child: u64) -> Result<u64> {
         let edge = meta.next_edge_id;
         meta.next_edge_id = edge
@@ -579,8 +586,12 @@ impl DagMapRaw {
             node = p;
         }
     }
+    // Earlier releases published the fold and each reparented child in
+    // separate batches before writing any marker. Tests rebuild those
+    // on-disk states with these steps.
+    #[cfg(test)]
     fn fold(line: &[Self], root: &mut Self) -> Result<()> {
-        let mut rows = StagedRows::new();
+        let mut rows = crate::common::staged::StagedRows::new();
         for node in line.iter().rev() {
             let mut cursor = node.store.try_range(DATA..END)?;
             while let Some((k, v)) = cursor.try_step_next()? {
@@ -593,6 +604,7 @@ impl DagMapRaw {
         }
         rows.commit(&mut root.store)
     }
+    #[cfg(test)]
     fn reparent(&self, root: &mut Self) -> Result<()> {
         let registered: HashMap<_, _> = root
             .try_links()?
@@ -622,6 +634,113 @@ impl DagMapRaw {
             child.set_meta(meta)?;
         }
         Ok(())
+    }
+    // One co-located batch publishes the folded rows, the head's surviving
+    // children and a clearing marker on every mainline node, so no folded
+    // node stays live. Non-live head children are finished beforehand.
+    fn fold_and_mark(line: &mut [Self], root: &mut Self) -> Result<()> {
+        let genesis = root.id();
+        let mut root_rows = BTreeMap::new();
+        for node in line.iter().rev() {
+            let mut cursor = node.store.try_range(DATA..END)?;
+            while let Some((k, v)) = cursor.try_step_next()? {
+                let value = try_value(v)?.is_some().then(|| v.to_vec());
+                root_rows.insert(k.to_vec(), value);
+            }
+        }
+        let registered: HashMap<_, _> = root
+            .try_links()?
+            .into_iter()
+            .map(|(e, id)| (id, e))
+            .collect();
+        let mut root_meta = root.meta()?;
+        let first_edge = root_meta.next_edge_id;
+        let mut survivors = Vec::new();
+        let mut survivor_meta = Vec::new();
+        for (e, id) in line[0].try_links()? {
+            let Some(mut child) = line[0].try_owned(e, id)? else {
+                continue;
+            };
+            let mut meta = child.meta()?;
+            if !meta.state.live() {
+                if !matches!(meta.state, State::Clearing { genesis: g, .. } if g == genesis)
+                {
+                    child.destroy_subtree()?;
+                }
+                continue;
+            }
+            let edge = match registered.get(&id) {
+                Some(&edge) => edge,
+                None => {
+                    let edge = root_meta.next_edge_id;
+                    root_meta.next_edge_id = edge
+                        .checked_add(1)
+                        .ok_or_else(|| corrupt("DAG edge id exhausted"))?;
+                    root_rows.insert(
+                        edge_key(edge).to_vec(),
+                        Some(id.to_le_bytes().to_vec()),
+                    );
+                    edge
+                }
+            };
+            meta.state = State::Child(Parent { map: genesis, edge });
+            survivors.push(child);
+            survivor_meta.push(meta.bytes());
+        }
+        if root_meta.next_edge_id != first_edge {
+            root_rows.insert(META.to_vec(), Some(root_meta.bytes()));
+        }
+        let mut markers = Vec::with_capacity(line.len());
+        for node in line.iter() {
+            let mut meta = node.meta()?;
+            markers.push(match meta.state {
+                State::Child(p) => {
+                    meta.state = State::Clearing {
+                        owner: Some(p),
+                        genesis,
+                    };
+                    Some(meta.bytes())
+                }
+                State::Clearing { genesis: g, .. } if g == genesis => None,
+                _ => return Err(corrupt("invalid consumed mainline")),
+            });
+        }
+
+        type Edit<'a> = (&'a [u8], Option<&'a [u8]>);
+        let meta_key: &[u8] = &META;
+        let root_edits: Vec<Edit<'_>> = root_rows
+            .iter()
+            .map(|(k, v)| (k.as_slice(), v.as_deref()))
+            .collect();
+        let survivor_edits: Vec<[Edit<'_>; 1]> = survivor_meta
+            .iter()
+            .map(|meta| [(meta_key, Some(meta.as_slice()))])
+            .collect();
+        let marker_edits: Vec<Option<[Edit<'_>; 1]>> = markers
+            .iter()
+            .map(|meta| {
+                meta.as_ref()
+                    .map(|meta| [(meta_key, Some(meta.as_slice()))])
+            })
+            .collect();
+        let mut writes: Vec<(&mut MapxRaw, ColocatedEdits<'_>)> =
+            vec![(&mut root.store, &root_edits)];
+        writes.extend(
+            survivors
+                .iter_mut()
+                .zip(&survivor_edits)
+                .map(|(node, edits)| (&mut node.store, &edits[..])),
+        );
+        writes.extend(
+            line.iter_mut()
+                .zip(&marker_edits)
+                .filter_map(|(node, edits)| {
+                    Some((&mut node.store, &edits.as_ref()?[..]))
+                }),
+        );
+        #[cfg(test)]
+        test::before_prune_publication()?;
+        MapxRaw::write_colocated(&mut writes)
     }
     fn mark(line: &mut [Self], genesis: u64) -> Result<()> {
         for node in line {
@@ -668,14 +787,30 @@ impl DagMapRaw {
         }
         Ok(())
     }
+    // Whether `id`, reached through one of this node's discovery edges, is
+    // now a live child of the root.
+    fn reparented_to(&self, id: u64, genesis: u64) -> Result<bool> {
+        match self.open_with_meta(id) {
+            Ok((_, meta)) => Ok(matches!(
+                meta.state,
+                State::Child(Parent { map, .. }) if map == genesis
+            )),
+            Err(err @ (VsdbError::Storage { .. } | VsdbError::Io(_))) => Err(err),
+            Err(_) => Ok(false),
+        }
+    }
     // Keeps every owned descendant that is marked or has a marked
     // descendant, children before their parents. The walk uses an explicit
     // stack because a head can own an arbitrarily deep chain.
-    fn collect_marked_below_head(line: &mut Vec<Self>, genesis: u64) -> Result<bool> {
+    fn collect_marked_below_head(
+        line: &mut Vec<Self>,
+        genesis: u64,
+    ) -> Result<BelowHead> {
         struct Frame {
             // `None` stands for the head, which stays in `line`.
             node: Option<DagMapRaw>,
             links: std::vec::IntoIter<(u64, u64)>,
+            live: bool,
             marked: bool,
             below: bool,
         }
@@ -686,6 +821,7 @@ impl DagMapRaw {
         let mut stack = vec![Frame {
             node: None,
             links: line[0].try_links()?.into_iter(),
+            live: true,
             marked: false,
             below: false,
         }];
@@ -696,16 +832,28 @@ impl DagMapRaw {
                 }
                 let owner = frame.node.as_ref().unwrap_or(&line[0]);
                 let Some(child) = owner.try_owned(edge, id)? else {
+                    // Releases that published the fold and the reparented
+                    // children before any marker left a live descendant
+                    // whose edge now names a child of the root.
+                    if frame.node.is_some()
+                        && frame.live
+                        && owner.reparented_to(id, genesis)?
+                    {
+                        let node = stack.pop().and_then(|frame| frame.node);
+                        return Ok(BelowHead::Interrupted(
+                            node.expect("descendant frames own their node"),
+                        ));
+                    }
                     continue;
                 };
-                let marked = matches!(
-                    child.meta()?.state,
-                    State::Clearing { genesis: g, .. } if g == genesis
-                );
+                let state = child.meta()?.state;
+                let marked =
+                    matches!(state, State::Clearing { genesis: g, .. } if g == genesis);
                 let links = child.try_links()?.into_iter();
                 stack.push(Frame {
                     node: Some(child),
                     links,
+                    live: state.live(),
                     marked,
                     below: false,
                 });
@@ -727,7 +875,11 @@ impl DagMapRaw {
             }
         }
         line.extend(extra);
-        Ok(found)
+        Ok(if found {
+            BelowHead::Marked
+        } else {
+            BelowHead::Clean
+        })
     }
     fn clear_line(line: &mut [Self], root: &mut Self) -> Result<()> {
         for node in line.iter_mut() {
@@ -760,18 +912,28 @@ impl DagMapRaw {
         }
         Ok(())
     }
-    /// Atomically folds the mainline overlay into the original root, reparents
-    /// the head's live children, then clears consumed rows. A clearing marker
-    /// means the fold and reparenting are already recorded in the shared WAL.
-    /// Returns after one shard WAL fence. Retry on the original head.
+    /// Folds the mainline overlay into the original root, reparents the
+    /// head's live children and marks every consumed node in one batch, then
+    /// clears consumed rows. A clearing marker means the fold and reparenting
+    /// are already recorded in the shared WAL. Returns after one shard WAL
+    /// fence.
+    ///
+    /// An error consumes this handle. To finish an interrupted prune, prune
+    /// the original head again from a saved or serialized handle.
     pub fn prune(self) -> Result<Self> {
         ensure_writable(&self.namespace(), "DAG pruning")?;
         let (mut line, mut root) = self.mainline()?;
         if !line.is_empty() {
             let head_live = line[0].meta()?.state.live();
-            let resumed_from_ancestor =
-                head_live && Self::collect_marked_below_head(&mut line, root.id())?;
-            if head_live && !resumed_from_ancestor {
+            let below = if head_live {
+                Self::collect_marked_below_head(&mut line, root.id())?
+            } else {
+                BelowHead::Clean
+            };
+            if let BelowHead::Interrupted(head) = below {
+                return head.prune();
+            }
+            if head_live && matches!(below, BelowHead::Clean) {
                 let (head, ancestors) = line.split_first_mut().unwrap();
                 let head_links = head.try_links()?;
                 let protected: HashSet<_> = std::iter::once(head.id())
@@ -788,8 +950,7 @@ impl DagMapRaw {
                         node.remove_branch(e, id)?;
                     }
                 }
-                Self::fold(&line, &mut root)?;
-                line[0].reparent(&mut root)?;
+                Self::fold_and_mark(&mut line, &mut root)?;
             }
             Self::collect_marked(&mut line, &root)?;
             Self::mark(&mut line, root.id())?;

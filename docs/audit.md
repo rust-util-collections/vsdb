@@ -11,23 +11,6 @@
 
 ## Open
 
-### [CRITICAL] dagmap: an interrupted prune leaves folded mainline nodes live
-- **Where**: `strata/src/dagmap/raw/mod.rs` (`prune`, `reparent`, `mark`, `collect_marked_below_head`)
-- **What**: `prune` publishes, in separate batches, the fold, each survivor's root registration and owner update, and then one `Clearing` marker per mainline node. A crash or returned error after the fold but before the first marker leaves `mid` and `head` live. A later `mid.prune()` finds no marker and treats `mid` as an unfolded live head. It destroys the survivors already reparented onto the root as side branches, then re-folds `mid`'s stale rows over the root. If only the head marker was written, `mid` still accepts `insert` and `new(Some(&mut mid))`. The documented retry, `head.prune()`, then marks and wipes `mid`, discarding the acknowledged edit and orphaning the late child.
-- **Why**: Persisted data is lost, and the merged root reaches a state no complete prune produces: shared keys revert to `mid`'s values. Reproduced with the existing fold, reparent and mark helpers:
-  - no marker: the survivor's rows are destroyed and the root reads `k1 == v1`;
-  - head marker only: the root's `late` key and the late child's inherited `k0` both read `None`.
-
-  1c1f2e8 handles only the case where a marker already exists, and the consumed-node guard checks only each node's own state. `prune(self)` also drops the head on `Err`, so a caller that did not save it can only continue from an ancestor.
-- **Suggested fix**:
-  - Publish the fold rows, the survivors' root edges and owner records, and every mainline `Clearing` marker in one co-located shard batch, so a folded node is never live. This needs an N-map, put-and-delete form of `MapxRaw::insert_colocated`.
-  - For states already on disk, detect a live line whose head children are already owned by the root, and resume that prune.
-  - Document that a retry needs a saved or serialized head.
-
-  Regression tests: both sequences above. No row or state format change.
-
----
-
 ### [MEDIUM] versioning: history and diff operations panic on unreadable tree pages
 - **Where**: `strata/src/versioned/map.rs` (`has_uncommitted`, `rollback_to`, `merge`, `raw_diff_commits`, `raw_diff_uncommitted`), `strata/src/basic/persistent_btree/diff.rs` (`differs`, `Cursor`, `materialize_val`), `strata/src/basic/persistent_btree/mod.rs` (`object`, `height`), `strata/src/basic/persistent_btree/merge.rs` (`source_changes`)
 - **What**: These `Result`-returning APIs compare trees through the infallible `BTreeDiffIter`, whose page reads `expect` success. A missing, malformed or unreadable page under either compared root causes a panic. `VerMapWithProof` streams the same iterator when it updates a root.
@@ -38,6 +21,16 @@
   - Keep the panicking iterator for standalone callers.
 
   Regression test: after removing a commit root page, each API returns `Corrupt` and the branch is unchanged. No format change.
+
+---
+
+### [MEDIUM] dagmap: partial prunes left by earlier releases can still lose later edits
+- **Where**: `strata/src/dagmap/raw/mod.rs` (`prune`, `collect_marked_below_head`, `mark`)
+- **What**: Releases before the single-batch prune publication wrote the fold, each reparented child and each clearing marker in separate batches, so a crash could stop between them. Two such on-disk states still lose data:
+  - An earlier release marked the head but not every ancestor. The unmarked ancestor still accepts `insert` and new children. A retry from the head, or a prune entering at that ancestor, marks and wipes it without re-folding, so the later edit is lost and the later child loses its parent.
+  - An earlier release folded the line without marking it, and the head had no live children to reparent. Nothing reveals the interrupted prune, so a prune entering at an ancestor re-folds that ancestor's stale rows over the root.
+- **Why**: Both cases lose data or leave a merged root that no complete prune produces, after a crash under an earlier release followed by these operations. New prunes publish every marker together with the fold, so they cannot create either state. Retrying on the original head before editing its ancestors recovers both.
+- **Suggested fix**: When a resumed line still contains a live node, nothing has been wiped yet. Re-fold the line, and reparent live children created under its nodes, in the same co-located batch as the remaining markers. The unmarked fold without children leaves no on-disk evidence, so document the retry requirement or move it to Won't Fix. Regression tests: rebuild each legacy state with the test-only `fold`, `reparent` and `mark` helpers.
 
 ---
 

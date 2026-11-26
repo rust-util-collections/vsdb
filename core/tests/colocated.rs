@@ -8,9 +8,16 @@ use vsdb_core::{
     vsdb_configure,
 };
 
+fn setup() {
+    static INIT: parking_lot::Once = parking_lot::Once::new();
+    INIT.call_once(|| {
+        vsdb_configure(VsdbOptions::new(scratch::database_dir())).unwrap();
+    });
+}
+
 #[test]
 fn rejected_placement_does_not_modify_either_map() {
-    vsdb_configure(VsdbOptions::new(scratch::database_dir())).unwrap();
+    setup();
     let ns = Namespace::create_with(NamespaceOpts {
         shards: 2,
         ..Default::default()
@@ -35,6 +42,56 @@ fn rejected_placement_does_not_modify_either_map() {
             Err(VsdbError::InvalidConfig { .. })
         ));
         assert_eq!(a.get(b"old").as_deref(), Some(b"preserved".as_slice()));
+        assert!(!target.contains_key(b"x"));
+    }
+}
+
+#[test]
+fn colocated_write_publishes_puts_and_removals_together() {
+    setup();
+    let ns = Namespace::create_with(NamespaceOpts {
+        shards: 2,
+        ..Default::default()
+    })
+    .unwrap();
+    let mut a = MapxRaw::new_in(&ns);
+    a.insert(b"gone", b"old");
+    a.insert(b"kept", b"old");
+    let mut b = a.new_colocated();
+    let mut c = a.new_colocated();
+    let mut alias = MapxRaw::from_meta(a.save_meta().unwrap()).unwrap();
+    let reader = b.reader();
+    let before = reader.read_view();
+    MapxRaw::write_colocated(&mut [
+        (&mut a, &[(b"gone", None), (b"kept", Some(b"first"))]),
+        (&mut b, &[(b"owner", Some(b"a"))]),
+        (&mut c, &[(b"empty", Some(b""))]),
+        (&mut alias, &[(b"kept", Some(b"last"))]),
+    ])
+    .unwrap();
+    assert!(!before.contains_key(b"owner"));
+    assert_eq!(a.get(b"gone"), None);
+    assert_eq!(a.get(b"kept").as_deref(), Some(b"last".as_slice()));
+    assert_eq!(b.get(b"owner").as_deref(), Some(b"a".as_slice()));
+    assert_eq!(c.get(b"empty"), Some(Vec::new()));
+    MapxRaw::write_colocated(&mut []).unwrap();
+
+    let mut far = loop {
+        let candidate = MapxRaw::new_in(&ns);
+        if !a.is_colocated_with(&candidate) {
+            break candidate;
+        }
+    };
+    let mut foreign = MapxRaw::new_in(&Namespace::create().unwrap());
+    for target in [&mut far, &mut foreign] {
+        assert!(matches!(
+            MapxRaw::write_colocated(&mut [
+                (&mut a, &[(b"kept", None)]),
+                (target, &[(b"x", Some(b"y"))]),
+            ]),
+            Err(VsdbError::InvalidConfig { .. })
+        ));
+        assert_eq!(a.get(b"kept").as_deref(), Some(b"last".as_slice()));
         assert!(!target.contains_key(b"x"));
     }
 }
