@@ -38,7 +38,7 @@ on the same captured view, including after the writer changes the live index.
 
 **Entry downgrade on remove** · wire-tag drift (derive/reorder) · missing prune after bi-edge · compact torn write outside one wiped staged commit.
 
-## MMDB v5 query boundary
+## MMDB query boundary
 
 Production search uses scalar pinned decoding on a single read view.
 The grouped-width and distance-cache alternatives are recorded experiments.

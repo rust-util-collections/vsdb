@@ -1,6 +1,6 @@
 # Writes, read views and memory
 
-The runtime uses MMDB v5. A map's eight-byte prefix selects one shard in
+The runtime uses MMDB 6 (format 5). A map's eight-byte prefix selects one shard in
 its namespace. That shard owns the WAL and read sequence used for the map.
 [Namespace layout](namespaces.md) · [Raw map API](../core/docs/api.md)
 

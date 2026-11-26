@@ -11,14 +11,6 @@
 
 ## Open
 
-### [LOW] docs: live docs name the engine release as MMDB v5
-- **Where**: `docs/storage.md`, `docs/v18.md`, `core/README.md`; labels in `AGENTS.md` and `docs/ai/review-core.md`
-- **What**: These docs say the runtime uses MMDB v5, but `Cargo.toml` pins `mmdb = "6.0.1"` (MANIFEST format 5). `docs/v18.md` links to the manifest that contradicts it. mmdb now versions its release line separately from its on-disk format.
-- **Why**: A reader following the v5 release line pins the wrong engine crate next to VSDB, while the re-exported memory-usage types and the boxed `mmdb::Error` source come from mmdb 6.
-- **Suggested fix**: Write "MMDB 6 (format 5)" where the release is meant and "format 5" where the on-disk format is meant. Note the dependency change in the next release's CHANGELOG.
-
----
-
 ### [LOW] benches: two bench programs cannot run as documented
 - **Where**: `core/benches/cache_pool.rs` (A/B protocol in the module doc), `strata/benches/thread_overhead_demo.rs`, `strata/benches/thread_spawn_test.rs`, `strata/Cargo.toml`
 - **What**:

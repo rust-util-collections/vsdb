@@ -27,7 +27,7 @@ namespace uses 16 shards. Each additional namespace has its own root, MMDB
 shards, WALs and memory sizing. The universe owns the namespace registry
 and allocates collection prefixes across all its namespaces.
 
-A namespace uses MMDB v5 with seven levels and an eight-byte prefix.
+A namespace uses MMDB 6 (format 5) with seven levels and an eight-byte prefix.
 Each raw map stores byte keys and values under one prefix on one shard.
 A native shard fence makes earlier WAL-backed writes durable. Checked
 co-located inserts can publish rows under two map prefixes in one batch.

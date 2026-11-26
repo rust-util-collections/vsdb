@@ -12,7 +12,7 @@ instructions.
 | Crate | Responsibility |
 | --- | --- |
 | [vsdb](strata/README.md) | Typed maps and values, persistent B+ trees, VerMap, Merkle tries, SlotDex, DagMap and VecDex |
-| [vsdb_core](core/README.md) | MMDB v5 integration, namespace memory, raw maps, prefix batches and co-located publication |
+| [vsdb_core](core/README.md) | MMDB 6 (format 5) integration, namespace memory, raw maps, prefix batches and co-located publication |
 
 Start at the [documentation index](docs/README.md) for public guides, design
 records and historical measurements. For a code change, the [subsystem
@@ -65,7 +65,7 @@ selection with `allow_implicit_invocation: false`.
 
 - Start with the [workflow policy](docs/ai/workflow-policy.md) for preflight and worktree ownership and [maintenance scope](docs/ai/workflow-policy.md#maintenance-scope).
 - Use the [subsystem map](docs/ai/review-core.md#subsystem-map) to trace a change
-  through the MMDB v5 adapter and its collection callers. The
+  through the MMDB adapter and its collection callers. The
   [commit protocol](docs/ai/commit-protocol.md#per-unit-validate-and-commit)
   names focused tests for these boundaries.
 - Use the [compatibility policy](docs/ai/compatibility-policy.md) for toolchain, public API and wire-format decisions. The [commit protocol](docs/ai/commit-protocol.md) covers per-unit checks and the final gate, lockstep bump, CHANGELOG and local annotated tag for commit-producing skills.

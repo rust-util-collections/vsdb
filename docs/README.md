@@ -5,7 +5,7 @@ The [vsdb](../strata/README.md) crate builds its typed collections on
 
 ## Upgrade an existing universe
 
-VSDB v19 opens a native v18 universe on MMDB v5 in place. Stop the v18
+VSDB v19 opens a native v18 universe (MMDB format 5) in place. Stop the v18
 processes and keep the base directory, all externally placed namespaces and
 application files containing IDs or serialized handles together. Update the
 application to v19, configure the same base and restore the saved handles.

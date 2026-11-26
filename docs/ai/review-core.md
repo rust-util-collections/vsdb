@@ -24,7 +24,7 @@ Assess platform correctness against the [supported architectures](compatibility-
 
 | Subsystem | Implementation | Review guide |
 | --- | --- | --- |
-| MMDB v5 shard adapter | [Admission, fences, snapshots, lending reads and cache ownership](../../core/src/common/engine/mmdb.rs), [shard geometry preflight](../../core/src/common/engine/mmdb/geometry.rs), [prefix-bound callers](../../core/src/common/engine/mod.rs) | [Engine](patterns/engine.md) · [Adapter contract tests](../../core/tests/v5_adapter_test.rs) |
+| MMDB shard adapter | [Admission, fences, snapshots, lending reads and cache ownership](../../core/src/common/engine/mmdb.rs), [shard geometry preflight](../../core/src/common/engine/mmdb/geometry.rs), [prefix-bound callers](../../core/src/common/engine/mod.rs) | [Engine](patterns/engine.md) · [Adapter contract tests](../../core/tests/v5_adapter_test.rs) |
 | Universe and prefix allocation | [Lifecycle records and locks](../../core/src/common/universe.rs), [allocation and ceiling recovery](../../core/src/common/engine/mmdb.rs) | [Engine](patterns/engine.md) |
 | Namespace lifecycle | [Registry, routing and teardown](../../core/src/common/namespace.rs) | [Engine](patterns/engine.md) · [Compatibility](compatibility-policy.md) |
 | Raw and typed collections | [MapxRaw](../../core/src/basic/mapx_raw), [Mapx](../../strata/src/basic/mapx), [MapxOrd](../../strata/src/basic/mapx_ord), [raw-key maps](../../strata/src/basic/mapx_ord_rawkey), [Orphan](../../strata/src/basic/orphan) | [Engine](patterns/engine.md) · [Map keys and guards](patterns/maps.md) |
