@@ -122,37 +122,9 @@ fn try_value(bytes: &[u8]) -> Result<Option<&[u8]>> {
     }
 }
 
-// A foreign magic, dag id, missing record, or other shard is not this node.
-// Undecodable metadata is damage and must not look like absence.
-fn authentication_failure(err: &VsdbError) -> bool {
-    match err {
-        VsdbError::Corrupt { detail } => matches!(
-            detail.as_str(),
-            "DAG node identity mismatch"
-                | "missing DAG node metadata"
-                | "DAG node routes to another shard"
-        ),
-        _ => false,
-    }
-}
-
-// Infallible reads treat a node that fails authentication as absent.
-// Storage failures and metadata that does not decode are fatal.
-fn authenticated<T>(read: Result<T>) -> Option<T> {
-    match read {
-        Ok(value) => Some(value),
-        Err(err) if authentication_failure(&err) => None,
-        Err(err) => panic!("vsdb: DAG metadata read failed: {err}"),
-    }
-}
-
 // External edge tokens are 128-bit little-endian integers.
 fn token(edge: u64) -> Vec<u8> {
     u128::from(edge).to_le_bytes().to_vec()
-}
-
-fn open_prefix(ns: &Namespace, id: u64) -> Result<MapxRaw> {
-    crate::common::open_raw(InstanceId::new(id, ns.id()))
 }
 
 /// A node in a persistent overlay tree. Child lookups fall back to their
@@ -199,20 +171,36 @@ impl DagMapRaw {
         Ok(node)
     }
     fn meta(&self) -> Result<NodeMeta> {
+        self.read_meta()?
+            .ok_or_else(|| corrupt("missing or foreign DAG node metadata"))
+    }
+    fn read_meta(&self) -> Result<Option<NodeMeta>> {
         #[cfg(test)]
         test::before_meta_read(self.id())?;
-        self.store
+        Ok(self
+            .store
             .try_get_with(META, |raw| {
-                let (meta, rest) = postcard::take_from_bytes::<NodeMeta>(raw)?;
+                // Other collections can also store a header at key zero.
+                let (magic, raw) = postcard::take_from_bytes::<[u8; 8]>(raw)?;
+                if magic != MAGIC {
+                    return Ok(None);
+                }
+                let (dag_id, raw) = postcard::take_from_bytes::<u64>(raw)?;
+                if dag_id != self.dag_id {
+                    return Ok(None);
+                }
+                let ((next_edge_id, state), rest) = postcard::take_from_bytes(raw)?;
                 if !rest.is_empty() {
                     return Err(corrupt("trailing DAG metadata"));
                 }
-                if meta.magic != MAGIC || meta.dag_id != self.dag_id {
-                    return Err(corrupt("DAG node identity mismatch"));
-                }
-                Ok(meta)
+                Ok(Some(NodeMeta {
+                    magic,
+                    dag_id,
+                    next_edge_id,
+                    state,
+                }))
             })?
-            .ok_or_else(|| corrupt("missing DAG node metadata"))
+            .flatten())
     }
     fn set_meta(&mut self, meta: NodeMeta) -> Result<()> {
         let mut batch = self.store.batch();
@@ -224,20 +212,28 @@ impl DagMapRaw {
         batch.remove(edge_key(edge));
         batch.commit()
     }
-    fn open_with_meta(&self, id: u64) -> Result<(Self, NodeMeta)> {
-        let store = open_prefix(&self.namespace(), id)?;
+    fn lookup(&self, id: u64) -> Result<Option<(Self, NodeMeta)>> {
+        let store =
+            match crate::common::open_raw(InstanceId::new(id, self.namespace().id())) {
+                Ok(store) => store,
+                // open_raw constructs a valid handle frame. Decode here means
+                // the allocator rejected the referenced prefix.
+                Err(VsdbError::Decode { .. }) => return Ok(None),
+                Err(err) => return Err(err),
+            };
         if !self.store.is_colocated_with(&store) {
-            return Err(corrupt("DAG node routes to another shard"));
+            return Ok(None);
         }
         let node = Self {
             store,
             dag_id: self.dag_id,
         };
-        let meta = node.meta()?;
-        Ok((node, meta))
+        Ok(node.read_meta()?.map(|meta| (node, meta)))
     }
     fn open(&self, id: u64) -> Result<Self> {
-        self.open_with_meta(id).map(|(node, _)| node)
+        self.lookup(id)?
+            .map(|(node, _)| node)
+            .ok_or_else(|| corrupt("missing or foreign DAG node"))
     }
     fn id(&self) -> u64 {
         self.instance_id().map_id
@@ -284,10 +280,8 @@ impl DagMapRaw {
         self.try_owned(edge, id).ok().flatten()
     }
     fn try_owned(&self, edge: u64, id: u64) -> Result<Option<Self>> {
-        let (child, meta) = match self.open_with_meta(id) {
-            Ok(pair) => pair,
-            Err(err) if authentication_failure(&err) => return Ok(None),
-            Err(err) => return Err(err),
+        let Some((child, meta)) = self.lookup(id)? else {
+            return Ok(None);
         };
         Ok((meta.state.owner()
             == Some(Parent {
@@ -407,7 +401,11 @@ impl DagMapRaw {
         if self.dag_id != child.dag_id || !self.store.is_colocated_with(&child.store) {
             return None;
         }
-        let owner = authenticated(child.meta())?.state.owner()?;
+        let owner = child
+            .read_meta()
+            .expect("DAG metadata read failed")?
+            .state
+            .owner()?;
         (owner.map == self.id() && self.edge_target(owner.edge) == Some(child.id()))
             .then(|| token(owner.edge))
     }
@@ -424,12 +422,12 @@ impl DagMapRaw {
         }
         let mut seen = HashSet::new();
         let mut id = self.id();
-        let mut state = authenticated(self.meta())?.state;
+        let mut state = self.read_meta().expect("DAG metadata read failed")?.state;
         while let State::Child(owner) = state {
             if !seen.insert(id) {
                 return None;
             }
-            let (p, meta) = authenticated(self.open_with_meta(owner.map))?;
+            let (p, meta) = self.lookup(owner.map).expect("DAG metadata read failed")?;
             if p.edge_target(owner.edge) != Some(id) {
                 return None;
             }
@@ -521,16 +519,11 @@ impl DagMapRaw {
             }
             node.finish_destroy()?;
         }
-        if let Some(link) = owner {
-            match self.open(link.map) {
-                Ok(mut p) => {
-                    if p.try_edge_target(link.edge)? == Some(self.id()) {
-                        p.unlink(link.edge)?;
-                    }
-                }
-                Err(err) if authentication_failure(&err) => {}
-                Err(err) => return Err(err),
-            }
+        if let Some(link) = owner
+            && let Some((mut parent, _)) = self.lookup(link.map)?
+            && parent.try_edge_target(link.edge)? == Some(self.id())
+        {
+            parent.unlink(link.edge)?;
         }
         self.finish_destroy()
     }
@@ -845,14 +838,9 @@ impl DagMapRaw {
     // Whether `id`, reached through one of this node's discovery edges, is
     // now a live child of the root.
     fn reparented_to(&self, id: u64, genesis: u64) -> Result<bool> {
-        match self.open_with_meta(id) {
-            Ok((_, meta)) => Ok(matches!(
-                meta.state,
-                State::Child(Parent { map, .. }) if map == genesis
-            )),
-            Err(err) if authentication_failure(&err) => Ok(false),
-            Err(err) => Err(err),
-        }
+        Ok(self.lookup(id)?.is_some_and(|(_, meta)| {
+            matches!(meta.state, State::Child(Parent { map, .. }) if map == genesis)
+        }))
     }
     // Looks below a live prune entry for the state an interrupted prune by
     // an earlier release left: a marked descendant, or a live descendant

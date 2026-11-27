@@ -20,9 +20,10 @@
   A stale index entry may be removed locally. Parentless roots and nodes
   owned by another parent keep their data.
 - Authenticate fallback reads and guard parent chains against cycles.
-  Wrong magic, dag id, a missing record, or another shard means the node
-  is not ours. Metadata that does not decode, including a trailing
-  suffix, is a read failure on both infallible and fallible paths.
+  Check the magic and DAG id before decoding the rest of a node. A foreign
+  identity, a missing record, a rejected prefix or another shard ends the
+  lookup. An incomplete identity or a malformed body belonging to this DAG,
+  including trailing bytes, is a read failure.
 - Prune destroys side branches and finishes `destroy_subtree()` on any
   owned `!state.live()` (`Destroying`) child of the head. One co-located
   batch then publishes the fold, the reparented live head children and a

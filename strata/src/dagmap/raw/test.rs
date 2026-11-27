@@ -1175,6 +1175,30 @@ pub(super) fn before_meta_read(id: u64) -> Result<()> {
 }
 
 #[test]
+fn stale_edges_to_a_foreign_header_or_unissued_prefix_can_be_removed() {
+    let ns = Namespace::create_with(NamespaceOpts {
+        shards: 1,
+        ..Default::default()
+    })
+    .unwrap();
+    let id = ns.id();
+    {
+        let mut root = DagMapRaw::new_in(&ns, None);
+        let foreign = crate::VerMap::<u64, u64>::new_in(&ns);
+        let branch = foreign.main_branch();
+        for target in [foreign.instance_id().map_id, 0] {
+            root.register(root.meta().unwrap(), target).unwrap();
+        }
+        assert!(root.clone_in(&ns).unwrap().no_children());
+        root.prune_children_include(&root.child_ids());
+        assert!(root.no_children());
+        assert_eq!(foreign.main_branch(), branch);
+    }
+    ns.close().unwrap();
+    Namespace::destroy(id).unwrap();
+}
+
+#[test]
 fn damaged_metadata_is_not_treated_as_an_absent_node() {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
