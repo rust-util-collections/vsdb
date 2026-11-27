@@ -6,6 +6,16 @@ Compiler requirements below are historical release notes. Current development
 uses the official latest stable Rust, without a declared compatible version
 range or minimum compiler; see [the toolchain policy](docs/ai/compatibility-policy.md#rust-toolchain).
 
+## [v19.0.3]
+
+### Changed
+
+- The `vsdb` and `vsdb_core` crate archives contain Rust sources, the crate
+  README and Cargo metadata. The full guides, integration tests, benchmarks
+  and binary test fixtures are available in the source repository.
+- The [documentation index](docs/README.md) groups the collection guides,
+  database operations, storage architecture and upgrade instructions by task.
+
 ## [v19.0.2]
 
 Existing v19 stores open in place.
