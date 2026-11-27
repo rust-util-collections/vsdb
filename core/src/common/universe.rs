@@ -5,7 +5,10 @@ use super::{
     error::{Result, corrupt},
     namespace, vsdb_get_base_dir, vsdb_open_mode,
 };
-use cap_std::{ambient_authority, fs::Dir};
+use cap_std::{
+    ambient_authority,
+    fs::{Dir, DirEntry, FileType},
+};
 use parking_lot::Mutex;
 use std::{
     fs::{self, File},
@@ -277,6 +280,16 @@ pub(super) fn validate_pending_root(
     validate_namespace_dir(&dir, root, id, ns, shards, true)
 }
 
+/// Resolve a directory entry's type without following symlinks, falling back to
+/// `fstatat` when the filesystem reports `DT_UNKNOWN`.
+pub(super) fn entry_file_type(entry: &DirEntry) -> io::Result<FileType> {
+    let kind = entry.file_type()?;
+    if kind.is_dir() || kind.is_file() || kind.is_symlink() {
+        return Ok(kind);
+    }
+    Ok(entry.metadata()?.file_type())
+}
+
 /// Read ownership records from the same directory handle used for cleanup.
 pub(super) fn validate_namespace_dir(
     dir: &Dir,
@@ -310,7 +323,7 @@ pub(super) fn validate_namespace_dir(
     // before the initializer's atomic rename. No other files are ours yet.
     for entry in dir.entries()? {
         let entry = entry?;
-        if entry.file_name() != "__SYSTEM__" || !entry.file_type()?.is_dir() {
+        if entry.file_name() != "__SYSTEM__" || !entry_file_type(&entry)?.is_dir() {
             return Err(corrupt(format!(
                 "unclaimed nonempty namespace root {}",
                 root.display()
@@ -322,7 +335,7 @@ pub(super) fn validate_namespace_dir(
             let name = file.file_name();
             let name = name.to_string_lossy();
             if !namespace::is_atomic_tmp_for(&name, "__initializing__.")
-                || !file.file_type()?.is_file()
+                || !entry_file_type(&file)?.is_file()
             {
                 return Err(corrupt("foreign file in pending namespace root"));
             }

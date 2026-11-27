@@ -7,10 +7,10 @@ use crate::common::{
 use cap_fs_ext::{DirExt, MetadataExt, OpenOptionsMaybeDirExt};
 use cap_std::{
     ambient_authority,
-    fs::{Dir, DirBuilder, Metadata, OpenOptions},
+    fs::{Dir, DirBuilder, Metadata, OpenOptions, ReadDir},
 };
 use std::{
-    ffi::OsStr,
+    ffi::{OsStr, OsString},
     fs, io,
     path::{Path, PathBuf},
 };
@@ -204,25 +204,14 @@ impl Target {
         if let Some((dir, name)) = self.directory {
             #[cfg(test)]
             super::tests::before_root_wipe(&name.path);
-            for entry in dir.entries()? {
-                let entry = entry?;
-                let removed = match entry.file_type() {
-                    Ok(kind) if kind.is_dir() => dir.remove_dir_all(entry.file_name()),
-                    Ok(_) => dir.remove_file_or_symlink(entry.file_name()),
-                    Err(err) => Err(err),
-                };
-                existing(removed)?;
-            }
-            if dir.entries()?.next().transpose()?.is_some() {
-                return Err(io::Error::from(io::ErrorKind::DirectoryNotEmpty).into());
-            }
+            clear_directory(&dir)?;
             let identity = Identity {
                 metadata: dir.dir_metadata()?,
                 link: None,
             };
             let lease = dir.into_std_file();
             // The directory may survive under another name or as a mount point.
-            lease.sync_all()?;
+            existing(lease.sync_all())?;
             #[cfg(windows)]
             drop(lease); // A directory capability denies rename while it is open.
             remove_entry(name, &identity)?;
@@ -232,6 +221,76 @@ impl Target {
         }
         Ok(())
     }
+}
+
+fn clear_directory(root: &Dir) -> io::Result<()> {
+    struct Frame {
+        dir: Dir,
+        entries: ReadDir,
+        name: Option<OsString>,
+    }
+
+    // An open directory already removed by another actor can return NotFound
+    // when `entries()` reopens "." (e.g. on BSD/Darwin VFS).
+    let Some(entries) = existing(root.entries())? else {
+        return Ok(());
+    };
+    let mut stack = vec![Frame {
+        dir: root.try_clone()?,
+        entries,
+        name: None,
+    }];
+    while let Some(top) = stack.last_mut() {
+        if let Some(entry) = top.entries.next() {
+            let Some(entry) = existing(entry)? else {
+                continue;
+            };
+            let name = entry.file_name();
+            let Some(kind) = existing(universe::entry_file_type(&entry))? else {
+                continue;
+            };
+            if kind.is_dir() {
+                match top.dir.open_dir_nofollow(&name) {
+                    Ok(child) => {
+                        if let Some(entries) = existing(child.entries())? {
+                            stack.push(Frame {
+                                dir: child,
+                                entries,
+                                name: Some(name),
+                            });
+                        } else {
+                            drop(child);
+                            existing(top.dir.remove_dir(&name))?;
+                        }
+                    }
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                    Err(err) => match existing(top.dir.symlink_metadata(&name))? {
+                        None => {}
+                        Some(meta) if !meta.is_dir() => {
+                            existing(top.dir.remove_file_or_symlink(&name))?;
+                        }
+                        Some(_) => return Err(err),
+                    },
+                }
+            } else {
+                existing(top.dir.remove_file_or_symlink(&name))?;
+            }
+            continue;
+        }
+        let finished = stack.pop().expect("nonempty directory stack");
+        drop(finished.entries);
+        drop(finished.dir);
+        if let Some(name) = finished.name {
+            let parent = stack.last().expect("subdirectory has parent frame");
+            existing(parent.dir.remove_dir(&name))?;
+        }
+    }
+    if let Some(mut entries) = existing(root.entries())?
+        && entries.next().transpose()?.is_some()
+    {
+        return Err(io::Error::from(io::ErrorKind::DirectoryNotEmpty));
+    }
+    Ok(())
 }
 
 fn same_entry(a: &Metadata, b: &Metadata) -> bool {
@@ -404,5 +463,30 @@ mod tests {
         drop(private);
         drop(parent);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn clear_directory_empties_nested_trees_without_following_symlinks() {
+        let scratch = std::env::temp_dir()
+            .join(format!("vsdb-clear-dir-{}", rand::random::<u128>()));
+        let root = scratch.join("root");
+        let canary = scratch.join("canary");
+        fs::create_dir_all(root.join("mmdb/shard_00/nested")).unwrap();
+        fs::create_dir_all(&canary).unwrap();
+        fs::write(root.join("mmdb/shard_00/nested/data"), b"1").unwrap();
+        fs::write(canary.join("keep"), b"safe").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&canary, root.join("mmdb/escape")).unwrap();
+
+        let dir = Dir::open_ambient_dir(&root, ambient_authority()).unwrap();
+        clear_directory(&dir).unwrap();
+        assert!(dir.entries().unwrap().next().is_none());
+        assert_eq!(fs::read(canary.join("keep")).unwrap(), b"safe");
+
+        // An already-unlinked open directory handle is also accepted.
+        fs::remove_dir(&root).unwrap();
+        clear_directory(&dir).unwrap();
+        drop(dir);
+        fs::remove_dir_all(scratch).unwrap();
     }
 }
