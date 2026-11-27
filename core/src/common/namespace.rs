@@ -1713,6 +1713,68 @@ mod tests {
         destroyed.expect("destroy finishes after the root is replaced");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn destroy_refuses_and_preserves_a_dangling_symlink_at_the_root() {
+        let scratch = std::env::temp_dir()
+            .join(format!("vsdb-dangling-link-{}", rand::random::<u128>()));
+        fs::create_dir_all(&scratch).unwrap();
+        let future_target = scratch.join("unmounted_or_uncreated");
+
+        // Established namespace whose root was replaced by a dangling symlink.
+        let established_root = scratch.join("established");
+        let ns = Namespace::create_with(NamespaceOpts {
+            path: Some(established_root.clone()),
+            shards: 1,
+            ..Default::default()
+        })
+        .unwrap();
+        let established_id = ns.id();
+        ns.close().unwrap();
+        fs::remove_dir_all(&established_root).unwrap();
+        std::os::unix::fs::symlink(&future_target, &established_root).unwrap();
+
+        assert!(matches!(
+            Namespace::destroy(established_id),
+            Err(VsdbError::Corrupt { .. })
+        ));
+        assert_eq!(fs::read_link(&established_root).unwrap(), future_target);
+        assert!(
+            Namespace::list()
+                .unwrap()
+                .iter()
+                .any(|info| info.id == established_id)
+        );
+        fs::remove_file(&established_root).unwrap();
+        Namespace::destroy(established_id).unwrap();
+
+        // Pending namespace whose unclaimed path now holds a dangling symlink.
+        let pending_root = scratch.join("pending");
+        INTERRUPT_AFTER_PENDING.with(|flag| flag.set(true));
+        assert!(
+            catch_unwind(|| {
+                Namespace::create_with(NamespaceOpts {
+                    path: Some(pending_root.clone()),
+                    shards: 1,
+                    ..Default::default()
+                })
+            })
+            .is_err()
+        );
+        let pending_id = INTERRUPTED_ID.with(|slot| slot.take().unwrap());
+        std::os::unix::fs::symlink(&future_target, &pending_root).unwrap();
+
+        assert!(matches!(
+            Namespace::destroy(pending_id),
+            Err(VsdbError::Corrupt { .. })
+        ));
+        assert_eq!(fs::read_link(&pending_root).unwrap(), future_target);
+        fs::remove_file(&pending_root).unwrap();
+        Namespace::destroy(pending_id).unwrap();
+
+        fs::remove_dir_all(scratch).unwrap();
+    }
+
     #[test]
     fn destroy_succeeds_when_the_root_disappears_after_unregistering() {
         let ns = Namespace::create().unwrap();

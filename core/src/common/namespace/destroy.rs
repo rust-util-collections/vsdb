@@ -1,6 +1,9 @@
 //! Filesystem ownership and durability for namespace destruction.
 use super::{NsLifecycleState, NsRecord};
-use crate::common::{error::Result, universe};
+use crate::common::{
+    error::{Result, corrupt},
+    universe,
+};
 use cap_fs_ext::{DirExt, MetadataExt, OpenOptionsMaybeDirExt};
 use cap_std::{
     ambient_authority,
@@ -107,8 +110,8 @@ impl Target {
                 let parent = Dir::open_ambient_dir(parent_path, ambient_authority())?;
                 if let Some(meta) =
                     existing(parent.symlink_metadata(leaf))?.filter(Metadata::is_symlink)
+                    && let Some(link) = existing(parent.read_link_contents(leaf))?
                 {
-                    let link = parent.read_link_contents(leaf)?;
                     placement = parent_path.join(&link);
                     Some((
                         Name {
@@ -136,6 +139,11 @@ impl Target {
                 record.shards as usize,
                 record.state == NsLifecycleState::Pending,
             )?;
+        } else if alias.is_some() {
+            return Err(corrupt(format!(
+                "dangling symlink at namespace root {}",
+                root.display()
+            )));
         } else {
             // Fence the missing entry while a failed call can still be retried by id.
             sync_absence(&placement)?;

@@ -144,7 +144,9 @@ the process lifetime once initialized. [Close implementation](../core/src/common
 
 Destroy synchronizes the parent after removing a registered name. If the
 root was already absent, it synchronizes the nearest surviving parent before
-unregistering the namespace. For final removal it moves the name into a
+unregistering the namespace. A symlink at the registered path must resolve
+to a verified namespace directory; a dangling symlink is refused. For final
+removal it moves the name into a
 private sibling directory and checks the identity there. If a replacement
 was moved, destroy restores it without overwriting an occupied name. If
 restoration fails, the error gives the path to the retained entry under
