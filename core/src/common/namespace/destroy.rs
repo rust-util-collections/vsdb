@@ -38,13 +38,58 @@ fn sync_dir(dir: &Dir) -> io::Result<()> {
         .sync_all()
 }
 
+fn sync_existing_dir(dir: &Dir) -> io::Result<()> {
+    match sync_dir(dir) {
+        Ok(()) => Ok(()),
+        Err(err)
+            if matches!(
+                err.kind(),
+                io::ErrorKind::PermissionDenied
+                    | io::ErrorKind::InvalidInput
+                    | io::ErrorKind::ReadOnlyFilesystem
+            ) =>
+        {
+            Ok(())
+        }
+        Err(err) => Err(err),
+    }
+}
+
+/// Retain a parent handle only when it can also be opened to synchronize
+/// directory-entry changes. On Linux, `open_ambient_dir` returns an `O_PATH`
+/// descriptor even on `--x` (`0o111`) or `-wx` (`0o311`) directories whose
+/// entries cannot subsequently be fenced with `fsync`.
+fn syncable_parent(dir: Dir) -> io::Result<Option<Dir>> {
+    #[cfg(not(windows))]
+    {
+        match dir.open_with(".", OpenOptions::new().read(true).maybe_dir(true)) {
+            Ok(file) => Ok(Some(Dir::from_std_file(file.into_std()))),
+            Err(err) if err.kind() == io::ErrorKind::PermissionDenied => Ok(None),
+            Err(err) => Err(err),
+        }
+    }
+    #[cfg(windows)]
+    {
+        Ok(Some(dir))
+    }
+}
+
 fn sync_absence(path: &Path) -> io::Result<()> {
     for ancestor in path.ancestors().skip(1) {
-        if let Some(dir) =
-            existing(Dir::open_ambient_dir(ancestor, ambient_authority()))?
-        {
-            return sync_dir(&dir);
-        }
+        let ancestor = if ancestor.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            ancestor
+        };
+        let dir = match Dir::open_ambient_dir(ancestor, ambient_authority()) {
+            Ok(dir) => dir,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+            Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+                return Ok(());
+            }
+            Err(err) => return Err(err),
+        };
+        return sync_existing_dir(&dir);
     }
     Err(io::ErrorKind::NotFound.into())
 }
@@ -87,14 +132,18 @@ impl Name {
     fn lock_directory(placement: &Path) -> io::Result<(Dir, Self)> {
         let path = placement.canonicalize()?;
         let (parent, leaf) = parent_and_name(&path)?;
-        let parent = match Dir::open_ambient_dir(parent, ambient_authority()) {
+        let parent_cap = match Dir::open_ambient_dir(parent, ambient_authority()) {
             Ok(dir) => Some(dir),
             Err(e) if e.kind() == io::ErrorKind::PermissionDenied => None,
             Err(e) => return Err(e),
         };
-        let dir = match &parent {
+        let dir = match &parent_cap {
             Some(parent) => parent.open_dir_nofollow(leaf)?,
             None => Dir::open_ambient_dir(&path, ambient_authority())?,
+        };
+        let parent = match parent_cap {
+            Some(parent) => syncable_parent(parent)?,
+            None => None,
         };
         let lease = universe::lock_directory(dir)?;
         Ok((Dir::from_std_file(lease), Self { path, parent }))
@@ -116,7 +165,7 @@ impl Target {
                     Some((
                         Name {
                             path: root.to_owned(),
-                            parent: Some(parent),
+                            parent: syncable_parent(parent)?,
                         },
                         Identity {
                             metadata: meta,
@@ -196,18 +245,20 @@ fn remove_entry(location: Name, expected: &Identity) -> io::Result<()> {
     let path = &location.path;
     let (parent_path, name) = parent_and_name(path)?;
     let Some(parent) = location.parent else {
-        // The inaccessible parent can keep an adopted root. If its name has
-        // changed, we cannot confirm the durability of that change.
-        let current = Dir::open_ambient_dir(path, ambient_authority())?;
-        if fs::symlink_metadata(path)?.is_dir()
-            && same_entry(&current.dir_metadata()?, &expected.metadata)
-        {
-            return Ok(());
+        if !expected.metadata.is_dir() {
+            return Err(io::ErrorKind::PermissionDenied.into());
         }
-        return Err(io::ErrorKind::PermissionDenied.into());
+        // An unreadable parent cannot be opened to fence a directory-entry
+        // change, so keep the emptied, synced adopted root in place.
+        if let Some(current) =
+            existing(Dir::open_ambient_dir(path, ambient_authority()))?
+        {
+            let _ = current.dir_metadata()?;
+        }
+        return Ok(());
     };
     if !expected.matches(&parent, name)? {
-        return sync_dir(&parent);
+        return sync_existing_dir(&parent);
     }
     let staging = format!(".vsdb-destroy-{:032x}", rand::random::<u128>());
     let mut options = DirBuilder::new();

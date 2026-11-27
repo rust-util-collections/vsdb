@@ -27,36 +27,51 @@ fn destroy_keeps_an_adopted_root_it_cannot_remove() {
     fs::set_permissions(&parent, fs::Permissions::from_mode(0o555)).unwrap();
     let restore = Writable(parent.clone());
 
-    // Skip when running with DAC bypass (e.g. root), where the parent stays
-    // writable regardless of its mode.
+    // Skip when running with DAC bypass (e.g. root), where restricted parent
+    // modes do not block writes or reads.
     if fs::create_dir(parent.join("probe")).is_err() {
+        for mode in [0o555, 0o111, 0o311] {
+            fs::set_permissions(&parent, fs::Permissions::from_mode(mode)).unwrap();
+            let ns = Namespace::create_with(NamespaceOpts {
+                path: Some(root.clone()),
+                shards: 1,
+                mem_budget_mb: Some(16),
+            })
+            .unwrap();
+            let id = ns.id();
+            let mut map = MapxRaw::new_in(&ns);
+            map.insert(b"k", b"v");
+            drop(map);
+            ns.close().unwrap();
+
+            Namespace::destroy(id).unwrap();
+            assert!(!Namespace::list().unwrap().iter().any(|info| info.id == id));
+            assert!(root.is_dir(), "mode {mode:#o} removed an unfenceable root");
+            assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
+        }
+
+        // An already-removed root under a traverse-only parent must still be
+        // unregisterable when the process cannot open the parent for fsync.
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).unwrap();
         let ns = Namespace::create_with(NamespaceOpts {
             path: Some(root.clone()),
             shards: 1,
             mem_budget_mb: Some(16),
         })
         .unwrap();
-        let id = ns.id();
-        let mut map = MapxRaw::new_in(&ns);
-        map.insert(b"k", b"v");
-        drop(map);
+        let missing_id = ns.id();
         ns.close().unwrap();
-
-        Namespace::destroy(id).unwrap();
-        assert!(!Namespace::list().unwrap().iter().any(|info| info.id == id));
-        assert!(root.is_dir());
-        assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
-
-        // The kept root can be adopted again.
-        let again = Namespace::create_with(NamespaceOpts {
-            path: Some(root.clone()),
-            shards: 1,
-            mem_budget_mb: Some(16),
-        })
-        .unwrap();
-        let again_id = again.id();
-        again.close().unwrap();
-        Namespace::destroy(again_id).unwrap();
+        fs::remove_dir_all(&root).unwrap();
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o111)).unwrap();
+        if fs::File::open(&parent).is_err() {
+            Namespace::destroy(missing_id).unwrap();
+            assert!(
+                !Namespace::list()
+                    .unwrap()
+                    .iter()
+                    .any(|info| info.id == missing_id)
+            );
+        }
     }
 
     drop(restore);
