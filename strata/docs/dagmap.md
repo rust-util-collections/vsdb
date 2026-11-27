@@ -12,16 +12,15 @@ round-trip.
 ```rust
 use vsdb::DagMap;
 
-let mut root = DagMap::<u64, String>::new(None);
-root.insert(&1, &"original".into());
-let mut child = DagMap::new(Some(&mut root));
-assert_eq!(child.get(&1).as_deref(), Some("original"));
+let mut prices = DagMap::<u32, u64>::new(None);
+prices.insert(&1, &10);
+let mut sale = DagMap::new(Some(&mut prices));
+assert_eq!(sale.get(&1), Some(10));
 
-child.insert(&1, &"edited".into());
-assert_eq!(root.get(&1).as_deref(), Some("original"));
-let merged = child.prune().unwrap();
-assert_eq!(merged.instance_id(), root.instance_id());
-assert_eq!(root.get(&1).as_deref(), Some("edited"));
+sale.insert(&1, &8);
+assert_eq!(prices.get(&1), Some(10));
+let root = sale.prune().unwrap();
+assert_eq!(root.get(&1), Some(8));
 ```
 
 ## Pruning and recovery

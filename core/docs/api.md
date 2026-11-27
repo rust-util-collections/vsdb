@@ -1,9 +1,5 @@
 # Raw maps and process configuration
 
-`vsdb_core::MapxRaw` stores byte keys and byte values. Choose a database
-directory once per process, then create maps or restore saved handles in
-that universe.
-
 ## Configure the universe
 
 Configure once, before opening a collection or requesting a VSDB directory.
@@ -11,14 +7,9 @@ Configure once, before opening a collection or requesting a VSDB directory.
 and selects the open mode for every namespace in this process.
 
 ```rust,no_run
-use vsdb_core::{VsdbOptions, vsdb_configure, vsdb_get_base_dir};
+use vsdb_core::{VsdbOptions, vsdb_configure};
 
 vsdb_configure(VsdbOptions::new("/srv/my-app/vsdb")).unwrap();
-let dir = vsdb_get_base_dir();
-
-// A child process selects its own configuration.
-let mut child = std::process::Command::new("my-worker");
-child.env("VSDB_BASE_DIR", dir);
 ```
 
 Without explicit configuration the process opens for writing. The base path
@@ -38,18 +29,12 @@ Raw maps store arbitrary byte strings. Iteration uses lexicographic key order.
 ```rust
 use vsdb_core::MapxRaw;
 
-let mut map = MapxRaw::new();
-map.insert(b"key1", b"value1");
-map.insert(b"key2", b"value2");
-assert_eq!(map.get(b"key1").as_deref(), Some(&b"value1"[..]));
-assert!(map.contains_key(b"key2"));
-map.remove(b"key1");
-assert!(!map.contains_key(b"key1"));
+let mut settings = MapxRaw::new();
+settings.insert(b"theme", b"dark");
 
-let id = map.save_meta().unwrap();
-drop(map);
+let id = settings.save_meta().unwrap();
 let restored = MapxRaw::from_meta(id).unwrap();
-assert_eq!(restored.get(b"key2").as_deref(), Some(&b"value2"[..]));
+assert_eq!(restored.get(b"theme").unwrap(), b"dark");
 ```
 
 Keep the `InstanceId` in application storage for the next process. In the
@@ -76,7 +61,7 @@ let mut batch = map.batch();
 batch.insert(b"version", b"2");
 batch.insert(b"status", b"ready");
 batch.commit_sync().unwrap();
-assert_eq!(map.get(b"status").as_deref(), Some(&b"ready"[..]));
+assert_eq!(map.get(b"status").unwrap(), b"ready");
 ```
 
 To let the caller retry when the shard would stall on admission, finish the
@@ -90,17 +75,16 @@ WAL append starts can leave a recoverable batch.
 
 Use `MapxRaw::read_view()` for several queries against one committed state of
 a map. It supports `get`, `contains_key`, `iter` and `range`. A fatal engine
-error panics. Each independently captured view may see a different state.
-Release views and iterators when done so compaction can reclaim old versions.
-
-To continue writing while a view is alive, capture it through a reader.
+error panics. Capture the view through a reader to keep writing through the map.
 
 ```rust
 use vsdb_core::MapxRaw;
+
 let mut map = MapxRaw::new();
 map.insert(b"key", b"before");
 let reader = map.reader();
 let view = reader.read_view();
+
 map.insert(b"key", b"after");
 assert_eq!(view.get(b"key").unwrap(), b"before");
 assert_eq!(reader.get(b"key").unwrap(), b"after");
@@ -112,11 +96,11 @@ refused until all readers and other owning handles are dropped. Views borrow
 their map or reader. Their ordinary `iter` and `range` iterators borrow the view.
 Ranges accept owned or borrowed byte bounds such as `b"a"..b"z"` and `..`.
 
-An immutable `iter` or `range` retains one committed view captured when the
-iterator is created. Writes, clears and flushes through another handle do not
-change that view. Separate queries can see different states. The `shadow`
-contract permits these reads while retaining its exclusion of competing
-writers to the same key. Mutable iteration counts as a write.
+Each new view or immutable iterator captures the state at creation. Later
+writes, clears and flushes leave that state intact. Release views and iterators
+when done so compaction can reclaim old versions. The same reads are valid
+through `shadow`. Mutable iteration counts as a write and requires excluding
+other writers to the same keys.
 
 ### Detached ranges
 
@@ -126,11 +110,12 @@ the owning namespace closes.
 
 ```rust
 use vsdb_core::MapxRaw;
+
 let mut map = MapxRaw::new();
 map.insert(b"key", b"before");
-let mut view = map.range_detached(..);
+let mut rows = map.range_detached(..);
 map.insert(b"key", b"after");
-assert_eq!(view.next().unwrap().1, b"before");
+assert_eq!(rows.next().unwrap().1, b"before");
 ```
 
 ### Borrowed values and fallible cursors

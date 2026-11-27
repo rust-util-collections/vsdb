@@ -1,9 +1,5 @@
-//! Approximate nearest-neighbor vector index backed by the HNSW algorithm.
-//!
-//! [`VecDex`] is a persistent, disk-backed vector index that wraps VSDB's
-//! core storage primitives.  It supports insert, delete, and k-nearest-neighbor
-//! search with configurable distance metrics (`L2`, `Cosine`,
-//! `InnerProduct`).
+//! Persistent HNSW vector search with squared Euclidean distance, cosine
+//! distance or inner product.
 //!
 //! [`VecDexDyn`] accepts a runtime [`crate::MetricKind`].
 //! Serialize writers that share an index. [`VecDex::reader`] provides a
@@ -12,10 +8,9 @@
 //! already ran can have side effects. On an error, callers must discard any partial work
 //! recorded by their predicate.
 //!
-//! # Storage model (single-handle, crash-atomic)
+//! # Storage layout
 //!
-//! All persistent state lives in **one** [`vsdb_core::MapxRaw`] handle, partitioned
-//! by a leading tag byte:
+//! A leading tag byte identifies each row in the index's [`vsdb_core::MapxRaw`].
 //!
 //! ```text
 //! [0x00 | node_id BE]            -> unframed IEEE-754 LE components
@@ -32,25 +27,26 @@
 //! committed after a later error. Recovery verifies the schema and reads the
 //! committed graph state. Power-loss durability requires a shard WAL fence.
 //!
-//! The serialized form of a `VecDex` (its typed handle metadata) is the
-//! single handle prefix, layout version and immutable schema digest.
-//! It is **create-time constant**: graph growth only writes ordinary
-//! data rows, so metadata saved once at creation stays valid for the
-//! lifetime of the instance.
+//! The serialized handle binds the map identity to its layout version and
+//! immutable schema digest. A saved handle remains valid as the graph grows.
 //!
 //! # Quick start
 //!
-//! ```ignore
-//! use vsdb::vecdex::{VecDex, HnswConfig, distance::Cosine};
+//! ```
+//! use vsdb::{HnswConfig, VecDexCosine};
+//! # let dir = std::env::temp_dir().join(format!("vsdb-doc-{}", rand::random::<u128>()));
+//! # std::fs::create_dir(&dir)?;
+//! # vsdb::vsdb_configure(vsdb::VsdbOptions::new(&dir))?;
 //!
-//! let cfg = HnswConfig { dim: 4, ..Default::default() };
-//! let mut idx: VecDex<String, Cosine> = VecDex::new(cfg).unwrap();
+//! let config = HnswConfig { dim: 2, ..Default::default() };
+//! let mut directions = VecDexCosine::<String>::new(config)?;
+//! directions.insert(&"east".into(), &[1.0, 0.0])?;
+//! directions.insert(&"north".into(), &[0.0, 1.0])?;
 //!
-//! idx.insert(&"doc-a".into(), &[0.1, 0.2, 0.3, 0.4]).unwrap();
-//! idx.insert(&"doc-b".into(), &[0.5, 0.6, 0.7, 0.8]).unwrap();
-//!
-//! let results = idx.search(&[0.1, 0.2, 0.3, 0.4], 1).unwrap();
-//! assert_eq!(results[0].0, "doc-a");
+//! let nearest = directions.search(&[0.9, 0.1], 1)?;
+//! assert_eq!(nearest[0].0, "east");
+//! # std::fs::remove_dir_all(dir)?;
+//! # Ok::<(), vsdb::VsdbError>(())
 //! ```
 
 pub mod distance;

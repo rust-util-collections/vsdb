@@ -1,14 +1,11 @@
 # VSDB documentation
 
-Start with the [quick start](../README.md#quick-start) to write a map, save its
-handle and reopen it.
+[Write and reopen a map](../README.md#quick-start)
 
 ## Build an application
 
-- Choose a typed collection for branch history, Merkle proofs, slot
-  pagination, parent overlays or vector search. [Collection chooser and examples](../strata/README.md#choosing-a-collection)
-- Store raw bytes, restore a handle, batch writes or iterate a captured
-  state. [Raw map examples](../core/docs/api.md#mapxraw)
+- [Choose a typed collection](../strata/README.md#choosing-a-collection)
+- [Store raw bytes, batch writes and read snapshots](../core/docs/api.md#mapxraw)
 
 ## Operate a database
 

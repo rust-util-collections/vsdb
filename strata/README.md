@@ -11,14 +11,11 @@ MMDB's bundled Zstd compression dependency requires a C toolchain.
 
 ## Getting started
 
-To use this checkout from a Rust application, add the crate by path.
-
 ```bash
-cargo add vsdb --path /path/to/vsdb/strata
+cargo add vsdb@19
 ```
 
-The [quick start](https://github.com/rust-util-collections/vsdb/blob/master/README.md#quick-start) writes a map, makes its rows
-durable and reopens it using a saved `InstanceId`.
+[Write and reopen a map](https://github.com/rust-util-collections/vsdb/blob/master/README.md#quick-start)
 
 ## Choosing a collection
 
@@ -34,8 +31,7 @@ durable and reopens it using a saved `InstanceId`.
 | Parent overlays with local overrides, deletions and pruning | [`DagMap<K, V>`, `DagMapRawKey<V>` or `DagMapRaw`](https://github.com/rust-util-collections/vsdb/blob/master/strata/docs/dagmap.md) |
 | Approximate nearest-neighbor search | [`VecDex<K, D, S>`](https://github.com/rust-util-collections/vsdb/blob/master/strata/docs/vecdex.md), or `VecDexDyn<K, S>` for runtime metric selection |
 
-For placement, read-only deployment, upgrades and memory sizing, see the
-[database operations guides](https://github.com/rust-util-collections/vsdb/blob/master/docs/README.md#operate-a-database).
+[Namespace placement, read-only deployment, upgrades and memory sizing](https://github.com/rust-util-collections/vsdb/blob/master/docs/README.md#operate-a-database)
 
 ## License
 

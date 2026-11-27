@@ -10,8 +10,7 @@ such as saved `InstanceId` values and serialized handles.
 | v18 development collections on MMDB v4 shards | Stage the shards in v5 format using the v18 converter. Verify the existing handles against the converted data, then open it with v19. |
 | v17 collections on MMDB v4 shards | Use the v18 converter to stage the shards **and** convert the affected collection layouts and application handles. Verify the resulting v18 universe before opening it with v19. |
 
-The converter and its instructions live on the v18 maintenance branch.
-Follow that guide from the v18 checkout for either conversion path.
+Both conversion paths use the converter on the v18 maintenance branch.
 [v18 offline migration guide](https://github.com/rust-util-collections/vsdb/blob/v18/migration/README.md)
 
 ## Open a native v18 universe in place
@@ -27,6 +26,6 @@ Follow that guide from the v18 checkout for either conversion path.
    The universe identity, shard counts, collection prefixes and handle
    encodings carry over.
 
-If you need to revert to the backup, restore all of its directories and
+To roll back, restore all backed-up directories and
 application records together. Writes accepted after the backup need to be
 reconciled separately.

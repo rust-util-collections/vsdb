@@ -1,33 +1,24 @@
-//!
-//! A raw-key, disk-based, directed acyclic graph (DAG) map.
-//!
-//! `DagMapRawKey` provides a map-like interface where each instance can have a parent
-//! and multiple children, forming a directed acyclic graph. Keys are stored as raw
-//! bytes, while values are typed and encoded.
+//! Parent overlays with byte keys and typed values. A child inherits entries
+//! until it overrides or removes them.
 //!
 //! # Examples
 //!
 //! ```
-//! use vsdb::{DagMapRaw, DagMapRawKey};
-//! use vsdb::{VsdbOptions, vsdb_configure, vsdb_get_base_dir};
-//! use std::fs;
+//! use vsdb::DagMapRawKey;
+//! # let dir = std::env::temp_dir().join(format!("vsdb-doc-{}", rand::random::<u128>()));
+//! # std::fs::create_dir(&dir)?;
+//! # vsdb::vsdb_configure(vsdb::VsdbOptions::new(&dir))?;
 //!
-//! // It's recommended to use a temporary directory for testing
-//! let dir = std::env::temp_dir().join(format!("vsdb-{}", rand::random::<u128>()));
-//! vsdb_configure(VsdbOptions::new(&dir)).unwrap();
+//! let mut prices = DagMapRawKey::new(None);
+//! prices.insert(b"apples", &10);
+//! let mut sale = DagMapRawKey::new(Some(&mut prices));
+//! assert_eq!(sale.get(b"apples"), Some(10));
 //!
-//! let mut dag: DagMapRawKey<String> = DagMapRawKey::new(None);
-//!
-//! // Insert a value
-//! dag.insert(&[1], &"hello".to_string());
-//! assert_eq!(dag.get(&[1]), Some("hello".to_string()));
-//!
-//! // Create a child
-//! let child = DagMapRawKey::new(Some(&mut dag));
-//! assert_eq!(child.get(&[1]), Some("hello".to_string()));
-//!
-//! // Clean up the directory
-//! fs::remove_dir_all(vsdb_get_base_dir()).unwrap();
+//! sale.insert(b"apples", &8);
+//! assert_eq!(sale.get(b"apples"), Some(8));
+//! assert_eq!(prices.get(b"apples"), Some(10));
+//! # std::fs::remove_dir_all(dir)?;
+//! # Ok::<(), vsdb::VsdbError>(())
 //! ```
 
 #[cfg(test)]
@@ -44,15 +35,9 @@ use vsdb_core::common::RawBytes;
 
 type DagHead<V> = DagMapRawKey<V>;
 
-/// A raw-key, disk-based, directed acyclic graph (DAG) map.
-///
-/// Deliberately does **not** implement [`Default`] — see
-/// [`DagMapRaw`]'s documentation for why: construction always performs
-/// real disk I/O, so a `Default` impl would let generic code
-/// (`mem::take`, `.or_default()`, `.unwrap_or_default()`) create
-/// orphaned on-disk state invisibly. Use [`Self::new`] explicitly.
-/// [`Clone`] copies the complete connected graph independently, as described
-/// by [`DagMapRaw`].
+/// A persistent overlay map with byte keys and typed values.
+/// Create nodes explicitly with [`Self::new`], which writes to disk.
+/// Cloning copies the complete connected graph independently. See [`DagMapRaw`].
 #[derive(Debug)]
 pub struct DagMapRawKey<V> {
     pub(super) inner: DagMapRaw,
@@ -231,18 +216,13 @@ where
         Ok(Some(result))
     }
 
-    /// Inserts a key-value pair into the DAG map.
-    ///
-    /// Does not return the old value for performance reasons.
-    ///
+    /// Sets the local value for `key`.
     #[inline(always)]
     pub fn insert(&mut self, key: impl AsRef<[u8]>, value: &V) {
         self.inner.insert(key, value.encode_value())
     }
 
-    /// Removes a key-value pair from the DAG map.
-    ///
-    /// Does not return the old value for performance reasons.
+    /// Removes the local value and masks any inherited value for `key`.
     #[inline(always)]
     pub fn remove(&mut self, key: impl AsRef<[u8]>) {
         self.inner.remove(key)

@@ -14,14 +14,15 @@ use std::{
     },
 };
 
-/// An equality key must encode canonically: two keys compare equal exactly
-/// when their encodings are identical. The serde blanket requires `Eq + Hash`.
+/// Equal keys must have identical encodings, and distinct keys must encode
+/// differently. The serde blanket requires `Eq + Hash`.
 ///
 /// ```compile_fail
-/// let m = vsdb::Mapx::<f64, String>::new();
+/// vsdb::Mapx::<f64, u64>::new(); // NaN prevents f64 from implementing Eq.
 /// ```
 /// ```compile_fail
-/// let m = vsdb::Mapx::<std::collections::HashMap<u32, u32>, String>::new();
+/// use std::collections::HashMap;
+/// vsdb::Mapx::<HashMap<u32, u32>, u64>::new(); // HashMap has no canonical iteration order.
 /// ```
 pub trait KeyEnDe: Eq + Sized {
     /// Appends the key encoding to a reusable destination.
@@ -194,10 +195,10 @@ impl<const N: usize> OrderedKeyLookup<[u8]> for [u8; N] {
 /// Persist integers with explicit widths.
 ///
 /// ```compile_fail
-/// let map = vsdb::MapxOrd::<usize, u64>::new();
+/// vsdb::MapxOrd::<usize, u64>::new();
 /// ```
 /// ```compile_fail
-/// let map = vsdb::MapxOrd::<Vec<isize>, u64>::new();
+/// vsdb::MapxOrd::<Vec<isize>, u64>::new();
 /// ```
 pub trait KeyEnDeOrdered: Clone + Eq + Ord + fmt::Debug {
     fn with_ordered_bytes<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R;

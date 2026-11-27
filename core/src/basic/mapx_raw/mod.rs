@@ -1,47 +1,19 @@
-//!
-//! A `Map`-like structure that stores data on disk.
-//!
-//! This module provides `MapxRaw`, a key-value store that functions like a standard `Map`
-//! but with the underlying data persisted to disk. It is "raw" because it does not
-//! encode or transform keys and values; they are stored as-is.
+//! Persistent maps with byte keys and values. Iteration follows lexicographic key order.
 //!
 //! # Examples
 //!
 //! ```
-//! use vsdb_core::basic::mapx_raw::MapxRaw;
-//! use vsdb_core::{VsdbOptions, vsdb_configure, vsdb_get_base_dir};
-//! use std::fs;
+//! use vsdb_core::MapxRaw;
+//! # let dir = std::env::temp_dir().join(format!("vsdb-doc-{}", rand::random::<u128>()));
+//! # std::fs::create_dir(&dir)?;
+//! # vsdb_core::vsdb_configure(vsdb_core::VsdbOptions::new(&dir))?;
 //!
-//! // It's recommended to use a temporary directory for testing
-//! let dir = std::env::temp_dir().join(format!("vsdb-{}", rand::random::<u128>()));
-//! vsdb_configure(VsdbOptions::new(&dir)).unwrap();
-//!
-//! let mut m = MapxRaw::new();
-//!
-//! // Insert key-value pairs
-//! m.insert(&[1], &[10]);
-//! m.insert(&[2], &[20]);
-//! m.insert(&[3], &[30]);
-//!
-//! // Retrieve a value
-//! assert_eq!(m.get(&[2]), Some(vec![20]));
-//!
-//! // Iterate over the map
-//! for (k, v) in m.iter() {
-//!     println!("key: {:?}, val: {:?}", k, v);
-//! }
-//!
-//! // Remove a key-value pair
-//! m.remove(&[2]);
-//! assert!(m.get(&[2]).is_none());
-//!
-//! // Clear the entire map
-//! m.clear();
-//!
-//! // Clean up the directory
-//! fs::remove_dir_all(vsdb_get_base_dir()).unwrap();
+//! let mut settings = MapxRaw::new();
+//! settings.insert(b"theme", b"dark");
+//! assert_eq!(settings.get(b"theme").unwrap(), b"dark");
+//! # std::fs::remove_dir_all(dir)?;
+//! # Ok::<(), vsdb_core::VsdbError>(())
 //! ```
-//!
 
 #[cfg(test)]
 mod test;
@@ -114,10 +86,7 @@ pub type ValueMut<'a> = engine::ValueMut<'a>;
 /// A mutable iterator over the values of a `MapxRaw`.
 pub type ValueIterMut<'a> = engine::ValueIterMut<'a>;
 
-/// A raw, disk-based, key-value map.
-///
-/// `MapxRaw` provides a `Map`-like interface for storing and retrieving raw byte slices.
-/// It is unversioned and does not perform any encoding on keys or values.
+/// A persistent map that stores byte keys and values as supplied.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MapxRaw {
     inner: engine::Mapx,
@@ -135,18 +104,9 @@ impl Serialize for MapxRaw {
 impl<'de> Deserialize<'de> for MapxRaw {
     /// # Aliasing warning
     ///
-    /// Deserialization does **not** create an independent copy — the
-    /// restored handle reconnects to the exact same underlying key
-    /// range that produced the serialized metadata (the payload is the
-    /// instance's raw prefix, not its contents).  This is semantically
-    /// equivalent to [`shadow`](MapxRaw::shadow), reachable through
-    /// safe code: if the original handle (or any other restore of it)
-    /// is still alive in-process, the same SWMR discipline applies
-    /// across every live alias — no concurrent writes to the same key
-    /// through any handle.  Deserialization is intended to restore a
-    /// handle after the original has gone out of scope (e.g. across a
-    /// process restart); deserializing while the original is still
-    /// live requires the same care as `shadow()`.
+    /// Deserializing a handle reopens its original namespace and key range.
+    /// Across all live handles, exclude concurrent writes to the same key,
+    /// as required by [`shadow`](MapxRaw::shadow).
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -179,22 +139,14 @@ impl MapxRaw {
         self.inner.read_view()
     }
 
-    /// Creates a "shadow" copy of the `MapxRaw` instance.
-    ///
-    /// This method creates a new `MapxRaw` that shares the same underlying data source.
-    /// It is a lightweight operation that can be used to create multiple references
-    /// to the same map without the overhead of cloning the entire structure.
+    /// Creates another writable handle to the same stored rows.
     ///
     /// # Safety
     ///
-    /// This API breaks the semantic safety guarantees of Rust's ownership and
-    /// borrowing rules.  The caller must ensure no concurrent writes to the
-    /// same key through any handle.  Multiple writers on disjoint keys are
-    /// safe. Concurrent immutable reads and iteration alongside writes are
-    /// supported. Each iterator retains the committed view captured when it
-    /// is created, including across later writes, clears and flushes. Separate
-    /// reads/iterators can observe different views. Mutable iteration remains
-    /// a write operation and requires the same exclusion of other writers.
+    /// Exclude concurrent writes to the same key through all handles, including
+    /// writes through mutable iterators. Writers may operate on disjoint keys.
+    /// Immutable reads and iterators may overlap writes. Each immutable iterator
+    /// keeps its creation-time view across later writes, clears and flushes.
     #[inline(always)]
     pub unsafe fn shadow(&self) -> Self {
         Self {
@@ -222,7 +174,7 @@ impl MapxRaw {
 
     /// Creates a new, empty `MapxRaw` placed in `ns` — the explicit
     /// form of the ambient-scope placement performed by
-    /// [`new`](Self::new) (naming mirrors `Box::new_in`).
+    /// [`new`](Self::new).
     ///
     /// # Panics
     ///
@@ -366,15 +318,7 @@ impl MapxRaw {
         })
     }
 
-    /// Retrieves a value from the map corresponding to the given key.
-    ///
-    /// # Arguments
-    ///
-    /// * `key` - The key to look up.
-    ///
-    /// # Returns
-    ///
-    /// An `Option<RawValue>` containing the value if the key exists, or `None` otherwise.
+    /// Returns the bytes stored at `key`, or `None` if it is absent.
     #[inline(always)]
     pub fn get(&self, key: impl AsRef<[u8]>) -> Option<RawValue> {
         self.inner.get(key.as_ref())
@@ -391,16 +335,7 @@ impl MapxRaw {
         self.inner.try_get_with(key.as_ref(), decode)
     }
 
-    /// Retrieves a mutable reference to a value in the map.
-    ///
-    /// # Arguments
-    ///
-    /// * `key` - The key to look up.
-    ///
-    /// # Returns
-    ///
-    /// An `Option<ValueMut<'_>>` containing a mutable reference to the value if the key exists,
-    /// or `None` otherwise.
+    /// Returns a write-back guard if `key` exists.
     #[inline(always)]
     pub fn get_mut(&mut self, key: impl AsRef<[u8]>) -> Option<ValueMut<'_>> {
         self.inner.get_mut(key.as_ref())
@@ -434,14 +369,6 @@ impl MapxRaw {
     }
 
     /// Checks if the map contains a value for the specified key.
-    ///
-    /// # Arguments
-    ///
-    /// * `key` - The key to check.
-    ///
-    /// # Returns
-    ///
-    /// `true` if the map contains the key, `false` otherwise.
     #[inline(always)]
     pub fn contains_key(&self, key: impl AsRef<[u8]>) -> bool {
         self.try_contains_key(key)
@@ -456,42 +383,18 @@ impl MapxRaw {
     }
 
     /// Retrieves the last entry with a key less than or equal to the given key.
-    ///
-    /// # Arguments
-    ///
-    /// * `key` - The key to search for.
-    ///
-    /// # Returns
-    ///
-    /// An `Option<(RawKey, RawValue)>` containing the key-value pair if found, or `None` otherwise.
     #[inline(always)]
     pub fn get_le(&self, key: impl AsRef<[u8]>) -> Option<(RawKey, RawValue)> {
         self.range(..=Cow::Borrowed(key.as_ref())).next_back()
     }
 
     /// Retrieves the first entry with a key greater than or equal to the given key.
-    ///
-    /// # Arguments
-    ///
-    /// * `key` - The key to search for.
-    ///
-    /// # Returns
-    ///
-    /// An `Option<(RawKey, RawValue)>` containing the key-value pair if found, or `None` otherwise.
     #[inline(always)]
     pub fn get_ge(&self, key: impl AsRef<[u8]>) -> Option<(RawKey, RawValue)> {
         self.range(Cow::Borrowed(key.as_ref())..).next()
     }
 
     /// Gets an entry for the given key, allowing for in-place modification.
-    ///
-    /// # Arguments
-    ///
-    /// * `key` - The key of the entry.
-    ///
-    /// # Returns
-    ///
-    /// An `Entry` that allows for operations on the value.
     #[inline(always)]
     pub fn entry(&mut self, key: &[u8]) -> Entry<'_> {
         match self.get(key) {
@@ -511,10 +414,6 @@ impl MapxRaw {
     ///
     /// The iterator retains its creation-time committed view. Later writes
     /// through another handle do not change the entries it returns.
-    ///
-    /// # Returns
-    ///
-    /// A `MapxRawIter` that iterates over the key-value pairs.
     #[inline(always)]
     pub fn iter(&self) -> MapxRawIter<'_> {
         self.inner.iter()
@@ -523,14 +422,6 @@ impl MapxRaw {
     /// Returns an iterator over a range of entries in the map.
     ///
     /// Retains one creation-time committed view, like [`iter`](Self::iter).
-    ///
-    /// # Arguments
-    ///
-    /// * `bounds` - The range of keys to iterate over.
-    ///
-    /// # Returns
-    ///
-    /// A `MapxRawIter` that iterates over the key-value pairs in the specified range.
     #[inline(always)]
     pub fn range<'a, R: RawRangeBounds>(&'a self, bounds: R) -> MapxRawIter<'a> {
         self.inner.range(bounds)
@@ -542,42 +433,20 @@ impl MapxRaw {
         self.inner.try_range(bounds)
     }
 
-    /// Returns a detached iterator over a range of entries in the map.
-    ///
-    /// This iterator is not tied to the lifetime of `&self`, allowing for concurrent
-    /// modification of the map during iteration (though the iterator will see a snapshot).
-    ///
-    /// # Arguments
-    ///
-    /// * `bounds` - The range of keys to iterate over.
-    ///
-    /// # Returns
-    ///
-    /// A `MapxRawIter` that iterates over the key-value pairs in the specified range.
+    /// Iterates over a snapshot of `bounds` independently of this handle.
+    /// The map can be modified or dropped while the iterator remains live.
     #[inline(always)]
     pub fn range_detached<'a, R: RawRangeBounds>(&self, bounds: R) -> MapxRawIter<'a> {
         self.inner.range_detached(bounds)
     }
 
     /// Returns a mutable iterator over the map's entries.
-    ///
-    /// # Returns
-    ///
-    /// A `MapxRawIterMut` that allows for mutable iteration over the key-value pairs.
     #[inline(always)]
     pub fn iter_mut(&mut self) -> MapxRawIterMut<'_> {
         self.inner.iter_mut()
     }
 
     /// Returns a mutable iterator over a range of entries in the map.
-    ///
-    /// # Arguments
-    ///
-    /// * `bounds` - The range of keys to iterate over.
-    ///
-    /// # Returns
-    ///
-    /// A `MapxRawIterMut` that allows for mutable iteration over the key-value pairs in the specified range.
     #[inline(always)]
     pub fn range_mut<'a, R: RawRangeBounds>(
         &'a mut self,
@@ -586,19 +455,13 @@ impl MapxRaw {
         self.inner.range_mut(bounds)
     }
 
-    /// Retrieves the last entry in the map.
-    ///
-    /// # Returns
-    ///
-    /// An `Option<(RawKey, RawValue)>` containing the last key-value pair, or `None` if the map is empty.
+    /// Returns the entry with the greatest key, or `None` for an empty map.
     #[inline(always)]
     pub fn last(&self) -> Option<(RawKey, RawValue)> {
         self.iter().next_back()
     }
 
     /// Inserts a key-value pair into the map.
-    ///
-    /// Does not return the old value for performance reasons.
     ///
     /// # Size limits
     ///
@@ -609,11 +472,6 @@ impl MapxRaw {
     /// [`batch`](Self::batch) surfaces the rejection as an
     /// `Err` from `commit` instead.
     ///
-    /// # Arguments
-    ///
-    /// * `key` - The key to insert.
-    /// * `value` - The value to associate with the key.
-    ///
     /// # Panics
     ///
     /// Panics in read-only mode or if the engine rejects the write.
@@ -623,12 +481,6 @@ impl MapxRaw {
     }
 
     /// Removes a key from the map.
-    ///
-    /// Does not return the old value for performance reasons.
-    ///
-    /// # Arguments
-    ///
-    /// * `key` - The key to remove.
     ///
     /// # Panics
     ///
@@ -699,24 +551,21 @@ impl MapxRaw {
     /// # Examples
     ///
     /// ```
-    /// use vsdb_core::basic::mapx_raw::MapxRaw;
-    /// use vsdb_core::{VsdbOptions, vsdb_configure};
+    /// use vsdb_core::MapxRaw;
+    /// # let dir = std::env::temp_dir().join(format!("vsdb-doc-{}", rand::random::<u128>()));
+    /// # std::fs::create_dir(&dir)?;
+    /// # vsdb_core::vsdb_configure(vsdb_core::VsdbOptions::new(&dir))?;
     ///
-    /// let dir = std::env::temp_dir()
-    ///     .join(format!("vsdb_core_mapx_raw_batch_{}", rand::random::<u128>()));
-    /// vsdb_configure(VsdbOptions::new(&dir)).unwrap();
-    /// let mut map = MapxRaw::new();
+    /// let mut jobs = MapxRaw::new();
+    /// let mut batch = jobs.batch();
+    /// batch.insert(b"build", b"ready");
+    /// batch.insert(b"test", b"queued");
+    /// batch.commit()?;
     ///
-    /// {
-    ///     let mut batch = map.batch();
-    ///     batch.insert(&[1], &[10]);
-    ///     batch.insert(&[2], &[20]);
-    ///     batch.commit().unwrap();
-    /// }
-    ///
-    /// assert_eq!(map.get(&[1]), Some(vec![10]));
-    /// assert_eq!(map.get(&[2]), Some(vec![20]));
-    /// # std::fs::remove_dir_all(dir).unwrap();
+    /// assert_eq!(jobs.get(b"build").unwrap(), b"ready");
+    /// assert_eq!(jobs.get(b"test").unwrap(), b"queued");
+    /// # std::fs::remove_dir_all(dir)?;
+    /// # Ok::<(), vsdb_core::VsdbError>(())
     /// ```
     #[inline(always)]
     pub fn batch(&mut self) -> MapxRawBatch<'_> {
@@ -725,39 +574,30 @@ impl MapxRaw {
         }
     }
 
-    /// Start a batch operation pre-staged with the removal of **every**
-    /// existing entry of this map (one engine-level range tombstone).
-    ///
-    /// Operations added afterwards apply on top of the wipe, and the
-    /// whole set — wipe included — commits in one atomic engine write
-    /// batch: observers see either the pre-batch state or the fully
-    /// applied result, never anything in between (even across a crash).
-    ///
-    /// The wipe belongs to the buffered operations: like them, it is
-    /// applied by [`MapxRawBatch::commit`]. Persistence failures may be
-    /// ambiguous after recovery; dropping an uncommitted batch discards it.
+    /// Starts a batch with a range deletion covering the entire map.
+    /// Later inserts replace the deleted rows. [`MapxRawBatch::commit`]
+    /// publishes the wipe and replacements atomically. Dropping the batch
+    /// discards both. A persistence error can leave the outcome ambiguous.
     ///
     /// # Examples
     ///
     /// ```
-    /// use vsdb_core::basic::mapx_raw::MapxRaw;
-    /// use vsdb_core::{VsdbOptions, vsdb_configure};
+    /// use vsdb_core::MapxRaw;
+    /// # let dir = std::env::temp_dir().join(format!("vsdb-doc-{}", rand::random::<u128>()));
+    /// # std::fs::create_dir(&dir)?;
+    /// # vsdb_core::vsdb_configure(vsdb_core::VsdbOptions::new(&dir))?;
     ///
-    /// let dir = std::env::temp_dir()
-    ///     .join(format!("vsdb_core_mapx_raw_batch_wiped_{}", rand::random::<u128>()));
-    /// vsdb_configure(VsdbOptions::new(&dir)).unwrap();
-    /// let mut map = MapxRaw::new();
-    /// map.insert([1], [10]);
+    /// let mut jobs = MapxRaw::new();
+    /// jobs.insert(b"old", b"done");
     ///
-    /// {
-    ///     let mut batch = map.batch_wiped();
-    ///     batch.insert(&[2], &[20]);
-    ///     batch.commit().unwrap();
-    /// }
+    /// let mut batch = jobs.batch_wiped();
+    /// batch.insert(b"new", b"ready");
+    /// batch.commit()?;
     ///
-    /// assert_eq!(map.get(&[1]), None);
-    /// assert_eq!(map.get(&[2]), Some(vec![20]));
-    /// # std::fs::remove_dir_all(dir).unwrap();
+    /// assert_eq!(jobs.get(b"old"), None);
+    /// assert_eq!(jobs.get(b"new").unwrap(), b"ready");
+    /// # std::fs::remove_dir_all(dir)?;
+    /// # Ok::<(), vsdb_core::VsdbError>(())
     /// ```
     #[inline(always)]
     pub fn batch_wiped(&mut self) -> MapxRawBatch<'_> {
@@ -779,8 +619,7 @@ impl MapxRaw {
         self.inner.clear();
     }
 
-    /// Returns the complete public identity of this `MapxRaw`:
-    /// The token contains the map prefix and owning namespace. It uses
+    /// Returns the map prefix and owning namespace. The token uses
     /// `ns: None` for a map in the default namespace.
     pub fn instance_id(&self) -> InstanceId {
         self.inner.instance_id()
@@ -792,15 +631,7 @@ impl MapxRaw {
         self.inner.try_instance_id()
     }
 
-    /// Checks if this `MapxRaw` instance is the same as another.
-    ///
-    /// # Arguments
-    ///
-    /// * `other_hdr` - The other `MapxRaw` to compare against.
-    ///
-    /// # Returns
-    ///
-    /// `true` if both instances refer to the same underlying data, `false` otherwise.
+    /// Returns whether both handles identify the same stored map.
     #[inline(always)]
     pub fn is_the_same_instance(&self, other_hdr: &Self) -> bool {
         self.inner.is_the_same_instance(&other_hdr.inner)
@@ -861,10 +692,6 @@ impl MapxRaw {
 
 impl Default for MapxRaw {
     /// Creates a new, empty `MapxRaw`.
-    ///
-    /// # Returns
-    ///
-    /// A new `MapxRaw` instance.
     fn default() -> Self {
         Self::new()
     }

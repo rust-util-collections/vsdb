@@ -1,10 +1,5 @@
-//!
-//! [`VerMapWithProof`] — a versioned KV map with Merkle root computation.
-//!
-//! Combines [`VerMap`] (versioning, branching, merging) with a
-//! [`TrieCalc`] back-end (e.g. [`super::MptCalc`]
-//! or [`super::SmtCalc`]) to provide cryptographic commitments
-//! over versioned state.
+//! [`VerMapWithProof`] computes Merkle roots and proofs for a [`VerMap`]
+//! using [`super::MptCalc`] or [`super::SmtCalc`].
 //!
 //! The in-memory trie can be rebuilt from a retained map root. An explicit
 //! [`VerMapWithProof::save_cache`] saves a checkpoint for a commit. Opening

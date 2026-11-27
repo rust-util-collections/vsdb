@@ -16,15 +16,12 @@ its owning namespace.
 use vsdb::{Mapx, VsdbOptions, vsdb_configure};
 
 fn main() -> vsdb::Result<()> {
-    vsdb_configure(VsdbOptions::new("/srv/my-app/vsdb"))?;
+    vsdb_configure(VsdbOptions::new("data"))?;
 
-    let mut map = Mapx::<String, String>::new();
-    map.insert(&"answer".into(), &"42".into());
-    let id = map.save_meta()?;
-
-    // Store `id` in application configuration or another bootstrap record.
-    map.try_sync_wal()?;
-    println!("{id}");
+    let mut stock = Mapx::<String, u64>::new();
+    stock.insert(&"apples".into(), &3);
+    stock.try_sync_wal()?;
+    println!("{}", stock.save_meta()?);
     Ok(())
 }
 ```
@@ -38,30 +35,23 @@ Registered absolute paths must resolve to the snapshot data in the reader's
 filesystem. Pass the token printed by the writer as the first argument.
 
 ```rust,no_run
-use vsdb::{
-    InstanceId, Mapx, OpenMode, VsdbOptions, vsdb_configure, vsdb_open_mode,
-};
+use vsdb::{InstanceId, Mapx, VsdbOptions, vsdb_configure};
 
 fn main() -> vsdb::Result<()> {
-    vsdb_configure(VsdbOptions::read_only("/srv/my-app/vsdb"))?;
-    assert_eq!(vsdb_open_mode(), OpenMode::ReadOnly);
-
+    vsdb_configure(VsdbOptions::read_only("data"))?;
     let token = std::env::args().nth(1).expect("pass the saved InstanceId");
     let id: InstanceId = token.parse()?;
-    let map = Mapx::<String, String>::from_meta(id)?;
 
-    assert!(map.namespace().is_read_only());
-    for (key, value) in map.iter() {
-        println!("{key}: {value}");
+    let stock = Mapx::<String, u64>::from_meta(id)?;
+    for (item, quantity) in stock.iter() {
+        println!("{item}: {quantity}");
     }
     Ok(())
 }
 ```
 
-A raw-map application uses `vsdb_core::{MapxRaw, VsdbOptions, vsdb_configure}`
-with the same writer and reader configuration. Save a raw map with
-`map.save_meta()?` and restore its token with `MapxRaw::from_meta(id)?`.
-Both `from_meta` and serde handle deserialization open the owning namespace.
+For raw maps, use `MapxRaw::from_meta(id)?`. Both `from_meta` and serde
+handle deserialization open the owning namespace.
 [Raw map examples](../core/docs/api.md#mapxraw)
 
 ## Operation behavior

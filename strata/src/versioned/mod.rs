@@ -1,44 +1,12 @@
+//! Branches, commits and snapshots over a copy-on-write B+ tree.
 //!
-//! Git-model versioned storage built on the persistent B+ tree.
+//! A branch has a working tree and a head commit. Writing changes the working
+//! tree. [`VerMap::commit`](map::VerMap::commit) records its root in history.
+//! Branches can share a root and diverge on later writes.
+//! [`VerMap`](map::VerMap) shows how to fork a branch and merge it back.
 //!
-//! # Concepts
-//!
-//! | Git         | vsdb                                |
-//! |-------------|-------------------------------------|
-//! | tree object | `NodeId` (root of a B+ tree)      |
-//! | commit      | [`Commit`]                          |
-//! | ref/branch  | [`BranchId`] → mutable pointer      |
-//! | working dir | uncommitted writes on a branch      |
-//! | `git gc`    | `VerMap::gc`                |
-//!
-//! A commit identifies a complete map state through its B+ tree root.
-//! Branches are lightweight pointers. Structural sharing keeps storage
-//! costs proportional to the number of *changes*, not the dataset size.
-//!
-//! # Workflow
-//!
-//! ```text
-//! new()  ──►  insert / remove  ──►  commit()
-//!                  ▲                    │
-//!                  │                    ▼
-//!              discard()         create_branch()
-//!                  ▲                    │
-//!                  │                    ▼
-//!            rollback_to()    insert / remove / commit
-//!                                       │
-//!                                       ▼
-//!                                   merge()  ──►  delete_branch()
-//!                                                    (release roots)
-//! ```
-//!
-//! # Merkle proofs
-//!
-//! `VerMapWithProof` wraps a `VerMap<K, V>`
-//! with an `MptCalc` (or
-//! `SmtCalc`) to provide a 32-byte Merkle root
-//! commitment over the versioned state.  See the `trie`
-//! module for details.
-//!
+//! [`crate::VerMapWithProof`] adds a 32-byte Merkle root and proofs for
+//! working or committed state using [`crate::MptCalc`] or [`crate::SmtCalc`].
 
 #![forbid(unsafe_code)]
 

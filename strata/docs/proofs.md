@@ -21,7 +21,7 @@ let root = trie.root_hash();
 
 let present = trie.prove(b"alice").unwrap();
 assert!(SmtCalc::verify_proof(&root, b"alice", &present).unwrap());
-assert_eq!(present.value(), Some(&b"100"[..]));
+assert_eq!(present.value(), Some(b"100".as_slice()));
 
 let absent = trie.prove(b"bob").unwrap();
 assert!(SmtCalc::verify_proof(&root, b"bob", &absent).unwrap());
@@ -45,7 +45,8 @@ use vsdb::{MptCalc, MptProof};
 let mut trie = MptCalc::new();
 trie.insert(b"account", b"10").unwrap();
 let expected_root = trie.root_hash();
-let bytes = trie.prove(b"account").unwrap().to_bytes().unwrap();
+let proof = trie.prove(b"account").unwrap();
+let bytes = proof.to_bytes().unwrap();
 let received = MptProof::from_bytes(&bytes).unwrap();
 assert!(MptCalc::verify_proof(&expected_root, b"account", &received).unwrap());
 ```
@@ -75,16 +76,20 @@ ordered key encoding for both proof generation and verification.
 ```rust
 use vsdb::{SmtCalc, VerMapWithProof};
 
-type State = VerMapWithProof<u64, String, SmtCalc>;
-let mut state = State::new();
-let main = state.map().main_branch();
-state.map_mut().insert(main, &7, &"pending".into()).unwrap();
-let working = state.prove_at(main, &7).unwrap();
+type Balances = VerMapWithProof<u32, u64, SmtCalc>;
 
-let commit = state.map_mut().commit(main).unwrap();
-let saved = state.prove_at_commit(commit, &7).unwrap();
-assert_eq!(working.root_hash, saved.root_hash);
-assert!(State::verify_key_proof(&saved.root_hash, &7, &saved.proof).unwrap());
+fn main() -> vsdb::Result<()> {
+    let mut balances = Balances::new();
+    let main = balances.map().main_branch();
+    balances.map_mut().insert(main, &7, &100)?;
+    let working = balances.prove_at(main, &7)?;
+
+    let commit = balances.map_mut().commit(main)?;
+    let saved = balances.prove_at_commit(commit, &7)?;
+    assert_eq!(saved.root_hash, working.root_hash);
+    assert!(Balances::verify_key_proof(&working.root_hash, &7, &saved.proof)?);
+    Ok(())
+}
 ```
 
 `new_in` places the wrapped map in a namespace. `clone_in` deep-copies its

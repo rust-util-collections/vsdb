@@ -1,13 +1,6 @@
-//!
-//! # Common Components
-//!
-//! This module provides common components and utilities used throughout the `vsdb` crate.
-//! It re-exports items from `vsdb_core::common` (including the [`error`]
-//! module — the unified error vocabulary of the whole ecosystem) and
-//! includes the `ende` module for encoding and decoding traits.
-//!
+//! Key and value codecs, typed readers and shared [`vsdb_core::common`] types.
 
-/// A module for encoding and decoding traits.
+/// Key and value encoding traits.
 pub mod ende;
 mod frame;
 pub(crate) mod guard;

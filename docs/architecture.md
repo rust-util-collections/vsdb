@@ -61,8 +61,7 @@ individually. [Read views, fence scope and write errors](storage.md)
 ## VerMap working edits and history
 
 A branch records both a working tree root and the ID of its latest history
-commit. The following path shows a dependent edit that changes the root.
-Writers through aliases of the same store must serialize their operations.
+commit. Writers through aliases of the same store must serialize their operations.
 
 ```mermaid
 flowchart TD

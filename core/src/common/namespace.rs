@@ -1194,7 +1194,7 @@ impl Namespace {
             .unwrap_or_else(Self::default_ns)
     }
 
-    /// This namespace's id — a getter; an input only at the admin tier.
+    /// The ID used to open or administer this namespace.
     pub fn id(&self) -> NsId {
         self.0.id
     }
@@ -1251,12 +1251,8 @@ impl Namespace {
         self.0.engine.try_sync_all_wals()
     }
 
-    /// One engine-property reading per shard, in shard order — the
-    /// observability tier for capacity planning and cache telemetry.
-    ///
-    /// Property names are the storage engine's (mmdb `DB::get_property`)
-    /// names; unknown names yield `None` per shard. The ones that
-    /// matter for cache telemetry:
+    /// Returns one MMDB property reading per shard in shard order.
+    /// Unknown property names yield `None` for each shard.
     ///
     /// - `"stats.block_cache_hits"` / `"stats.block_cache_misses"` —
     ///   per-shard counters (counted at each shard's read site, so
@@ -1268,11 +1264,17 @@ impl Namespace {
     ///   (all shards of one engine share one pool, so the dominant term
     ///   is the same engine-wide total in every shard's reading).
     ///
-    /// ```ignore
+    /// ```
+    /// use vsdb_core::Namespace;
+    /// # let dir = std::env::temp_dir().join(format!("vsdb-doc-{}", rand::random::<u128>()));
+    /// # std::fs::create_dir(&dir)?;
+    /// # vsdb_core::vsdb_configure(vsdb_core::VsdbOptions::new(&dir))?;
+    ///
     /// let ns = Namespace::default_ns();
     /// let hits = ns.shard_properties("stats.block_cache_hits");
-    /// let misses = ns.shard_properties("stats.block_cache_misses");
-    /// // hits.len() == misses.len() == the engine's shard count
+    /// assert_eq!(hits.len(), ns.memory_usage().shards.len());
+    /// # std::fs::remove_dir_all(dir)?;
+    /// # Ok::<(), vsdb_core::VsdbError>(())
     /// ```
     pub fn shard_properties(&self, name: &str) -> Vec<Option<String>> {
         self.0.engine.shard_properties(name)
@@ -1294,34 +1296,17 @@ impl Namespace {
         &self.0.engine
     }
 
-    /// Consuming form of [`Namespace::close_by_id`]: closes this namespace,
-    /// releasing engine-owned resources (see `Namespace::close_by_id` for the
-    /// full contract — flush-first teardown, registry untouched,
-    /// re-openable afterwards).
-    ///
-    /// `self` must be the last owning handle. Drop collection handles,
-    /// readers and other `Namespace` clones first. Detached snapshot
-    /// iterators can outlive the close and retain their sources.
-    /// The consumed `self` itself is accounted for — unlike
-    /// `Namespace::close_by_id(id)`, no separate `drop(ns)` is needed first.
+    /// Closes a non-default namespace by consuming its last owning handle.
+    /// Drop its collection handles, readers and other `Namespace` clones first.
+    /// Detached iterators can outlive the close and retain their data sources.
+    /// The registry entry remains available to reopen. See [`Namespace::close_by_id`].
     ///
     /// # Errors
     ///
-    /// - `Err((Some(handle), e))` — the close was **refused** (other
-    ///   live handles, or the default namespace): nothing happened, and
-    ///   the consumed handle is returned for continued use.
-    /// - `Err((None, e))` — the close **ran** but the engine teardown
-    ///   reported an error while flushing/syncing: the namespace is no
-    ///   longer open, so there is no handle to give back. In contrast, a
-    ///   precondition error from `close_by_id` performs no engine teardown.
-    ///
-    /// ```ignore
-    /// match ns.close() {
-    ///     Ok(()) => {}
-    ///     Err((Some(ns), e)) => { /* refused — `ns` is still usable */ }
-    ///     Err((None, e)) => { /* closed, but teardown reported `e` */ }
-    /// }
-    /// ```
+    /// - `Err((Some(handle), error))` returns the still-open handle when close
+    ///   is refused, including for the default namespace or other live owners.
+    /// - `Err((None, error))` reports a teardown error after the engine has
+    ///   left the open table.
     pub fn close(self) -> std::result::Result<(), (Option<Namespace>, VsdbError)> {
         ns_close_impl(self.0.id, Some(self))
     }

@@ -1,10 +1,4 @@
-//!
-//! # Common components
-//!
-//! This module provides common components and utilities used throughout the VSDB framework.
-//! It includes type definitions, constants, macros, and functions for managing the
-//! underlying database environment.
-//!
+//! Process configuration, namespaces, storage types and errors.
 
 pub(crate) mod engine;
 /// Structured error types for the VSDB public API.
@@ -33,30 +27,30 @@ use std::{
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
-/// A type alias for a vector of bytes, commonly used for raw data.
+/// Owned storage bytes.
 pub type RawBytes = Vec<u8>;
-/// A type alias for a raw key, represented as a vector of bytes.
+/// An encoded key.
 pub type RawKey = RawBytes;
-/// A type alias for a raw value, represented as a vector of bytes.
+/// An encoded value.
 pub type RawValue = RawBytes;
 /// One map's edits in a co-located write: `Some` stores a value and `None`
 /// removes the key.
 pub type ColocatedEdits<'a> = &'a [(&'a [u8], Option<&'a [u8]>)];
 
-/// A type alias for a prefix, represented as a `u64`.
+/// A numeric map prefix.
 pub type Pre = u64;
 /// The size of a prefix in bytes.
 pub const PREFIX_SIZE: usize = size_of::<Pre>();
-/// A type alias for a prefix represented as a byte array.
+/// The stored bytes of a map prefix.
 pub type PreBytes = [u8; PREFIX_SIZE];
 
 pub(crate) const MMDB_SHARD_LEVELS: usize = 7;
 
-/// A constant representing 1 kilobyte in bytes.
+/// Bytes in one KiB.
 pub const KB: u64 = 1 << 10;
-/// A constant representing 1 megabyte in bytes.
+/// Bytes in one MiB.
 pub const MB: u64 = 1 << 20;
-/// A constant representing 1 gigabyte in bytes.
+/// Bytes in one GiB.
 pub const GB: u64 = 1 << 30;
 
 /// The first allocatable prefix: everything below this value is reserved
@@ -242,16 +236,11 @@ pub fn atomic_write_file_with(
     result
 }
 
-/// A macro to parse a byte slice into a specified integer type.
-///
-/// # Arguments
-///
-/// * `$bytes` - The byte slice to parse.
-/// * `$ty` - The integer type to parse the bytes into.
+/// Decodes a little-endian integer.
 ///
 /// # Panics
 ///
-/// This macro will panic if the byte slice cannot be converted into the specified integer type.
+/// Panics if the slice length differs from the integer width.
 macro_rules! parse_int {
     ($bytes: expr, $ty: ty) => {{
         let array: [u8; std::mem::size_of::<$ty>()] = $bytes[..].try_into().unwrap();
@@ -260,15 +249,11 @@ macro_rules! parse_int {
 }
 pub(crate) use parse_int;
 
-/// A macro to parse a byte slice into a `Pre` type.
-///
-/// # Arguments
-///
-/// * `$bytes` - The byte slice to parse.
+/// Decodes a little-endian map prefix.
 ///
 /// # Panics
 ///
-/// This macro will panic if the byte slice cannot be converted into a `Pre` type.
+/// Panics if the slice length differs from [`PREFIX_SIZE`].
 macro_rules! parse_prefix {
     ($bytes: expr) => {
         $crate::common::parse_int!($bytes, $crate::common::Pre)
@@ -281,7 +266,6 @@ pub(crate) use parse_prefix;
 
 #[inline(always)]
 fn gen_data_dir() -> PathBuf {
-    // Compatible with Windows OS?
     let d = env::var_os(BASE_DIR_VAR)
         .map(PathBuf::from)
         .or_else(|| env::var_os("HOME").map(|h| PathBuf::from(h).join(".vsdb")))
@@ -307,22 +291,10 @@ fn absolute_base_dir(path: &Path) -> io::Result<PathBuf> {
     })
 }
 
-/// Returns the custom directory path for VSDB — the **app-level
-/// bootstrap anchor**, deliberately one per universe (NOT per
-/// namespace).
-///
-/// This directory (`{base_dir}/__CUSTOM__/`) is available for users to
-/// store application-specific files alongside the VSDB data directory —
-/// typically the serialized app state holding the top-level collection
-/// handles. Those handles may live in *any* namespace (their metas
-/// embed the owning `ns_id`, and deserialization auto-opens it), so
-/// this blob is the app's index over the whole universe. That is why
-/// the dir does not split per namespace: namespaces are reached
-/// *through* handles, and the handles are bootstrapped from here — a
-/// per-namespace location would be circular, and [`Namespace::destroy`]
-/// would silently take the app's root pointer with it. Users need to
-/// remember exactly one thing: the base dir. Backing up or relocating
-/// the base dir carries these files with the data they point into.
+/// Returns `{base_dir}/__CUSTOM__/` for application files shared across
+/// the universe. Serialized handles stored here reopen their owning
+/// namespaces. Include this directory and any explicit namespace roots
+/// when backing up the database.
 ///
 /// In read-only mode this returns the path without creating the directory.
 ///
@@ -356,17 +328,11 @@ pub fn vsdb_get_system_dir() -> &'static Path {
     derived_dir(&VSDB_SYSTEM_DIR, "__SYSTEM__")
 }
 
-/// Returns the base directory path for VSDB.
-///
 /// Returns the directory selected by [`vsdb_configure`]. Without explicit
 /// configuration, it uses `VSDB_BASE_DIR`, then `$HOME/.vsdb`, then a
 /// per-process temporary directory.
 /// Calling it freezes configuration so a subsequent [`vsdb_configure`] call
 /// returns [`VsdbError::BaseDirFrozen`].
-///
-/// # Returns
-///
-/// A `PathBuf` to the base directory.
 #[inline(always)]
 pub fn vsdb_get_base_dir() -> PathBuf {
     let mut base_dir = VSDB_BASE_DIR.lock();
@@ -539,13 +505,8 @@ pub fn vsdb_configure(options: VsdbOptions) -> Result<()> {
     Ok(())
 }
 
-/// Flushes all data to disk — the default namespace and every open
-/// non-default namespace.
-///
-/// This function triggers a flush operation on the underlying database,
-/// ensuring that all pending writes are persisted to disk. This operation
-/// may take a long time to complete, depending on the amount of data to be flushed.
-/// It is a no-op when [`vsdb_open_mode`] is [`OpenMode::ReadOnly`].
+/// Flushes the default namespace and every open non-default namespace to disk.
+/// In [`OpenMode::ReadOnly`] this is a no-op.
 ///
 /// # Panics
 ///

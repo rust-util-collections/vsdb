@@ -109,39 +109,25 @@ pub(crate) struct BranchRoots {
 /// # Quick start
 ///
 /// ```
-/// use vsdb::versioned::map::VerMap;
-/// use vsdb::{VsdbOptions, vsdb_configure, vsdb_get_base_dir};
-/// use std::fs;
+/// use vsdb::VerMap;
+/// # let dir = std::env::temp_dir().join(format!("vsdb-doc-{}", rand::random::<u128>()));
+/// # std::fs::create_dir(&dir)?;
+/// # vsdb::vsdb_configure(vsdb::VsdbOptions::new(&dir))?;
 ///
-/// let dir = std::env::temp_dir().join(format!("vsdb-{}", rand::random::<u128>()));
-/// vsdb_configure(VsdbOptions::new(&dir)).unwrap();
+/// let mut prices = VerMap::<u32, u64>::new();
+/// let main = prices.main_branch();
+/// prices.insert(main, &1, &10)?;
+/// prices.commit(main)?;
 ///
-/// let mut m: VerMap<u32, String> = VerMap::new();
-/// let main = m.main_branch();
+/// let sale = prices.create_branch("sale", main)?;
+/// prices.insert(sale, &1, &8)?;
+/// prices.commit(sale)?;
+/// assert_eq!(prices.get(main, &1)?, Some(10));
 ///
-/// // 1. Write on the default "main" branch.
-/// m.insert(main, &1, &"hello".into()).unwrap();
-/// m.insert(main, &2, &"world".into()).unwrap();
-/// let c1 = m.commit(main).unwrap();
-///
-/// // 2. Fork a feature branch from main.
-/// let feat = m.create_branch("feature", main).unwrap();
-/// m.insert(feat, &1, &"hi".into()).unwrap();
-/// let c2 = m.commit(feat).unwrap();
-///
-/// // 3. Branches are isolated — main is unchanged.
-/// assert_eq!(m.get(main, &1).unwrap(), Some("hello".into()));
-/// assert_eq!(m.get(feat, &1).unwrap(), Some("hi".into()));
-///
-/// // 4. Merge feature → main (source wins on conflict).
-/// m.merge(feat, main).unwrap();
-/// assert_eq!(m.get(main, &1).unwrap(), Some("hi".into()));
-///
-/// // 5. Clean up: delete the feature branch.
-/// //    Dead commits and B+ tree nodes are reclaimed automatically.
-/// m.delete_branch(feat).unwrap();
-///
-/// fs::remove_dir_all(&dir).unwrap();
+/// prices.merge(sale, main)?;
+/// assert_eq!(prices.get(main, &1)?, Some(8));
+/// # std::fs::remove_dir_all(dir)?;
+/// # Ok::<(), vsdb::VsdbError>(())
 /// ```
 #[derive(Debug)]
 pub struct VerMap<K, V> {
@@ -1289,13 +1275,8 @@ where
     // History
     // =================================================================
 
-    /// Returns one lowest common ancestor (fork point) of two commits.
-    /// If there are several merge bases, selects the one with the greatest ID;
-    /// merge itself considers all lowest common ancestors.
-    ///
-    /// Useful for branching scenarios: given two divergent tips, this finds
-    /// the commit where they diverged.  Returns `None` only if the two
-    /// commits share no common history.
+    /// Returns the lowest common ancestor with the greatest ID, or `None`
+    /// if the commits share no history. A merge considers all lowest common ancestors.
     ///
     /// # Panics
     ///
@@ -1304,24 +1285,32 @@ where
         self.find_common_ancestor(a, b)
     }
 
-    /// Counts the number of first-parent commits between `from` and
-    /// `ancestor` (exclusive).
-    ///
-    /// Walks the first-parent chain starting at `from` until `ancestor`
-    /// is reached.  Returns `None` if `ancestor` is not a first-parent
-    /// ancestor of `from`.
+    /// Counts first-parent hops from `from` to `ancestor`. Returns `Some(0)`
+    /// for the same retained commit and `None` if either commit is missing
+    /// or the chain never reaches `ancestor`.
     ///
     /// # Panics
     ///
     /// Panics if a stored commit record is corrupt or unreadable.
     ///
-    /// # Example — comparing fork lengths
+    /// # Examples
     ///
-    /// ```ignore
-    /// let lca = map.fork_point(tip_a, tip_b).unwrap();
-    /// let ahead_a = map.commit_distance(tip_a, lca).unwrap();
-    /// let ahead_b = map.commit_distance(tip_b, lca).unwrap();
-    /// // The longer fork wins.
+    /// ```
+    /// use vsdb::VerMap;
+    /// # let dir = std::env::temp_dir().join(format!("vsdb-doc-{}", rand::random::<u128>()));
+    /// # std::fs::create_dir(&dir)?;
+    /// # vsdb::vsdb_configure(vsdb::VsdbOptions::new(&dir))?;
+    ///
+    /// let mut prices = VerMap::<u32, u64>::new();
+    /// let main = prices.main_branch();
+    /// let base = prices.commit(main)?;
+    /// prices.insert(main, &1, &10)?;
+    /// let tip = prices.commit(main)?;
+    ///
+    /// assert_eq!(prices.commit_distance(tip, base), Some(1));
+    /// assert_eq!(prices.commit_distance(base, tip), None);
+    /// # std::fs::remove_dir_all(dir)?;
+    /// # Ok::<(), vsdb::VsdbError>(())
     /// ```
     pub fn commit_distance(&self, from: CommitId, ancestor: CommitId) -> Option<u64> {
         // Both endpoints must be real commits; otherwise

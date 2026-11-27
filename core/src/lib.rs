@@ -18,10 +18,11 @@
 //! ```no_run
 //! use vsdb_core::{InstanceId, MapxRaw, VsdbOptions, vsdb_configure};
 //!
-//! fn open_reader(id: InstanceId) -> vsdb_core::Result<MapxRaw> {
-//!     vsdb_configure(VsdbOptions::read_only("/srv/my-app/vsdb"))?;
-//!     MapxRaw::from_meta(id)
-//! }
+//! let token = std::env::args().nth(1).expect("pass the saved map ID");
+//! let id: InstanceId = token.parse()?;
+//! vsdb_configure(VsdbOptions::read_only("data"))?;
+//! let settings = MapxRaw::from_meta(id)?;
+//! # Ok::<(), vsdb_core::VsdbError>(())
 //! ```
 //!
 //! The open mode applies to every namespace in the process. Read-only queries
@@ -41,8 +42,9 @@
 //!     let mut batch = map.batch();
 //!     batch.insert(b"job", b"ready");
 //!     match batch.commit_no_slowdown() {
+//!         Ok(()) => Ok(true),
 //!         Err(VsdbError::Storage { kind: StorageErrorKind::Busy, .. }) => Ok(false),
-//!         outcome => outcome.map(|()| true),
+//!         Err(error) => Err(error),
 //!     }
 //! }
 //! ```
@@ -50,27 +52,12 @@
 #![deny(warnings)]
 #![recursion_limit = "512"]
 
-/// Manages the storage layer, raw data types, and shared utilities.
-///
-/// This module provides the storage engine along with fundamental
-/// types such as `RawKey`, `RawValue`, and environment management functions.
 pub mod common;
 
-/// Contains raw, untyped data structures.
-///
-/// This module provides `MapxRaw`, a basic, high-performance key-value map that
-/// operates on raw bytes. It serves as the foundation for the typed, user-facing
-/// collections in the `vsdb` crate.
 pub mod basic;
 
-/// A raw, high-performance, disk-backed key-value map.
 pub use basic::mapx_raw::{MapxRaw, MapxRawReadView, MapxRawReader};
 
-/// Commonly used items, re-exported for convenience.
-///
-/// This includes data size constants (KB, MB, GB),
-/// raw data types (`RawBytes`, `RawKey`, `RawValue`), and functions for managing
-/// the database environment (e.g., `vsdb_flush`, `vsdb_configure`).
 pub use common::{
     ColocatedEdits, DEFAULT_NS_ID, GB, InstanceId, KB, MB, Namespace, NamespaceOpts,
     NsId, NsInfo, OpenMode, RawBytes, RawKey, RawRangeBounds, RawValue, VsdbOptions,
@@ -78,7 +65,6 @@ pub use common::{
     vsdb_get_system_dir, vsdb_open_mode,
 };
 
-/// The unified, structured error type of the VSDB ecosystem.
 pub use common::error::{Result, StorageErrorKind, VsdbError};
 pub use common::namespace::{
     BlockCachePoolUsage, NamespaceMemoryUsage, ShardMemoryUsage,

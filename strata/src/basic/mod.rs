@@ -1,15 +1,4 @@
-//!
-//! # Basic Data Structures
-//!
-//! Fundamental, unversioned data structures that wrap the raw storage
-//! implementations from `vsdb_core`, offering typed APIs for keys and values.
-//!
-//! - `Mapx` — `HashMap`-like, unordered.
-//! - `MapxOrd` — `BTreeMap`-like, ordered by key.
-//! - `MapxOrdRawKey` — ordered map with raw-byte keys (internal building block).
-//! - `Orphan` — a single persistent value.
-//! - `PersistentBTree` — a persistent B+ tree with copy-on-write structural sharing.
-//!
+//! Typed maps, standalone values and copy-on-write B+ trees.
 
 pub mod mapx;
 pub mod mapx_ord;

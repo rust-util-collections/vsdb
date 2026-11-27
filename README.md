@@ -11,44 +11,40 @@ Merkle proofs, slot pagination, parent overlays and vector search. Use
 
 ## Quick start
 
-From your Rust application, add the crate from a local checkout. The supported
-architectures are `x86_64` and `aarch64`. Building MMDB's bundled Zstd backend
-requires a C toolchain.
-
 ```sh
-cargo add vsdb --path /path/to/vsdb/strata
+cargo add vsdb@19
 ```
 
-Set `VSDB_BASE_DIR` before running the application to choose where it stores
-data. With no explicit configuration, VSDB uses that variable, then
-`$HOME/.vsdb`, then a per-process temporary path. [Configuration](core/docs/api.md#configure-the-universe)
+VSDB supports `x86_64` and `aarch64`. Building MMDB's bundled Zstd backend
+requires a C toolchain.
+
+Set `VSDB_BASE_DIR` to choose the database directory. [Default paths and configuration](core/docs/api.md#configure-the-universe)
 
 ```rust
-use vsdb::{MapxOrd, Result};
+use vsdb::{Mapx, Result};
+
+type Stock = Mapx<String, u64>;
 
 fn main() -> Result<()> {
-    let mut counts = MapxOrd::<String, u64>::new();
-    let mut batch = counts.batch();
-    batch.insert(&String::from("apples"), &3);
-    batch.commit_sync()?;
+    let mut stock = Stock::new();
+    stock.insert(&"apples".into(), &3);
+    stock.try_sync_wal()?;
 
-    let id = counts.save_meta()?;
-    drop(counts);
-    let restored = MapxOrd::<String, u64>::from_meta(id)?;
-    assert_eq!(restored.get("apples"), Some(3));
+    let id = stock.save_meta()?;
+    let reopened = Stock::from_meta(id)?;
+    assert_eq!(reopened.get("apples"), Some(3));
     Ok(())
 }
 ```
 
-`commit_sync()` makes the batch durable on the map's shard. `save_meta()`
-saves the handle in the database and returns an `InstanceId`. Keep that ID in
-application storage to reopen the map in a later process using the same database.
+`try_sync_wal()` makes the write durable. Keep the `InstanceId` returned by
+`save_meta()` to reopen the map in a later process using the same database.
 
 ## Documentation
 
-- Browse the application guides, database operations and storage design in the [documentation index](docs/README.md).
-- Reopen a native v18 database in v19, or convert an older format with the [upgrade guide](docs/upgrade.md).
-- Develop and test the workspace with the [contributor guide](AGENTS.md). Release changes are recorded in the [changelog](CHANGELOG.md).
+- [Application and operations guides](docs/README.md)
+- [Upgrade an existing database](docs/upgrade.md)
+- [Contributor guide](AGENTS.md) · [Changelog](CHANGELOG.md)
 
 ## License
 

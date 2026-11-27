@@ -9,19 +9,18 @@ The scalar type `S` defaults to `f32`.
 ## Quick start
 
 ```rust
-use vsdb::{Cosine, HnswConfig, VecDex};
+use vsdb::{HnswConfig, VecDexCosine};
 
-let config = HnswConfig { dim: 2, ..Default::default() };
-let mut index = VecDex::<String, Cosine>::new(config).unwrap();
-index.insert(&"east".into(), &[1.0, 0.0]).unwrap();
-index.insert(&"north".into(), &[0.0, 1.0]).unwrap();
+fn main() -> vsdb::Result<()> {
+    let config = HnswConfig { dim: 2, ..Default::default() };
+    let mut directions = VecDexCosine::<String>::new(config)?;
+    directions.insert(&"east".into(), &[1.0, 0.0])?;
+    directions.insert(&"north".into(), &[0.0, 1.0])?;
 
-let results = index.search(&[1.0, 0.0], 1).unwrap();
-assert_eq!(results[0].0, "east");
-let id = index.save_meta().unwrap();
-drop(index);
-let restored = VecDex::<String, Cosine>::from_meta(id).unwrap();
-assert_eq!(restored.len(), 2);
+    let nearest = directions.search(&[0.9, 0.1], 1)?;
+    assert_eq!(nearest[0].0, "east");
+    Ok(())
+}
 ```
 
 ## API reference
@@ -90,16 +89,16 @@ The crate exports `VecDexL2<K>` and `VecDexCosine<K>` for `f32` vectors.
 
 ### Runtime metric selection
 
-Use `VecDexDyn<K, S>` with `MetricKind` when the application selects a
-metric at runtime.
-
 ```rust
 use vsdb::{HnswConfig, MetricKind, VecDexDyn};
 
-let cfg = HnswConfig { dim: 4, ..Default::default() };
-let mut idx: VecDexDyn<String> = VecDexDyn::new_with_metric(MetricKind::Cosine, cfg).unwrap();
-idx.insert(&"doc-a".into(), &[0.1, 0.2, 0.3, 0.4]).unwrap();
-assert_eq!(idx.metric(), MetricKind::Cosine);
+fn create_index(metric: MetricKind) -> vsdb::Result<VecDexDyn<u64>> {
+    let config = HnswConfig { dim: 2, ..Default::default() };
+    VecDexDyn::new_with_metric(metric, config)
+}
+
+let index = create_index(MetricKind::Cosine).unwrap();
+assert_eq!(index.metric(), MetricKind::Cosine);
 ```
 
 `VecDexDyn<K, S>` is an alias for `VecDex<K, MetricKind, S>`. Search dispatches
@@ -116,17 +115,20 @@ read fails, search returns an error. A predicate with side effects may
 already have run on some candidates.
 
 ```rust
-use vsdb::{Cosine, HnswConfig, VecDex};
+use vsdb::{HnswConfig, VecDexCosine};
 
-let mut idx: VecDex<String, Cosine> =
-    VecDex::new(HnswConfig { dim: 4, ..Default::default() }).unwrap();
-idx.insert(&"session-42/doc-a".into(), &[0.1, 0.2, 0.3, 0.4]).unwrap();
-let query = [0.1, 0.2, 0.3, 0.5];
+fn main() -> vsdb::Result<()> {
+    let config = HnswConfig { dim: 2, ..Default::default() };
+    let mut index = VecDexCosine::<String>::new(config)?;
+    index.insert(&"draft/map".into(), &[1.0, 0.0])?;
+    index.insert(&"public/map".into(), &[0.9, 0.1])?;
 
-let results = idx.search_with_filter(&query, 10, |key| {
-    key.starts_with("session-42/")
-}).unwrap();
-assert_eq!(results.len(), 1);
+    let hits = index.search_with_filter(&[1.0, 0.0], 1, |key| {
+        key.starts_with("public/")
+    })?;
+    assert_eq!(hits[0].0, "public/map");
+    Ok(())
+}
 ```
 
 The search keeps expanding until it holds `max(ef, k)` passing candidates
@@ -143,7 +145,7 @@ For predicates over the stored representation, `search_with_raw_filter` and
 `search_ef_with_raw_filter` receive the bytes produced by `K::encode_key`.
 Only the winning keys need decoding. With postcard, a string's length comes
 before its contents and integers use varints. For a string prefix such as
-`"session-42"`, the typed predicate above compares the decoded text directly.
+`"public/"`, the typed predicate above compares the decoded text directly.
 
 ## Storage architecture
 

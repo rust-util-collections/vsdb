@@ -1,44 +1,19 @@
-//!
-//! A `HashMap`-like structure that stores data on disk.
-//!
-//! `Mapx` provides a key-value store where both keys and values are encoded
-//! using `serde`-like methods before being persisted. This allows for storing
-//! complex data types while maintaining a familiar `HashMap` interface.
+//! Persistent maps for exact lookups. Iteration follows encoded key order.
 //!
 //! # Examples
 //!
 //! ```
-//! use vsdb::{Mapx, VsdbOptions, vsdb_configure, vsdb_get_base_dir};
-//! use std::fs;
+//! use vsdb::Mapx;
+//! # let dir = std::env::temp_dir().join(format!("vsdb-doc-{}", rand::random::<u128>()));
+//! # std::fs::create_dir(&dir)?;
+//! # vsdb::vsdb_configure(vsdb::VsdbOptions::new(&dir))?;
 //!
-//! // It's recommended to use a temporary directory for testing
-//! let dir = std::env::temp_dir().join(format!("vsdb-{}", rand::random::<u128>()));
-//! vsdb_configure(VsdbOptions::new(&dir)).unwrap();
-//!
-//! let mut m: Mapx<i32, String> = Mapx::new();
-//!
-//! // Insert key-value pairs
-//! m.insert(&1, &"hello".to_string());
-//! m.insert(&2, &"world".to_string());
-//!
-//! // Retrieve a value
-//! assert_eq!(m.get(&1), Some("hello".to_string()));
-//!
-//! // Iterate over the map
-//! for (k, v) in m.iter() {
-//!     println!("key: {}, val: {}", k, v);
-//! }
-//!
-//! // Remove a key-value pair
-//! m.remove(&2);
-//!
-//! // Clear the entire map
-//! m.clear();
-//!
-//! // Clean up the directory
-//! fs::remove_dir_all(vsdb_get_base_dir()).unwrap();
+//! let mut stock = Mapx::<String, u64>::new();
+//! stock.insert(&"apples".into(), &3);
+//! assert_eq!(stock.get("apples"), Some(3));
+//! # std::fs::remove_dir_all(dir)?;
+//! # Ok::<(), vsdb::VsdbError>(())
 //! ```
-//!
 
 #[cfg(test)]
 mod test;
@@ -60,10 +35,7 @@ use crate::{
 use std::marker::PhantomData;
 
 define_map_wrapper! {
-    #[doc = "A disk-based, `HashMap`-like data structure with typed keys and values."]
-    #[doc = ""]
-    #[doc = "`Mapx` stores key-value pairs on disk, encoding both keys and values"]
-    #[doc = "for type safety and persistence."]
+    #[doc = "A persistent map for exact key lookups."]
     #[doc = ""]
     #[doc = "# Key determinism"]
     #[doc = ""]
@@ -133,8 +105,6 @@ where
     }
 
     /// Inserts a key-value pair into the map.
-    ///
-    /// Does not return the old value for performance reasons.
     #[inline(always)]
     pub fn insert(&mut self, key: &K, value: &V) {
         key.with_encoded_key(|k| self.inner.insert(k, value))
@@ -189,8 +159,6 @@ where
 
     /// Removes a key from the map (borrowed key forms as in
     /// [`get`](Self::get)).
-    ///
-    /// Does not return the old value for performance reasons.
     #[inline(always)]
     pub fn remove<Q>(&mut self, key: &Q)
     where
@@ -200,10 +168,7 @@ where
         K::with_lookup(key, |bytes| self.inner.remove(bytes));
     }
 
-    /// Start a batch operation.
-    ///
-    /// This method allows you to perform multiple insert/remove operations
-    /// and commit them atomically.
+    /// Stages inserts and removals for one atomic commit.
     ///
     /// A failed [`commit`](MapxBatch::commit) consumes
     /// the buffered operations. Preflight rejections leave them unapplied;
@@ -213,21 +178,21 @@ where
     /// # Examples
     ///
     /// ```
-    /// use vsdb::{Mapx, VsdbOptions, vsdb_configure};
+    /// use vsdb::Mapx;
+    /// # let dir = std::env::temp_dir().join(format!("vsdb-doc-{}", rand::random::<u128>()));
+    /// # std::fs::create_dir(&dir)?;
+    /// # vsdb::vsdb_configure(vsdb::VsdbOptions::new(&dir))?;
     ///
-    /// let dir = std::env::temp_dir()
-    ///     .join(format!("vsdb_mapx_batch_{}", rand::random::<u128>()));
-    /// vsdb_configure(VsdbOptions::new(&dir)).unwrap();
-    /// let mut map = Mapx::new();
+    /// let mut stock = Mapx::new();
+    /// let mut batch = stock.batch();
+    /// batch.insert(&1, &3);
+    /// batch.insert(&2, &5);
+    /// batch.commit()?;
     ///
-    /// let mut batch = map.batch();
-    /// batch.insert(&1, &"one".to_string());
-    /// batch.insert(&2, &"two".to_string());
-    /// batch.commit().unwrap();
-    ///
-    /// assert_eq!(map.get(&1), Some("one".to_string()));
-    /// assert_eq!(map.get(&2), Some("two".to_string()));
-    /// # std::fs::remove_dir_all(dir).unwrap();
+    /// assert_eq!(stock.get(&1), Some(3));
+    /// assert_eq!(stock.get(&2), Some(5));
+    /// # std::fs::remove_dir_all(dir)?;
+    /// # Ok::<(), vsdb::VsdbError>(())
     /// ```
     #[inline(always)]
     pub fn batch(&mut self) -> MapxBatch<'_, K, V> {

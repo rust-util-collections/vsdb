@@ -1,45 +1,21 @@
-//!
-//! A `BTreeMap`-like structure that stores data on disk.
-//!
-//! `MapxOrd` provides an ordered map where keys and values are encoded before
-//! being persisted. Keys are encoded using `KeyEnDeOrdered` to ensure that
-//! a lexicographical ordering of the encoded bytes maintains the original order of the keys.
+//! Persistent maps with ordered keys. Ranges and iteration follow the key type's order.
 //!
 //! # Examples
 //!
 //! ```
-//! use vsdb::basic::mapx_ord::MapxOrd;
-//! use vsdb::{VsdbOptions, vsdb_configure, vsdb_get_base_dir};
-//! use std::fs;
+//! use vsdb::MapxOrd;
+//! # let dir = std::env::temp_dir().join(format!("vsdb-doc-{}", rand::random::<u128>()));
+//! # std::fs::create_dir(&dir)?;
+//! # vsdb::vsdb_configure(vsdb::VsdbOptions::new(&dir))?;
 //!
-//! // It's recommended to use a temporary directory for testing
-//! let dir = std::env::temp_dir().join(format!("vsdb-{}", rand::random::<u128>()));
-//! vsdb_configure(VsdbOptions::new(&dir)).unwrap();
+//! let mut prices = MapxOrd::new();
+//! prices.insert(&2, &20);
+//! prices.insert(&1, &10);
 //!
-//! let mut m: MapxOrd<u32, String> = MapxOrd::new();
-//!
-//! // Insert key-value pairs
-//! m.insert(&1, &"hello".to_string());
-//! m.insert(&2, &"world".to_string());
-//!
-//! // Retrieve a value
-//! assert_eq!(m.get(&1), Some("hello".to_string()));
-//!
-//! // Iterate over the map
-//! for (k, v) in m.iter() {
-//!     println!("key: {}, val: {}", k, v);
-//! }
-//!
-//! // Remove a key-value pair
-//! m.remove(&2);
-//!
-//! // Clear the entire map
-//! m.clear();
-//!
-//! // Clean up the directory
-//! fs::remove_dir_all(vsdb_get_base_dir()).unwrap();
+//! assert_eq!(prices.range(1..=2).collect::<Vec<_>>(), [(1, 10), (2, 20)]);
+//! # std::fs::remove_dir_all(dir)?;
+//! # Ok::<(), vsdb::VsdbError>(())
 //! ```
-//!
 
 #[cfg(test)]
 mod test;
@@ -61,9 +37,7 @@ use crate::{
 };
 use std::marker::PhantomData;
 define_map_wrapper! {
-    #[doc = "A disk-based, `BTreeMap`-like data structure with typed, ordered keys and values."]
-    #[doc = ""]
-    #[doc = "`MapxOrd` stores key-value pairs on disk, ensuring that the keys are ordered."]
+    #[doc = "A persistent map ordered by its keys."]
     pub struct MapxOrd<K, V> {
         inner: MapxOrdRawKey<V>,
         _p: PhantomData<K>,
@@ -157,8 +131,6 @@ where
     }
 
     /// Inserts a key-value pair into the map.
-    ///
-    /// Does not return the old value for performance reasons.
     #[inline(always)]
     pub fn insert(&mut self, key: &K, value: &V) {
         key.with_ordered_bytes(|k| self.inner.insert(k, value))
@@ -251,8 +223,6 @@ where
 
     /// Removes a key from the map (borrowed key forms as in
     /// [`get`](Self::get)).
-    ///
-    /// Does not return the old value for performance reasons.
     #[inline(always)]
     pub fn remove<Q>(&mut self, key: &Q)
     where
@@ -262,10 +232,7 @@ where
         K::with_ordered_lookup(key, |bytes| self.inner.remove(bytes));
     }
 
-    /// Start a batch operation.
-    ///
-    /// This method allows you to perform multiple insert/remove operations
-    /// and commit them atomically.
+    /// Stages inserts and removals for one atomic commit.
     ///
     /// A failed [`commit`](MapxOrdBatch::commit) consumes
     /// the buffered operations. Preflight rejections leave them unapplied;
@@ -275,22 +242,20 @@ where
     /// # Examples
     ///
     /// ```
-    /// use vsdb::basic::mapx_ord::MapxOrd;
-    /// use vsdb::{VsdbOptions, vsdb_configure};
+    /// use vsdb::MapxOrd;
+    /// # let dir = std::env::temp_dir().join(format!("vsdb-doc-{}", rand::random::<u128>()));
+    /// # std::fs::create_dir(&dir)?;
+    /// # vsdb::vsdb_configure(vsdb::VsdbOptions::new(&dir))?;
     ///
-    /// let dir = std::env::temp_dir()
-    ///     .join(format!("vsdb_mapx_ord_batch_{}", rand::random::<u128>()));
-    /// vsdb_configure(VsdbOptions::new(&dir)).unwrap();
-    /// let mut map: MapxOrd<u32, String> = MapxOrd::new();
+    /// let mut stock = MapxOrd::new();
+    /// let mut batch = stock.batch();
+    /// batch.insert(&1, &3);
+    /// batch.insert(&2, &5);
+    /// batch.commit()?;
     ///
-    /// let mut batch = map.batch();
-    /// batch.insert(&1, &"one".to_string());
-    /// batch.insert(&2, &"two".to_string());
-    /// batch.commit().unwrap();
-    ///
-    /// assert_eq!(map.get(&1), Some("one".to_string()));
-    /// assert_eq!(map.get(&2), Some("two".to_string()));
-    /// # std::fs::remove_dir_all(dir).unwrap();
+    /// assert_eq!(stock.range(1..=2).collect::<Vec<_>>(), [(1, 3), (2, 5)]);
+    /// # std::fs::remove_dir_all(dir)?;
+    /// # Ok::<(), vsdb::VsdbError>(())
     /// ```
     #[inline(always)]
     pub fn batch(&mut self) -> MapxOrdBatch<'_, K, V> {

@@ -13,10 +13,8 @@ encoded-key order, which can differ from the Rust key type's sort order.
 use vsdb::Mapx;
 
 let mut counts = Mapx::<String, u64>::new();
-counts.insert(&"pears".to_owned(), &3);
+counts.insert(&"pears".into(), &3);
 assert_eq!(counts.get("pears"), Some(3));
-counts.remove("pears");
-assert!(!counts.contains_key("pears"));
 ```
 
 Borrowed lookups use the stored key type's encoding. `String` accepts `str`.
@@ -27,10 +25,10 @@ of the same length with the same contents.
 ```rust
 use vsdb::Mapx;
 
-let mut map = Mapx::<[u8; 2], u64>::new();
-map.insert(&[1, 0], &7);
-assert_eq!(map.get(&[1, 0][..]), Some(7));
-assert_eq!(map.get(&[0][..]), None);
+let mut scores = Mapx::<[u8; 2], u64>::new();
+scores.insert(b"GB", &7);
+assert_eq!(scores.get(b"GB".as_slice()), Some(7));
+assert_eq!(scores.get(b"G".as_slice()), None);
 ```
 
 Implement `KeyLookup<Q>` or `OrderedKeyLookup<Q>` on the owning key type to
@@ -63,11 +61,13 @@ value indexed by ordered application-defined bytes.
 ```rust
 use vsdb::{MapxOrdRawKey, Orphan};
 
-let mut latest = Orphan::new(40_u64);
-latest.update(|v| *v += 2).unwrap();
-let mut by_path = MapxOrdRawKey::<u64>::new();
-by_path.insert(b"/index", &latest.get_value());
-assert_eq!(by_path.get(b"/index"), Some(42));
+let mut visits = Orphan::new(0_u64);
+visits.update(|count| *count += 1).unwrap();
+assert_eq!(visits.get_value(), 1);
+
+let mut status = MapxOrdRawKey::new();
+status.insert(b"/index", &200_u16);
+assert_eq!(status.get(b"/index"), Some(200));
 ```
 
 ## Basic collection read views
@@ -78,14 +78,16 @@ committed state for lookups and iteration. Ordered views also support
 ranges. An `OrphanReader` reads the current value on each `get()`.
 
 ```rust
-use vsdb::MapxOrd;
-let mut m = MapxOrd::<String, u64>::new();
-m.insert(&"balance".to_owned(), &5);
-let reader = m.reader();
+use vsdb::Mapx;
+
+let mut balances = Mapx::<u32, u64>::new();
+balances.insert(&1, &5);
+let reader = balances.reader();
 let before = reader.read_view();
-m.update("balance", |v| *v += 2).unwrap();
-assert_eq!(before.get("balance"), Some(5));
-assert_eq!(reader.read_view().get("balance"), Some(7));
+
+balances.update(&1, |balance| *balance += 2).unwrap();
+assert_eq!(before.get(&1), Some(5));
+assert_eq!(reader.read_view().get(&1), Some(7));
 ```
 
 ## Edit a value
@@ -97,21 +99,16 @@ diagnose interior changes made through a shared dereference.
 
 ## Durability fences
 
-Use `commit_sync()` to synchronize a typed map batch or `try_sync_wal()`
-to fence earlier writes on its shard. For empty batches, admission refusal
-and recovery after an I/O error, see
-[batch visibility and durability](../../docs/storage.md#batch-visibility-and-durability).
-
-`Mapx`, `MapxOrd`, `MapxOrdRawKey`, and `Orphan` expose `try_sync_wal()`.
+Use `commit_sync()` for a durable batch. On `Mapx`, `MapxOrd`,
+`MapxOrdRawKey` and `Orphan`, `try_sync_wal()` fences earlier writes on
+the collection's shard. [Empty batches, admission and recovery](../../docs/storage.md#batch-visibility-and-durability)
 
 ```rust
-use vsdb::MapxOrd;
-fn main() -> vsdb::Result<()> {
-    let mut state = MapxOrd::<u64, String>::new();
-    state.insert(&1, &"accepted".to_owned());
-    state.try_sync_wal()?;
-    Ok(())
-}
+use vsdb::Orphan;
+
+let mut last_event = Orphan::new(0_u64);
+last_event.set_value(&42);
+last_event.try_sync_wal().unwrap();
 ```
 
 Use `collection.namespace().try_sync_wal()?` to fence all shards of a

@@ -19,10 +19,11 @@
 //! ```no_run
 //! use vsdb::{InstanceId, Mapx, VsdbOptions, vsdb_configure};
 //!
-//! fn open_counts(id: InstanceId) -> vsdb::Result<Mapx<String, u64>> {
-//!     vsdb_configure(VsdbOptions::read_only("/srv/my-app/vsdb"))?;
-//!     Mapx::from_meta(id)
-//! }
+//! let token = std::env::args().nth(1).expect("pass the saved map ID");
+//! let id: InstanceId = token.parse()?;
+//! vsdb_configure(VsdbOptions::read_only("data"))?;
+//! let stock = Mapx::<String, u64>::from_meta(id)?;
+//! # Ok::<(), vsdb::VsdbError>(())
 //! ```
 //!
 //! ## Counting entries
@@ -37,30 +38,18 @@
 
 pub mod common;
 
-/// User-facing, typed data structures (e.g., `Mapx`, `MapxOrd`).
 pub mod basic;
-/// Data structures for representing directed acyclic graphs (DAGs).
 pub mod dagmap;
-/// Git-model versioned storage: branches, commits, merge, and history.
 pub mod versioned;
 
-/// Fixed-width slot index with tiered counts and paged queries.
 pub mod slotdex;
-
-/// In-memory Merkle trie implementations (MPT and SMT) and versioned proofs.
 pub mod trie;
-
-/// Approximate nearest-neighbor vector index (HNSW algorithm).
 pub mod vecdex;
 
-// --- Re-exports ---
-
-// Basic data structures
 pub use basic::{
     mapx::Mapx, mapx_ord::MapxOrd, mapx_ord_rawkey::MapxOrdRawKey, orphan::Orphan,
 };
 
-// Key codecs, borrowed lookups and typed read views.
 pub use common::ende::{
     KeyEnDe, KeyEnDeOrdered, KeyLookup, OrderedBoundEndpoint, OrderedKeyLookup,
     OrderedRangeBounds, ValueEnDe,
@@ -70,36 +59,26 @@ pub use common::{
     RawRangeBounds,
 };
 
-// The unified, structured error type of the whole VSDB ecosystem
-// (defined in `vsdb_core`, shared by both crates).
 pub use common::error::{Result, VsdbError};
 
-// Versioned storage core types (previously not re-exported)
 pub use versioned::{
     BranchId, Commit, CommitId, DiffEntry, Snapshot,
     map::{VerMap, WorkingEdit},
 };
 
-// DAG-related structures
 pub use dagmap::{DagMap, DagMapId, raw::DagMapRaw, rawkey::DagMapRawKey};
 
-// Trie
 pub use trie::{
     MptCalc, MptProof, ProofWithRoot, SmtCalc, SmtProof, TrieCalc, VerMapWithProof,
 };
 
-// Slotdex — `SlotDex` is the generic struct (`SlotDex<S, K>`); the
-// width-specific aliases pin the slot type.
 pub use slotdex::{SlotDex, SlotDex32, SlotDex64, SlotDex128, SlotType};
 
-// VecDex — approximate nearest-neighbor vector index.
 pub use vecdex::{
     HnswConfig, VecDex, VecDexCosine, VecDexCosineF64, VecDexDyn, VecDexL2, VecDexL2F64,
     distance::{Cosine, DistanceMetric, InnerProduct, L2, MetricKind, Scalar},
 };
 
-// Re-export vsdb_core crate for advanced users, plus the user-facing
-// environment management functions.
 pub use vsdb_core::{
     self, BlockCachePoolUsage, DEFAULT_NS_ID, InstanceId, MAX_GROUPED_READ_KEYS,
     MapxRaw, MapxRawReadView, MapxRawReader, Namespace, NamespaceMemoryUsage,
@@ -108,5 +87,4 @@ pub use vsdb_core::{
     vsdb_open_mode,
 };
 
-// Persistent B+ tree (moved from vsdb_core).
 pub use basic::persistent_btree::PersistentBTree;

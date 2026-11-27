@@ -11,18 +11,13 @@ use vsdb::{SlotDex64, slotdex::Order};
 
 let mut events = SlotDex64::<u64>::new(8, false).unwrap();
 events.insert_batch([(100, 2), (100, 1), (200, 3), (300, 4)]).unwrap();
-events.insert(100, 1).unwrap();
-assert_eq!(events.total(), 4);
 assert_eq!(events.count(100..300), 3);
 
-// Pages are zero-based. Descending slot order still yields 1 before 2 in slot 100.
 assert_eq!(events.page(.., 2, 0, Order::Desc), [4, 3]);
 assert_eq!(events.page(.., 2, 1, Order::Desc), [1, 2]);
-events.remove(100, &1).unwrap();
-assert_eq!(events.total(), 3);
 ```
 
-Use `page(slots, page_size, page_index, order)` to seek to an offset,
+Use `page(slots, page_size, page_index, order)` to seek to a zero-based page,
 `count(slots)` to count pairs, and `iter(slots, order)` to stream keys.
 Each call captures one committed state. A single iterator keeps that state
 across the scan. Separate page requests can observe intervening writes.

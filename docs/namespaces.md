@@ -21,21 +21,20 @@ unwind. Reads, writes and restores use the namespace recorded in the handle.
 ```rust,no_run
 use vsdb::{Mapx, Namespace, NamespaceOpts};
 
+type Archive = Mapx<u64, String>;
+
 let archive = Namespace::create_with(NamespaceOpts {
     path: Some("/mnt/fast/archive".into()),
     shards: 8,
     mem_budget_mb: Some(1024),
 }).unwrap();
-let map = Mapx::<u64, String>::new_in(&archive);
-let id = map.save_meta().unwrap();
-drop(map);
-let restored = Mapx::<u64, String>::from_meta(id).unwrap();
+let id = Archive::new_in(&archive).save_meta().unwrap();
+let restored = Archive::from_meta(id).unwrap();
 assert_eq!(restored.namespace().id(), archive.id());
 ```
 
-`InstanceId` carries the map prefix and namespace. A bare `u64` identifies
-a map in the default namespace. For example, `42@7` selects map 42 in
-namespace 7, while `42@0` canonicalizes to the default-namespace token.
+`InstanceId` carries the map prefix and namespace. `42@7` selects map 42
+in namespace 7. Both `42` and `42@0` select map 42 in the default namespace.
 A raw `VSMAPX02` handle stores the prefix and namespace in 24 bytes.
 Typed handles use `VSTYPE04` and check the fully qualified Rust type name,
 including generic arguments. A type alias preserves the original type's
@@ -56,16 +55,11 @@ raw copies publish in bounded chunks and attempt to clear the destination
 on failure.
 
 ```rust
-use vsdb_core::{MapxRaw, Namespace};
+use vsdb_core::MapxRaw;
 
-let ns = Namespace::create().unwrap();
-let map = MapxRaw::new_in(&ns);
-let colocated = map.new_colocated();
-assert!(map.is_colocated_with(&colocated));
-
-let target = Namespace::default_ns();
-let copy = map.clone_in(&target).unwrap();
-assert_eq!(copy.namespace().id(), target.id());
+let orders = MapxRaw::new();
+let payments = orders.new_colocated();
+assert!(orders.is_colocated_with(&payments));
 ```
 
 ## Directory layout and recovery
@@ -152,16 +146,12 @@ the process lifetime once initialized. [Close implementation](../core/src/common
 ```rust
 use vsdb_core::Namespace;
 
-let ns = Namespace::create().unwrap();
-let id = ns.id();
-match ns.close() {
-    Ok(()) => {
-        let reopened = Namespace::open(id).unwrap();
-        assert_eq!(reopened.id(), id);
-    }
-    Err((Some(ns), error)) => eprintln!("namespace {} still open: {error}", ns.id()),
-    Err((None, error)) => eprintln!("namespace closed with a teardown error: {error}"),
-}
+let archive = Namespace::create().unwrap();
+let id = archive.id();
+archive.close().unwrap();
+
+let reopened = Namespace::open(id).unwrap();
+assert_eq!(reopened.id(), id);
 ```
 
 Close checks for other owners under the registry and open-table locks. It

@@ -811,28 +811,19 @@ fn tree_runtime(
 /// # Examples
 ///
 /// ```
-/// use vsdb::basic::persistent_btree::{PersistentBTree, EMPTY_ROOT};
-/// use vsdb::{VsdbOptions, vsdb_configure};
-/// use std::fs;
-///
-/// let dir = std::env::temp_dir().join(format!("vsdb-{}", rand::random::<u128>()));
-/// vsdb_configure(VsdbOptions::new(&dir)).unwrap();
+/// use vsdb::basic::persistent_btree::{EMPTY_ROOT, PersistentBTree};
+/// # let dir = std::env::temp_dir().join(format!("vsdb-doc-{}", rand::random::<u128>()));
+/// # std::fs::create_dir(&dir)?;
+/// # vsdb::vsdb_configure(vsdb::VsdbOptions::new(&dir))?;
 ///
 /// let mut tree = PersistentBTree::new();
+/// let original = tree.insert(EMPTY_ROOT, b"alice", b"100");
+/// let updated = tree.insert(original, b"alice", b"150");
 ///
-/// // Version 1: insert two entries.
-/// let v1 = tree.insert(EMPTY_ROOT, b"alice", b"100");
-/// let v1 = tree.insert(v1, b"bob", b"200");
-///
-/// // Version 2: fork from v1, modify one entry.
-/// let v2 = tree.insert(v1, b"alice", b"150");
-///
-/// // Both versions coexist — structural sharing keeps cost low.
-/// assert_eq!(tree.get(v1, b"alice").unwrap(), b"100");
-/// assert_eq!(tree.get(v2, b"alice").unwrap(), b"150");
-/// assert_eq!(tree.get(v2, b"bob").unwrap(), b"200");
-///
-/// fs::remove_dir_all(&dir).unwrap();
+/// assert_eq!(tree.get(original, b"alice").unwrap(), b"100");
+/// assert_eq!(tree.get(updated, b"alice").unwrap(), b"150");
+/// # std::fs::remove_dir_all(dir)?;
+/// # Ok::<(), vsdb::VsdbError>(())
 /// ```
 #[derive(Debug)]
 pub struct PersistentBTree {

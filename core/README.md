@@ -5,16 +5,13 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/rust-util-collections/vsdb/blob/master/LICENSE)
 [![Rust](https://github.com/rust-util-collections/vsdb/actions/workflows/rust.yml/badge.svg)](https://github.com/rust-util-collections/vsdb/actions/workflows/rust.yml)
 
-`vsdb_core` provides the byte-oriented storage API for VSDB. Use it directly
-for `MapxRaw`, process configuration and namespace administration. For typed
-collections, indexes, tries and version history, see the [vsdb crate](https://github.com/rust-util-collections/vsdb/blob/master/strata/README.md).
+Use `vsdb_core` for byte maps, process configuration and namespace
+administration. [Typed collections and indexes in vsdb](https://github.com/rust-util-collections/vsdb/blob/master/strata/README.md)
 
 ## Installation
 
-To use this checkout from a Rust application, add the crate by path.
-
 ```bash
-cargo add vsdb_core --path /path/to/vsdb/core
+cargo add vsdb_core@19
 ```
 
 VSDB stores data in MMDB, a Rust LSM-tree engine. Building its bundled Zstd

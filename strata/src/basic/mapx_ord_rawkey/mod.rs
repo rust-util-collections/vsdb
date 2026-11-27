@@ -1,46 +1,19 @@
-//!
-//! A `BTreeMap`-like structure that stores data on disk with raw keys.
-//!
-//! `MapxOrdRawKey` is an ordered map where keys are stored as raw bytes,
-//! while values are encoded using `serde`-like methods. This is useful when
-//! you need to work with keys that are already in a byte format and want to
-//! avoid the overhead of encoding and decoding them.
+//! Persistent maps with lexicographically ordered byte keys and typed values.
 //!
 //! # Examples
 //!
 //! ```
-//! use vsdb::basic::mapx_ord_rawkey::MapxOrdRawKey;
-//! use vsdb::{VsdbOptions, vsdb_configure, vsdb_get_base_dir};
-//! use std::fs;
+//! use vsdb::MapxOrdRawKey;
+//! # let dir = std::env::temp_dir().join(format!("vsdb-doc-{}", rand::random::<u128>()));
+//! # std::fs::create_dir(&dir)?;
+//! # vsdb::vsdb_configure(vsdb::VsdbOptions::new(&dir))?;
 //!
-//! // It's recommended to use a temporary directory for testing
-//! let dir = std::env::temp_dir().join(format!("vsdb-{}", rand::random::<u128>()));
-//! vsdb_configure(VsdbOptions::new(&dir)).unwrap();
-//!
-//! let mut m: MapxOrdRawKey<String> = MapxOrdRawKey::new();
-//!
-//! // Insert key-value pairs
-//! m.insert(&[1], &"hello".to_string());
-//! m.insert(&[2], &"world".to_string());
-//!
-//! // Retrieve a value
-//! assert_eq!(m.get(&[1]), Some("hello".to_string()));
-//!
-//! // Iterate over the map
-//! for (k, v) in m.iter() {
-//!     println!("key: {:?}, val: {}", k, v);
-//! }
-//!
-//! // Remove a key-value pair
-//! m.remove(&[2]);
-//!
-//! // Clear the entire map
-//! m.clear();
-//!
-//! // Clean up the directory
-//! fs::remove_dir_all(vsdb_get_base_dir()).unwrap();
+//! let mut status = MapxOrdRawKey::new();
+//! status.insert(b"/index", &200_u16);
+//! assert_eq!(status.get(b"/index"), Some(200));
+//! # std::fs::remove_dir_all(dir)?;
+//! # Ok::<(), vsdb::VsdbError>(())
 //! ```
-//!
 
 #[cfg(test)]
 mod test;
@@ -52,9 +25,7 @@ use std::marker::PhantomData;
 use vsdb_core::basic::mapx_raw::{self, MapxRaw, MapxRawIter};
 
 define_map_wrapper! {
-    #[doc = "A disk-based, `BTreeMap`-like data structure with raw keys and typed values."]
-    #[doc = ""]
-    #[doc = "`MapxOrdRawKey` stores keys as raw bytes and values as encoded data."]
+    #[doc = "A persistent map with byte-ordered keys and typed values."]
     pub struct MapxOrdRawKey<V> {
         pub(crate) inner: MapxRaw,
         _p: PhantomData<V>,
@@ -129,8 +100,6 @@ where
     }
 
     /// Inserts a key-value pair into the map.
-    ///
-    /// Does not return the old value for performance reasons.
     #[inline(always)]
     pub fn insert(&mut self, key: impl AsRef<[u8]>, value: &V) {
         self.inner.insert(key.as_ref(), value.encode_value())
@@ -214,17 +183,12 @@ where
     }
 
     /// Removes a key from the map.
-    ///
-    /// Does not return the old value for performance reasons.
     #[inline(always)]
     pub fn remove(&mut self, key: impl AsRef<[u8]>) {
         self.inner.remove(key.as_ref())
     }
 
-    /// Start a batch operation.
-    ///
-    /// This method allows you to perform multiple insert/remove operations
-    /// and commit them atomically.
+    /// Stages inserts and removals for one atomic commit.
     ///
     /// A failed [`commit`](MapxOrdRawKeyBatch::commit) consumes
     /// the buffered operations. Preflight rejections leave them unapplied;
@@ -234,22 +198,21 @@ where
     /// # Examples
     ///
     /// ```
-    /// use vsdb::basic::mapx_ord_rawkey::MapxOrdRawKey;
-    /// use vsdb::{VsdbOptions, vsdb_configure};
+    /// use vsdb::MapxOrdRawKey;
+    /// # let dir = std::env::temp_dir().join(format!("vsdb-doc-{}", rand::random::<u128>()));
+    /// # std::fs::create_dir(&dir)?;
+    /// # vsdb::vsdb_configure(vsdb::VsdbOptions::new(&dir))?;
     ///
-    /// let dir = std::env::temp_dir()
-    ///     .join(format!("vsdb_mapx_ord_rawkey_batch_{}", rand::random::<u128>()));
-    /// vsdb_configure(VsdbOptions::new(&dir)).unwrap();
-    /// let mut map: MapxOrdRawKey<String> = MapxOrdRawKey::new();
+    /// let mut stock = MapxOrdRawKey::new();
+    /// let mut batch = stock.batch();
+    /// batch.insert(b"apples", &3);
+    /// batch.insert(b"pears", &5);
+    /// batch.commit()?;
     ///
-    /// let mut batch = map.batch();
-    /// batch.insert(&[1], &"one".to_string());
-    /// batch.insert(&[2], &"two".to_string());
-    /// batch.commit().unwrap();
-    ///
-    /// assert_eq!(map.get(&[1]), Some("one".to_string()));
-    /// assert_eq!(map.get(&[2]), Some("two".to_string()));
-    /// # std::fs::remove_dir_all(dir).unwrap();
+    /// assert_eq!(stock.get(b"apples"), Some(3));
+    /// assert_eq!(stock.get(b"pears"), Some(5));
+    /// # std::fs::remove_dir_all(dir)?;
+    /// # Ok::<(), vsdb::VsdbError>(())
     /// ```
     #[inline(always)]
     pub fn batch(&mut self) -> MapxOrdRawKeyBatch<'_, V> {

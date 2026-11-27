@@ -1,29 +1,18 @@
-//!
-//! A storage type for various kinds of single, non-collection values.
-//!
-//! `Orphan` is designed to store single values, such as integers, enums, or other
-//! simple data types, on disk. It provides a convenient way to manage individual
-//! pieces of data that are not part of a larger collection.
+//! A single persistent value.
 //!
 //! # Examples
 //!
 //! ```
-//! use vsdb::basic::orphan::Orphan;
-//! use vsdb::{VsdbOptions, vsdb_configure, vsdb_get_base_dir};
-//! use std::fs;
+//! use vsdb::Orphan;
+//! # let dir = std::env::temp_dir().join(format!("vsdb-doc-{}", rand::random::<u128>()));
+//! # std::fs::create_dir(&dir)?;
+//! # vsdb::vsdb_configure(vsdb::VsdbOptions::new(&dir))?;
 //!
-//! // It's recommended to use a temporary directory for testing
-//! let dir = std::env::temp_dir().join(format!("vsdb-{}", rand::random::<u128>()));
-//! vsdb_configure(VsdbOptions::new(&dir)).unwrap();
-//!
-//! let mut o = Orphan::new(10);
-//! assert_eq!(o.get_value(), 10);
-//!
-//! *o.get_mut() += 5;
-//! assert_eq!(o.get_value(), 15);
-//!
-//! // Clean up the directory
-//! fs::remove_dir_all(vsdb_get_base_dir()).unwrap();
+//! let mut visits = Orphan::new(0_u64);
+//! visits.update(|count| *count += 1)?;
+//! assert_eq!(visits.get_value(), 1);
+//! # std::fs::remove_dir_all(dir)?;
+//! # Ok::<(), vsdb::VsdbError>(())
 //! ```
 
 #[cfg(test)]
@@ -48,9 +37,7 @@ use vsdb_core::MapxRaw;
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
 
-/// A container for a single, non-collection value stored on disk.
-///
-/// `Orphan` is suitable for storing simple data types like integers, enums, etc.
+/// Stores one typed value in its own persistent map.
 #[derive(Debug)]
 pub struct Orphan<T> {
     inner: MapxOrdRawKey<T>,
@@ -149,7 +136,7 @@ where
         SingleMap::raw(&self.inner)
     }
 
-    /// Retrieves a clone of the inner value.
+    /// Reads and decodes the stored value.
     pub fn get_value(&self) -> T {
         self.inner.get([]).unwrap()
     }
@@ -173,25 +160,22 @@ where
         Ok(result)
     }
 
-    /// Retrieves a mutable handler for the value.
-    ///
-    /// This is the recommended way to modify the value.
-    /// An untouched guard preserves stored bytes, including for values whose
-    /// encodings vary between calls. Write-back follows the same rules as
-    /// [`MapxOrdRawKey::get_mut`].
+    /// Returns a write-back guard with the same rules as [`MapxOrdRawKey::get_mut`].
+    /// An untouched guard preserves the stored bytes.
     ///
     /// # Example
     ///
     /// ```
-    /// # use vsdb::basic::orphan::Orphan;
-    /// # use vsdb::{VsdbOptions, vsdb_configure, vsdb_get_base_dir};
-    /// # use std::fs;
-    /// # let dir = std::env::temp_dir().join(format!("vsdb-{}", rand::random::<u128>()));
-    /// # vsdb_configure(VsdbOptions::new(&dir)).unwrap();
-    /// let mut o = Orphan::new(10);
-    /// *o.get_mut() = 20;
-    /// assert_eq!(o.get_value(), 20);
-    /// # fs::remove_dir_all(vsdb_get_base_dir()).unwrap();
+    /// use vsdb::Orphan;
+    /// # let dir = std::env::temp_dir().join(format!("vsdb-doc-{}", rand::random::<u128>()));
+    /// # std::fs::create_dir(&dir)?;
+    /// # vsdb::vsdb_configure(vsdb::VsdbOptions::new(&dir))?;
+    ///
+    /// let mut visits = Orphan::new(10_u64);
+    /// *visits.get_mut() += 1;
+    /// assert_eq!(visits.get_value(), 11);
+    /// # std::fs::remove_dir_all(dir)?;
+    /// # Ok::<(), vsdb::VsdbError>(())
     /// ```
     pub fn get_mut(&mut self) -> ValueMut<'_, T> {
         ValueMut {

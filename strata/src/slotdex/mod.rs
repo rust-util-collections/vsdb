@@ -4,10 +4,9 @@
 //! tier counts let `page` skip to an offset. `Order` controls slot order and
 //! keys within each slot remain ascending.
 //!
-//! # Storage model (single-handle, crash-atomic)
+//! # Storage layout
 //!
-//! All persistent state lives in **one** [`vsdb_core::MapxRaw`] handle, partitioned
-//! by a leading tag byte:
+//! A leading tag byte separates three row types in one [`vsdb_core::MapxRaw`].
 //!
 //! ```text
 //! [0x00 | slot_be | key_be]      -> []        one row per entry
@@ -15,8 +14,8 @@
 //! [0x02]                         -> [total, generation] (two u64 LE)
 //! ```
 //!
-//! Level `0` holds per-slot entry counts; level `l >= 1` coarsens slots
-//! by `tier_capacity^l` (the tier acceleration stack). Each mutation,
+//! Level `0` holds per-slot entry counts. Level `l >= 1` groups slots
+//! in buckets of width `tier_capacity^l`. Each mutation,
 //! including an entire `insert_batch` call, commits related rows in one
 //! atomic engine batch.
 //! Recovery hydrates runtime caches; it does not rebuild persistent counts.
@@ -24,12 +23,8 @@
 //! earlier calls remain committed if a later call fails. Atomicity does not
 //! imply an fsync per call. Writers must be externally serialized.
 //!
-//! The serialized form of a `SlotDex` (its typed handle metadata) is the
-//! `VSTYPE04` frame containing its identity, layout version, `tier_capacity`
-//! and `swap_order`. It is **create-time constant**:
-//! growing or shrinking the tier stack only writes ordinary data rows,
-//! never new handles, so the metadata saved once at creation stays valid
-//! for the lifetime of the instance.
+//! The `VSTYPE04` handle stores the identity, layout version, `tier_capacity`
+//! and `swap_order`. A saved handle remains valid as tiers grow or shrink.
 
 mod query;
 mod slot_type;
@@ -73,18 +68,9 @@ const TAG_TOTAL: u8 = 0x02;
 /// began with a different field sequence).
 const LAYOUT_VERSION: u8 = 3;
 
-/// A skip-list-like data structure for fast, timestamp-based paged queries.
-///
-/// `SlotDex` organizes data into "slots" (e.g., timestamps or sequence numbers),
-/// which are then grouped into tier levels. This hierarchical structure allows
-/// for rapid seeking and counting, making it highly efficient for pagination
-/// and range queries over large datasets.
-///
-/// The slot type `S` must implement [`SlotType`]; built-in support covers
-/// fixed-width signed and unsigned integers.
-///
-/// Every mutation is applied through a single atomic engine write batch,
-/// so a crash can never leave the index internally inconsistent.
+/// Indexes unique `(slot, key)` pairs. Tier counts let range queries skip
+/// directly to a page. Fixed-width signed and unsigned integers implement
+/// [`SlotType`]. Each mutation publishes its entries and counts atomically.
 ///
 /// # Handle ownership
 ///
@@ -352,15 +338,9 @@ where
         self.store.namespace()
     }
 
-    /// Creates a new `SlotDex`.
-    ///
-    /// # Arguments
-    ///
-    /// * `tier_capacity` - The capacity of each tier, controlling the granularity
-    ///   of the index.  Must be at least 2: each tier coarsens slot buckets by
-    ///   this factor, so a capacity of 1 would never terminate tier growth.
-    /// * `swap_order` - If `true`, reverses the internal slot order. This can improve
-    ///   performance for applications that primarily query in reverse chronological order.
+    /// Creates an empty index. Each tier groups `tier_capacity` buckets from
+    /// the level below. Set `swap_order` to store slots in descending order
+    /// for predominantly newest-first queries.
     ///
     /// # Errors
     ///
@@ -579,16 +559,8 @@ where
     // Mutations
     // =====================================================================
 
-    /// Inserts a key into a specified slot.
-    ///
-    /// The entry row, the per-slot count, every tier bucket count, any
-    /// tier-growth rows, and the grand total are committed through one
-    /// atomic engine batch.
-    ///
-    /// # Arguments
-    ///
-    /// * `slot` - The slot to insert the key into (e.g., a timestamp).
-    /// * `k` - The key to insert.
+    /// Inserts `(slot, k)` if absent. The entry, tier growth, bucket counts
+    /// and total commit in one batch.
     ///
     /// # Errors
     ///
@@ -788,16 +760,8 @@ where
         Ok(())
     }
 
-    /// Removes a key from a specified slot.
-    ///
-    /// All row updates are committed through one atomic engine batch.
-    ///
-    /// # Arguments
-    ///
-    /// * `slot` - The slot to remove the key from.
-    /// * `k` - The key to remove.
-    ///
-    /// Removing an absent key is a no-op.
+    /// Removes `(slot, k)` and updates its counts in one batch. An absent
+    /// pair leaves the index unchanged.
     ///
     /// # Errors
     ///

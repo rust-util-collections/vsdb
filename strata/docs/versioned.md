@@ -10,20 +10,22 @@ in one `MapxRaw` prefix on one shard.
 ```rust
 use vsdb::VerMap;
 
-let mut messages = VerMap::<u32, String>::new();
-let main = messages.main_branch();
-messages.insert(main, &1, &"hello".into()).unwrap();
-let first = messages.commit(main).unwrap();
+fn main() -> vsdb::Result<()> {
+    let mut prices = VerMap::<u32, u64>::new();
+    let main = prices.main_branch();
+    prices.insert(main, &1, &10)?;
+    let original = prices.commit(main)?;
 
-let feature = messages.create_branch("feature", main).unwrap();
-messages.insert(feature, &1, &"updated".into()).unwrap();
-messages.commit(feature).unwrap();
-assert_eq!(messages.get(main, &1).unwrap().as_deref(), Some("hello"));
+    let sale = prices.create_branch("sale", main)?;
+    prices.insert(sale, &1, &8)?;
+    prices.commit(sale)?;
+    assert_eq!(prices.get(main, &1)?, Some(10));
 
-messages.merge(feature, main).unwrap();
-assert_eq!(messages.get(main, &1).unwrap().as_deref(), Some("updated"));
-assert_eq!(messages.at(first).unwrap().get(&1).as_deref(), Some("hello"));
-messages.delete_branch(feature).unwrap();
+    prices.merge(sale, main)?;
+    assert_eq!(prices.get(main, &1)?, Some(8));
+    assert_eq!(prices.at(original)?.get(&1), Some(10));
+    Ok(())
+}
 ```
 
 ## Branches, commits and snapshots
@@ -97,16 +99,17 @@ all values are known before the operation.
 ```rust
 use vsdb::VerMap;
 
-let mut counts = VerMap::<u32, u64>::new();
-let main = counts.main_branch();
-counts.edit_working(main, 1024, |edit| {
-    edit.insert(&1, &10)?;
-    let subtotal = edit.get(&1)?.unwrap();
-    edit.insert(&2, &(subtotal + 5))
-}).unwrap();
-assert_eq!(counts.get(main, &2).unwrap(), Some(15));
-let commit = counts.commit(main).unwrap();
-assert_eq!(counts.at(commit).unwrap().get(&2), Some(15));
+fn main() -> vsdb::Result<()> {
+    let mut balances = VerMap::<u32, u64>::new();
+    let main = balances.main_branch();
+    balances.edit_working(main, 1024, |edit| {
+        edit.insert(&1, &10)?;
+        let balance = edit.get(&1)?.unwrap();
+        edit.insert(&1, &(balance + 5))
+    })?;
+    assert_eq!(balances.get(main, &1)?, Some(15));
+    Ok(())
+}
 ```
 
 ## Three-way merge algorithm
@@ -136,21 +139,18 @@ unaffected target subtrees.
 
 ```mermaid
 gitGraph
-    commit id: "c1"
-    commit id: "c2"
+    commit id: "base"
     branch feature
-    commit id: "c3"
-    commit id: "c4"
+    commit id: "feature tip"
     checkout main
-    commit id: "c5"
-    merge feature id: "c6 (merge)"
-    commit id: "c7"
+    commit id: "main tip"
+    merge feature id: "merge"
 ```
 
 `fork_point(a, b)` returns the greatest commit ID among the lowest common
 ancestors, or `None` if there is none. `commit_distance(from, ancestor)`
-counts first-parent hops only. For the merge above, `commit_distance(c6,
-c5)` is one, while `c4` is reachable through the second parent.
+counts first-parent hops only. The merge is one hop from the main tip.
+The feature tip is its second parent.
 
 ## Storage layout
 

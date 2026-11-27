@@ -24,29 +24,30 @@ pub(super) mod sealed {
 /// involution, exchanging the two endpoints.
 ///
 /// Implemented for fixed-width signed and unsigned integer types.
-/// A variable-length representation cannot be used:
+/// A custom slot must also use a fixed-size byte array.
 ///
 /// ```compile_fail
-/// use serde::{Serialize, Deserialize};
-/// use vsdb::{SlotType, VsdbError};
-/// #[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+/// use vsdb::SlotType;
+/// # use vsdb::VsdbError;
+/// # use serde::{Serialize, Deserialize};
+/// # #[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 /// struct Coordinate(u32);
-/// impl std::ops::Not for Coordinate {
-///     type Output = Self;
-///     fn not(self) -> Self { Self(!self.0) }
-/// }
+/// # impl std::ops::Not for Coordinate {
+/// #     type Output = Self;
+/// #     fn not(self) -> Self { Self(!self.0) }
+/// # }
 /// impl SlotType for Coordinate {
-///     type Bytes = Vec<u8>; // Only fixed-size arrays implement SlotBytes.
-///     const MIN: Self = Self(u32::MIN);
-///     const MAX: Self = Self(u32::MAX);
-///     fn to_bytes(self) -> Self::Bytes { self.0.to_be_bytes().to_vec() }
-///     fn from_bytes(b: Self::Bytes) -> Result<Self, VsdbError> {
-///         Ok(Self(u32::from_be_bytes(b.try_into().unwrap())))
-///     }
-///     fn tier_stride(c: u32, l: u8) -> Option<Self> { c.checked_pow(l.into()).map(Self) }
-///     fn floor_align(self, stride: Self) -> Self { Self(self.0 / stride.0 * stride.0) }
-///     fn checked_succ(self) -> Option<Self> { self.0.checked_add(1).map(Self) }
-///     fn checked_pred(self) -> Option<Self> { self.0.checked_sub(1).map(Self) }
+///     type Bytes = Vec<u8>; // Slot encodings must have a fixed width.
+/// #     const MIN: Self = Self(u32::MIN);
+/// #     const MAX: Self = Self(u32::MAX);
+/// #     fn to_bytes(self) -> Self::Bytes { self.0.to_be_bytes().to_vec() }
+/// #     fn from_bytes(b: Self::Bytes) -> Result<Self, VsdbError> {
+/// #         Ok(Self(u32::from_be_bytes(b.try_into().unwrap())))
+/// #     }
+/// #     fn tier_stride(c: u32, l: u8) -> Option<Self> { c.checked_pow(l.into()).map(Self) }
+/// #     fn floor_align(self, stride: Self) -> Self { Self(self.0 / stride.0 * stride.0) }
+/// #     fn checked_succ(self) -> Option<Self> { self.0.checked_add(1).map(Self) }
+/// #     fn checked_pred(self) -> Option<Self> { self.0.checked_sub(1).map(Self) }
 /// }
 /// ```
 pub trait SlotType:

@@ -96,22 +96,19 @@ hit/miss counts when computing a namespace-wide hit ratio. Additional
 namespaces, retired views, caller-held pins, worker allocations and
 application data contribute to process RSS. [Adapter](../core/src/common/engine/mmdb.rs) · [Namespace telemetry](../core/src/common/namespace.rs)
 
-The following reports the shared cache charge once for the default namespace.
-
 ```rust
 use vsdb_core::Namespace;
 
-let ns = Namespace::default_ns();
-let pool = ns.memory_usage().pool;
+let pool = Namespace::default_ns().memory_usage().pool;
 let bytes = pool.segmented_weighted_bytes + pool.overflow_weighted_bytes;
 println!("Charged cache bytes: {bytes}");
 ```
 
-`ns.shard_properties("stats.block_cache_hits")` and
-`ns.shard_properties("stats.block_cache_misses")` return one count per shard.
+Pass `"stats.block_cache_hits"` or `"stats.block_cache_misses"` to
+`Namespace::shard_properties` for one count per shard.
 On small budgets the 64 KiB write-buffer minimum can dominate sizing.
 
-For example, at 2 GiB across 16 shards, each write buffer is **16 MiB**.
+At 2 GiB across 16 shards, each write buffer is **16 MiB**.
 With five potentially resident generations per shard, the nominal thresholds
 total **1,280 MiB** before caches or overshoot. Historical v18 measurements
 compare this sizing with a 6 MiB buffer and report measured RSS, throughput

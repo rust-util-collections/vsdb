@@ -47,17 +47,14 @@ macro_rules! define_map_wrapper {
         where
             $($trait_bounds)+
         {
+            /// Creates another writable handle to the same stored rows.
+            ///
             /// # Safety
             ///
-            /// Creates a second handle to the same underlying storage, bypassing
-            /// Rust's aliasing guarantees.  The caller **must** ensure no
-            /// concurrent writes to the same key through any handle.  Multiple
-            /// writers on disjoint keys are safe. Concurrent immutable reads,
-            /// including iteration, may run alongside writes. Each iterator
-            /// retains the committed view captured when it is created, across
-            /// later writes, clears and flushes. Separate reads/iterators can
-            /// observe different views. Mutable iteration remains a write and
-            /// requires the same exclusion of other writers.
+            /// Exclude concurrent writes to the same key through all handles,
+            /// including mutable iterators. Writers may operate on disjoint keys.
+            /// Immutable reads may overlap writes. Each immutable iterator keeps
+            /// its creation-time view across later writes, clears and flushes.
             #[inline(always)]
             pub unsafe fn shadow(&self) -> Self {
                 Self {
@@ -177,12 +174,8 @@ macro_rules! define_map_wrapper {
                 self.inner.instance_id()
             }
 
-            /// Persists this instance's metadata to disk (in its owning
-            /// namespace's meta directory) so that it can be recovered
-            /// later via [`from_meta`](Self::from_meta).
-            ///
-            /// Returns the [`InstanceId`](vsdb_core::InstanceId) that
-            /// should be passed to `from_meta`.
+            /// Saves the handle in its namespace and returns the
+            /// [`InstanceId`](vsdb_core::InstanceId) used by [`from_meta`](Self::from_meta).
             ///
             /// # Errors
             ///
@@ -195,29 +188,14 @@ macro_rules! define_map_wrapper {
                 Ok(id)
             }
 
-            /// Recovers an instance from previously saved metadata.
+            /// Reopens the map named by a saved ID in its original universe.
+            /// The metadata and referenced data must still exist.
             ///
-            /// The caller must ensure that the underlying VSDB database still
-            /// contains the data referenced by this instance ID.
+            /// # Aliasing
             ///
-            /// # Aliasing warning
-            ///
-            /// The returned handle is a **full alias** of the original
-            /// instance, not an independent copy — it addresses the exact
-            /// same underlying key range (this is how
-            /// [`instance_id`](Self::instance_id) is recovered: it *is*
-            /// the raw prefix).  If the original handle that produced
-            /// this `instance_id` (or another `from_meta`/`shadow`
-            /// restore of it) is still alive in-process, the same
-            /// no-concurrent-writes-to-the-same-key discipline
-            /// documented on [`shadow`](Self::shadow) applies across
-            /// **every** live alias: no concurrent writes to the same
-            /// key through any handle.
-            /// `from_meta` is intended to restore a handle after the
-            /// original has gone out of scope (e.g. across a process
-            /// restart); calling it while the original is still live
-            /// requires the same care as `shadow()`, even though this
-            /// function is safe Rust.
+            /// Restored handles share the same stored rows. Exclude concurrent
+            /// writes to the same key across all live handles, as required by
+            /// [`shadow`](Self::shadow).
             pub fn from_meta(
                 instance_id: impl Into<$crate::common::InstanceId>,
             ) -> $crate::common::error::Result<Self> {
