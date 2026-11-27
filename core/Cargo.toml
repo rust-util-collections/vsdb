@@ -11,6 +11,8 @@ categories = ["database-implementations", "data-structures", "algorithms", "cach
 license = "MIT"
 
 [dependencies]
+cap-std = "4.0.3"
+cap-fs-ext = "4.0.3"
 rand = { workspace = true }
 serde = { workspace = true }
 parking_lot = { workspace = true }
@@ -20,6 +22,9 @@ postcard = { workspace = true }
 crc32fast = "1.5.6"
 smallvec = { workspace = true }
 mmdb = { workspace = true }
+
+[target.'cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))'.dependencies]
+rustix = { version = "1", features = ["fs"] }
 
 [features]
 default = []

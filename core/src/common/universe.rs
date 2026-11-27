@@ -5,6 +5,7 @@ use super::{
     error::{Result, corrupt},
     namespace, vsdb_get_base_dir, vsdb_open_mode,
 };
+use cap_std::{ambient_authority, fs::Dir};
 use parking_lot::Mutex;
 use std::{
     fs::{self, File},
@@ -48,7 +49,17 @@ fn read_header(path: &Path) -> Result<Option<u128>> {
 /// Holding its directory descriptor avoids creating a lockfile in a path
 /// before verifying that it belongs to us.
 pub(super) fn lock_root_dir(root: &Path) -> Result<File> {
-    let dir = File::open(root)?;
+    Ok(lock_directory(Dir::open_ambient_dir(
+        root,
+        ambient_authority(),
+    )?)?)
+}
+
+pub(super) fn lock_directory(dir: Dir) -> io::Result<File> {
+    #[cfg(not(windows))]
+    let dir = dir.open(".")?.into_std();
+    #[cfg(windows)]
+    let dir = dir.into_std_file();
     dir.try_lock().map_err(io::Error::from)?;
     Ok(dir)
 }
@@ -215,7 +226,16 @@ pub(super) fn engine_bytes(id: u128, ns: u64, shards: usize) -> [u8; 36] {
 // is required. A genuinely absent pending initializer remains a separate
 // cold-start state in validate_ready_engine.
 fn require_engine_record(path: &Path, expected: &[u8], name: &str) -> Result<()> {
-    match fs::read(path) {
+    check_record(fs::read(path), path, expected, name)
+}
+
+fn check_record(
+    read: io::Result<Vec<u8>>,
+    path: &Path,
+    expected: &[u8],
+    name: &str,
+) -> Result<()> {
+    match read {
         Ok(bytes) if bytes == expected => Ok(()),
         Ok(_) => Err(corrupt(format!("invalid {name} at {}", path.display()))),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -239,12 +259,7 @@ pub(crate) fn verify_engine(
     )?;
     engine::validate_completed_dataset(root, shards)
 }
-pub(super) fn check_identity(
-    root: &Path,
-    id: u128,
-    ns: u64,
-    shards: usize,
-) -> Result<()> {
+fn check_identity(root: &Path, id: u128, ns: u64, shards: usize) -> Result<()> {
     require_engine_record(
         &engine_header(root, ns),
         &engine_bytes(id, ns, shards),
@@ -258,17 +273,42 @@ pub(super) fn validate_pending_root(
     ns: u64,
     shards: usize,
 ) -> Result<()> {
-    if engine_header(root, ns).try_exists()? {
-        return check_identity(root, id, ns, shards);
+    let dir = Dir::open_ambient_dir(root, ambient_authority())?;
+    validate_namespace_dir(&dir, root, id, ns, shards, true)
+}
+
+/// Read ownership records from the same directory handle used for cleanup.
+pub(super) fn validate_namespace_dir(
+    dir: &Dir,
+    root: &Path,
+    id: u128,
+    ns: u64,
+    shards: usize,
+    pending: bool,
+) -> Result<()> {
+    let expected = engine_bytes(id, ns, shards);
+    let header = engine_header(Path::new(""), ns);
+    match dir.read(&header) {
+        Err(e) if pending && e.kind() == io::ErrorKind::NotFound => {}
+        read => {
+            return check_record(read, &root.join(header), &expected, "engine identity");
+        }
     }
-    let sentinel = root.join("__SYSTEM__/__initializing__");
-    if sentinel.try_exists()? {
-        return check_initializer(&sentinel, id, ns, shards);
+    let sentinel = Path::new("__SYSTEM__/__initializing__");
+    match dir.read(sentinel) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        read => {
+            return check_record(
+                read,
+                &root.join(sentinel),
+                &expected,
+                "engine initializer",
+            );
+        }
     }
     // A crash can leave the empty system directory or a staging sibling
     // before the initializer's atomic rename. No other files are ours yet.
-    let expected = engine_bytes(id, ns, shards);
-    for entry in fs::read_dir(root)? {
+    for entry in dir.entries()? {
         let entry = entry?;
         if entry.file_name() != "__SYSTEM__" || !entry.file_type()?.is_dir() {
             return Err(corrupt(format!(
@@ -276,21 +316,17 @@ pub(super) fn validate_pending_root(
                 root.display()
             )));
         }
-        for file in fs::read_dir(entry.path())? {
+        let system = cap_fs_ext::DirExt::open_dir_nofollow(dir, "__SYSTEM__")?;
+        for file in system.entries()? {
             let file = file?;
             let name = file.file_name();
             let name = name.to_string_lossy();
-            let is_stage = name
-                .strip_prefix("__initializing__.")
-                .and_then(|s| s.strip_suffix(".tmp"))
-                .and_then(|s| s.split_once('.'))
-                .is_some_and(|(pid, n)| {
-                    pid.parse::<u32>().is_ok() && n.parse::<u64>().is_ok()
-                });
-            if !is_stage || !file.file_type()?.is_file() {
+            if !namespace::is_atomic_tmp_for(&name, "__initializing__.")
+                || !file.file_type()?.is_file()
+            {
                 return Err(corrupt("foreign file in pending namespace root"));
             }
-            let staged = fs::read(file.path())?;
+            let staged = system.read(file.file_name())?;
             if staged.len() > expected.len() || !expected.starts_with(&staged) {
                 return Err(corrupt(
                     "foreign initializer staging file in pending namespace root",
@@ -367,6 +403,33 @@ mod tests {
     use std::{env, fs, process::Command, thread, time::Duration};
 
     const HANDOFF: &str = "VSDB_RO_LOCK_HANDOFF";
+
+    #[test]
+    fn namespace_identity_is_read_from_the_held_directory() {
+        let scratch = env::temp_dir()
+            .join(format!("vsdb-dir-identity-{}", rand::random::<u128>()));
+        let root = scratch.join("root");
+        let other = scratch.join("other");
+        fs::create_dir_all(root.join("__SYSTEM__")).unwrap();
+        fs::create_dir_all(other.join("__SYSTEM__")).unwrap();
+        let held = Dir::open_ambient_dir(&root, ambient_authority()).unwrap();
+        let expected = engine_bytes(1, 2, 4);
+        let foreign = engine_bytes(3, 2, 4);
+        // The path is used in diagnostics. Its valid header cannot authorize
+        // the open directory, whether the registry record is pending or established.
+        fs::write(other.join("__SYSTEM__/engine_header"), expected).unwrap();
+        for file in ["__initializing__", "engine_header"] {
+            let record = root.join("__SYSTEM__").join(file);
+            fs::write(&record, foreign).unwrap();
+            assert!(validate_namespace_dir(&held, &other, 1, 2, 4, true).is_err());
+            assert!(validate_namespace_dir(&held, &other, 1, 2, 4, false).is_err());
+            fs::write(&record, expected).unwrap();
+            validate_namespace_dir(&held, &other, 1, 2, 4, true).unwrap();
+            fs::remove_file(record).unwrap();
+        }
+        drop(held);
+        fs::remove_dir_all(scratch).unwrap();
+    }
 
     pub(super) fn after_missing_universe_lock() {
         let Some(dir) = env::var_os(HANDOFF) else {

@@ -25,6 +25,8 @@
 //!   On Unix, MMDB also locks existing shard lock files in the same mode.
 //!
 
+mod destroy;
+
 use crate::common::{
     atomic_write_file,
     engine::{Engine, EngineSizing},
@@ -339,51 +341,6 @@ fn save_pending_creates(base: &Path, entries: &[PendingCreate]) -> Result<()> {
     atomic_write_file(&base.join(NS_PENDING_CREATE_REL_PATH), &bytes)?;
     REGISTRY_DIR_UNSYNCED.store(false, Ordering::Release);
     Ok(())
-}
-
-/// List `dir`, which was opened on the namespace root before the registry
-/// update. A later replacement of that path must not redirect the wipe.
-fn read_held_dir(dir: &fs::File, path: &Path) -> io::Result<fs::ReadDir> {
-    #[cfg(target_os = "linux")]
-    {
-        use std::os::unix::io::AsRawFd;
-        let via_fd = format!("/proc/self/fd/{}", dir.as_raw_fd());
-        if let Ok(entries) = fs::read_dir(via_fd) {
-            return Ok(entries);
-        }
-    }
-    let _ = dir;
-    fs::read_dir(path)
-}
-
-/// Whether `path` still names the directory `dir` already has open.
-fn same_directory(dir: &fs::File, path: &Path) -> io::Result<bool> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let held = dir.metadata()?;
-        match fs::symlink_metadata(path) {
-            Ok(meta) if meta.file_type().is_symlink() => Ok(false),
-            Ok(meta) => Ok(held.dev() == meta.dev() && held.ino() == meta.ino()),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
-            Err(error) => Err(error),
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (dir, path);
-        Ok(true)
-    }
-}
-
-/// Make a directory entry change durable. Unlink and rename survive power
-/// loss only after their parent directory is synchronized.
-fn sync_parent(path: &Path) -> io::Result<()> {
-    let parent = match path.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => parent,
-        _ => Path::new("."),
-    };
-    fs::File::open(parent)?.sync_all()
 }
 
 /// Fence an empty root or its absence before dropping the last recovery record.
@@ -733,7 +690,7 @@ fn ensure_root_adoptable(root: &Path) -> Result<bool> {
     }
 }
 
-fn is_atomic_tmp_for(name: &str, prefix: &str) -> bool {
+pub(super) fn is_atomic_tmp_for(name: &str, prefix: &str) -> bool {
     name.strip_prefix(prefix)
         .and_then(|s| s.strip_suffix(".tmp"))
         .and_then(|s| s.split_once('.'))
@@ -1451,7 +1408,9 @@ impl Namespace {
     /// whole directory tree without per-key traversal. Filesystem work scales
     /// with the number of files and directories. A root that cannot itself be
     /// removed, such as a mount point adopted by [`Namespace::create_with`],
-    /// is emptied and kept.
+    /// is emptied and kept. Identity checks and tree cleanup use the same
+    /// open directory. An entry installed at the registered name during
+    /// destruction retains its contents.
     ///
     /// The target must not be open in this process ([`Namespace::close_by_id`] it
     /// first). A crash between the registry update and the tree removal
@@ -1483,119 +1442,11 @@ impl Namespace {
             return Err(ns_err(format!("namespace {id} is not registered")));
         };
         let root = resolve_root(&base, &reg.entries[pos]);
-        let rec = &reg.entries[pos];
-        let link_meta = match fs::symlink_metadata(&root) {
-            Ok(meta) => Some(meta),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
-            Err(e) => return Err(e.into()),
-        };
-        let target = if root.try_exists()? {
-            Some(root.canonicalize()?)
-        } else {
-            None
-        };
-        let root_lease = if let Some(target) = &target {
-            let lease = super::universe::lock_root_dir(target)?;
-            let universe = super::universe::active()?.id;
-            match rec.state {
-                NsLifecycleState::Established => super::universe::check_identity(
-                    target,
-                    universe,
-                    id,
-                    rec.shards as usize,
-                )?,
-                NsLifecycleState::Pending => super::universe::validate_pending_root(
-                    target,
-                    universe,
-                    id,
-                    rec.shards as usize,
-                )?,
-            }
-            Some(lease)
-        } else {
-            None
-        };
+        let target = destroy::Target::check(&root, &reg.entries[pos])?;
         clear_pending_create(&base, id)?;
         reg.entries.remove(pos);
         save_registry(&reg)?;
-        if link_meta.is_some_and(|m| m.file_type().is_symlink()) {
-            match fs::remove_file(&root) {
-                Ok(()) => sync_parent(&root)?,
-                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-                Err(e) => return Err(e.into()),
-            }
-        }
-        let Some(target) = target else {
-            return Ok(());
-        };
-        let Some(lease) = root_lease else {
-            return Ok(());
-        };
-        #[cfg(test)]
-        tests::before_root_wipe(&target);
-        let entries = match read_held_dir(&lease, &target) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                sync_parent(&target)?;
-                return Ok(());
-            }
-            Err(e) => return Err(e.into()),
-        };
-        for entry in entries {
-            let entry = entry?;
-            let removed = match entry.file_type() {
-                Ok(kind) if kind.is_dir() => fs::remove_dir_all(entry.path()),
-                Ok(_) => fs::remove_file(entry.path()),
-                Err(e) => Err(e),
-            };
-            match removed {
-                Ok(()) => {}
-                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-                Err(e) => return Err(e.into()),
-            }
-        }
-        if !same_directory(&lease, &target)? {
-            // The path was replaced after the identity check. Drop a symlink
-            // left in its place, and do not remove a different directory.
-            return match fs::symlink_metadata(&target) {
-                Ok(meta) if meta.file_type().is_symlink() => {
-                    fs::remove_file(&target)?;
-                    sync_parent(&target)?;
-                    Ok(())
-                }
-                Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                    sync_parent(&target)?;
-                    Ok(())
-                }
-                Ok(_) => {
-                    lease.sync_all()?;
-                    Ok(())
-                }
-                Err(e) => Err(e.into()),
-            };
-        }
-        match fs::remove_dir(&target) {
-            Ok(()) => {
-                sync_parent(&target)?;
-                Ok(())
-            }
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                sync_parent(&target)?;
-                Ok(())
-            }
-            // An adopted root, such as a mount point or a directory under a
-            // parent the process cannot modify, stays behind empty.
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    io::ErrorKind::PermissionDenied | io::ErrorKind::ResourceBusy
-                ) =>
-            {
-                lease.sync_all()?;
-                Ok(())
-            }
-            Err(e) => Err(e.into()),
-        }
+        target.remove()
     }
 
     /// Re-points a namespace at a new root directory (e.g. after moving a
@@ -1848,7 +1699,12 @@ mod tests {
         REPLACE_ROOT_WITH.with(|slot| slot.replace(Some(canary.clone())));
         let destroyed = Namespace::destroy(id);
         let kept = fs::read(canary.join("keep")).ok();
-        let _ = fs::remove_dir_all(&canary);
+        assert_eq!(fs::read_link(&root).unwrap(), canary);
+        let aside = root.with_extension("aside");
+        assert!(fs::read_dir(&aside).unwrap().next().is_none());
+        fs::remove_dir(aside).unwrap();
+        fs::remove_file(root).unwrap();
+        fs::remove_dir_all(&canary).unwrap();
         assert_eq!(
             kept.as_deref(),
             Some(b"safe".as_slice()),

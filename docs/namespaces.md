@@ -140,7 +140,16 @@ the process lifetime once initialized. [Close implementation](../core/src/common
 | `ns.close()` | Consumes the caller's handle. A refusal returns `Err((Some(ns), error))` and preserves that handle. A teardown error returns `Err((None, error))` after taking the engine out of the open table. |
 | `Namespace::open(id)` | Reuses the cached engine if open, or verifies the registered root and opens its shards. |
 | `Namespace::relocate(id, path)` | Updates the closed namespace's registration after the caller moves its files. The destination must match its recorded identity, shard count and complete data set. |
-| `Namespace::destroy(id)` | Requires a closed, non-default namespace. Registry removal is made durable before recursive directory removal. A root that cannot itself be removed, such as an adopted mount point, is emptied and kept. A later I/O error can leave an unregistered directory for the caller to clean up. |
+| `Namespace::destroy(id)` | Requires a closed, non-default namespace. Registry removal is made durable before recursive directory removal. The operation checks ownership, empties the directory and synchronizes it through the same handle. A root that cannot itself be removed, such as an adopted mount point, is emptied and kept. A later I/O error can leave an unregistered directory for the caller to clean up. |
+
+Destroy synchronizes the parent after removing a registered name. If the
+root was already absent, it synchronizes the nearest surviving parent before
+unregistering the namespace. For final removal it moves the name into a
+private sibling directory and checks the identity there. If a replacement
+was moved, destroy restores it without overwriting an occupied name. If
+restoration fails, the error gives the path to the retained entry under
+`.vsdb-destroy-*/entry`. A process interruption can also leave an entry
+at that location.
 
 Close proves exclusivity under the registry and open-table locks. It
 releases the table lock before I/O and holds the registry lock through
