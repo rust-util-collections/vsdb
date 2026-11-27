@@ -6,6 +6,33 @@ Compiler requirements below are historical release notes. Current development
 uses the official latest stable Rust, without a declared compatible version
 range or minimum compiler; see [the toolchain policy](docs/ai/compatibility-policy.md#rust-toolchain).
 
+## [v19.0.2]
+
+Existing v19 stores open in place.
+
+### Fixed
+
+- `DagMap` checks node magic and `dag_id` before decoding the rest of a
+  metadata row, and skips prefixes rejected by the allocator, so stale
+  edges to co-located foreign headers or unissued prefixes can be skipped
+  or unlinked while truncated identities and malformed local bodies remain
+  read failures.
+- A read-only open that initially finds no universe lock file probes the
+  lock again before interpreting the header result. Contention with a
+  writer during bootstrap reports `Io(WouldBlock)` even before the header
+  is published, and a newly acquired shared lock rereads the header under
+  that lease.
+- `Namespace::destroy` validates established and pending ownership records,
+  iteratively empties the directory without following symlinks, and
+  synchronizes it through the same open directory handle, falling back to
+  entry metadata on `DT_UNKNOWN` filesystems and tolerating already-unlinked
+  directory handles. Missing roots synchronize the nearest fenceable
+  surviving parent before unregistering, unreadable or read-only parents
+  keep emptied adopted roots in place, dangling symlinks at the registered
+  path are refused, and final removal stages the entry in a private sibling
+  directory so an intervening replacement is restored without overwriting
+  an occupied name.
+
 ## [v19.0.1]
 
 Existing v19 stores open in place.
