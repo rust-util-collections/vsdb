@@ -1946,34 +1946,6 @@ mod dirty_sync_tests {
 }
 
 #[test]
-fn cryptographic_wire_matches_v18_goldens() {
-    use super::{MptCalc, SmtCalc};
-    let mut m = MptCalc::new();
-    let mut s = SmtCalc::new();
-    for (key, val) in [
-        (b"".as_slice(), b"root".as_slice()),
-        (&[0x12, 0x34], b"alpha"),
-        (&[0x12, 0x36], b"beta"),
-        (&[0xff], b"gamma"),
-    ] {
-        m.insert(key, val).unwrap();
-        s.insert(key, val).unwrap();
-    }
-    let roots = (m.root_hash().to_vec(), s.root_hash().to_vec());
-    let mut proofs = vec![];
-    for key in [&[0x12, 0x34][..], &[0x12, 0x3f][..], &[][..], &[0x00][..]] {
-        proofs.push((
-            m.prove(key).unwrap().to_bytes().unwrap(),
-            s.prove(key).unwrap().to_bytes().unwrap(),
-        ));
-    }
-    assert_eq!(
-        postcard::to_allocvec(&(roots, proofs)).unwrap(),
-        include_bytes!("fixtures/v18-roots-proofs.postcard").as_slice()
-    );
-}
-
-#[test]
 fn foreign_checkpoint_is_ignored_even_when_commit_numbers_match() {
     use super::{MptCalc, VerMapWithProof};
     let mut a = VerMapWithProof::<u32, u32, MptCalc>::new();

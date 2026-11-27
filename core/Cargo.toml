@@ -9,6 +9,7 @@ repository = "https://github.com/rust-util-collections/vsdb/tree/master/core"
 keywords = ["kv", "leveldb", "lsm", "std"]
 categories = ["database-implementations", "data-structures", "algorithms", "caching"]
 license = "MIT"
+include.workspace = true
 
 [dependencies]
 cap-std = "4.0.3"

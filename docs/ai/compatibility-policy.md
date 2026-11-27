@@ -47,7 +47,7 @@ The runtime checks the universe, engine, registry, raw and typed envelopes
 (`VSUNI018`, `VSENG018`, `VSNREG02`, `VSMAPX02`, `VSTYPE04`). Keep those
 identities and the MPT and SMT root and proof encodings stable. Exercise root
 hashes, proof verification and serialization when changing hash or transport code.
-[Native v18 proof fixture](../../strata/src/trie/fixtures/v18-roots-proofs.postcard)
+[Native v18 proof fixture](../../strata/tests/fixtures/v18-roots-proofs.postcard)
 
 - **Nominal type tags:** `VSTYPE04` hashes the fully qualified Rust type name
   (including generic arguments) with FNV-1a. Moving or renaming a persisted

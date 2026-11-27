@@ -9,6 +9,7 @@ repository = "https://github.com/rust-util-collections/vsdb/tree/master/strata"
 keywords = ["git", "vcs", "leveldb", "lsm", "database"]
 categories = ["database-implementations", "data-structures", "algorithms", "caching"]
 license = "MIT"
+include.workspace = true
 
 [package.metadata.docs.rs]
 # features = []

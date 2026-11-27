@@ -122,3 +122,30 @@ fn proof_transport_fixtures_and_frame_errors() {
         assert!(SmtProof::from_bytes(&trailing).is_err());
     }
 }
+
+#[test]
+fn cryptographic_wire_matches_v18_goldens() {
+    let mut m = MptCalc::new();
+    let mut s = SmtCalc::new();
+    for (key, val) in [
+        (b"".as_slice(), b"root".as_slice()),
+        (&[0x12, 0x34], b"alpha"),
+        (&[0x12, 0x36], b"beta"),
+        (&[0xff], b"gamma"),
+    ] {
+        m.insert(key, val).unwrap();
+        s.insert(key, val).unwrap();
+    }
+    let roots = (m.root_hash().to_vec(), s.root_hash().to_vec());
+    let mut proofs = vec![];
+    for key in [&[0x12, 0x34][..], &[0x12, 0x3f][..], &[][..], &[0x00][..]] {
+        proofs.push((
+            m.prove(key).unwrap().to_bytes().unwrap(),
+            s.prove(key).unwrap().to_bytes().unwrap(),
+        ));
+    }
+    assert_eq!(
+        postcard::to_allocvec(&(roots, proofs)).unwrap(),
+        include_bytes!("fixtures/v18-roots-proofs.postcard").as_slice()
+    );
+}
