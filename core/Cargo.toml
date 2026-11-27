@@ -25,7 +25,7 @@ smallvec = { workspace = true }
 mmdb = { workspace = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))'.dependencies]
-rustix = { version = "1", features = ["fs"] }
+rustix = { version = "1.1.6", features = ["fs"] }
 
 [features]
 default = []
