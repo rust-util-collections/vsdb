@@ -73,11 +73,7 @@ fn read_lock(base: &Path) -> Result<Option<File>> {
             Ok(Some(file))
         }
         // A read-only mount of an immutable copy may omit lock files.
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            #[cfg(test)]
-            tests::after_missing_universe_lock();
-            Ok(None)
-        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e.into()),
     }
 }
@@ -134,14 +130,22 @@ pub(crate) fn initialize(base: &Path, mode: OpenMode) -> Result<&'static Univers
     } else {
         read_lock(base)?
     };
-    let id = match read_header(&base.join(HEADER))? {
+    let path = base.join(HEADER);
+    #[cfg(test)]
+    if lease.is_none() {
+        tests::after_missing_universe_lock();
+    }
+    let mut header = read_header(&path);
+    if lease.is_none() {
+        // A writer may have started bootstrap since the first probe. Give
+        // lock contention precedence even if the header is still missing.
+        lease = read_lock(base)?;
+        if lease.is_some() {
+            header = read_header(&path);
+        }
+    }
+    let id = match header? {
         Some(id) => {
-            if !writable && lease.is_none() {
-                // The lock file was absent before the header was read. A
-                // writer can create and hold it in that window; a second
-                // attempt distinguishes that writer from a lockless copy.
-                lease = read_lock(base)?;
-            }
             namespace::check_registry_at(base)?;
             // A universe can contain only non-default engines.
             validate_ready_engine(base, id, 0, 16)?;
@@ -362,8 +366,10 @@ mod tests {
     use crate::{VsdbOptions, vsdb_configure};
     use std::{env, fs, process::Command, thread, time::Duration};
 
+    const HANDOFF: &str = "VSDB_RO_LOCK_HANDOFF";
+
     pub(super) fn after_missing_universe_lock() {
-        let Some(dir) = env::var_os("VSDB_RO_LOCK_HANDOFF") else {
+        let Some(dir) = env::var_os(HANDOFF) else {
             return;
         };
         let dir = PathBuf::from(dir);
@@ -380,7 +386,6 @@ mod tests {
 
     #[test]
     fn read_only_open_rejects_a_lock_created_before_the_header_is_read() {
-        const HANDOFF: &str = "VSDB_RO_LOCK_HANDOFF";
         if let Some(dir) = env::var_os(HANDOFF) {
             let err = vsdb_configure(VsdbOptions::read_only(dir)).unwrap_err();
             match err {
@@ -394,15 +399,21 @@ mod tests {
 
         let scratch = env::temp_dir()
             .join(format!("vsdb-ro-lock-handoff-{}", rand::random::<u128>()));
-        let base = scratch.join("base");
-        fs::create_dir_all(&base).unwrap();
+        for publish_header in [false, true] {
+            run_handoff(&scratch.join(publish_header.to_string()), publish_header);
+        }
+        fs::remove_dir_all(scratch).unwrap();
+    }
+
+    fn run_handoff(base: &Path, publish_header: bool) {
+        fs::create_dir_all(base).unwrap();
         let child = Command::new(env::current_exe().unwrap())
             .args([
                 "--exact",
                 "common::universe::tests::read_only_open_rejects_a_lock_created_before_the_header_is_read",
                 "--nocapture",
             ])
-            .env(HANDOFF, &base)
+            .env(HANDOFF, base)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
@@ -428,11 +439,12 @@ mod tests {
             .open(system.join("LOCK"))
             .unwrap();
         lock_file.try_lock().unwrap();
-        fs::write(base.join(HEADER), header_bytes(1)).unwrap();
+        if publish_header {
+            fs::write(base.join(HEADER), header_bytes(1)).unwrap();
+        }
         fs::write(base.join("continue"), b"1").unwrap();
         let output = child.wait_with_output().unwrap();
         drop(lock_file);
-        fs::remove_dir_all(&scratch).unwrap();
         assert!(
             output.status.success(),
             "stdout:\n{}\nstderr:\n{}",
