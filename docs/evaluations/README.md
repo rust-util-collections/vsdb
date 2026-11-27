@@ -1,27 +1,20 @@
 # VSDB performance evaluations
 
+These reports describe specific VSDB v18 revisions and workloads on Linux
+x86_64. For the current runtime's configuration, use the [memory sizing guide](../storage.md#memory-sizing).
+
 ## MMDB v4 to v5 with VSDB v18
 
-The following comparisons used x86_64 Linux. Upgrade figures compare the
-same logical workload on v18 with its v4 and v5 backends. Percentages are
-median changes within matched pairs. Baseline variation is measured by
-running the control against itself.
+The upgrade comparisons ran the same logical workload on the v4 and v5
+backends. Each report gives paired measurements, the control runs and the
+instructions for reproducing its workload.
 
-| Workload | Result |
+| Measurement | Report and comparison |
 | --- | --- |
-| Writes to one hot shard | Saturated throughput rose **59.53%**. At a fixed offered load, foreground small-put p99 fell **95.88%**. [Adapter measurements](v18-adapter/README.md) |
-| All 16 shards active | Paced small-put p99 fell **73.64%**. At saturation, foreground small-put completions/s fell **31.63%** in all five pairs. Aggregate byte throughput fell 2.26%, within 14.75% baseline variation. [Adapter measurements](v18-adapter/README.md) |
-| DagMap child creation in the default namespace | One write submission replaces two. Operation p99 fell **33.38%** against v18/v4 and **31.05%** against the two-write v5 control. [Publication measurements](v18-publication/README.md) |
-| Warm standalone B+ tree on 32,768 keys | Point-hit p99 increased **12.03%**, miss p99 **11.83%**. For a 128-row scan the measured 32.83% p99 increase and 16.82% throughput loss fell within their respective baseline spreads. [Stock tree comparison](v18-tree-v5/stock/README.md) · [Tree implementation decision](v18-tree-v5/README.md#tree-implementation-decision) |
-| Warm VecDex search on the same 8,192-node graph | The median run p99 rose from **184.57 to 253.38 µs**. The paired regression was **37.48%** across five slower pairs, with identical ordered IDs and distances. [Complete query comparison](v18-vecdex-v5/README.md) |
-
-## VerMap working edits on MMDB v5
-
-Four dependent VerMap updates performed as individual
-operations took 70.54 µs at p99, compared with 31.72 µs in a bounded
-working edit at `2ae6149`. The paired improvement was **52.51%**. Engine
-write submissions fell from four to one. Use `write_batch` when final
-values are already known. [Working-edit measurements](v18-publication/README.md)
+| Write latency, throughput and memory | One hot shard and all 16 shards, under paced and saturated load. [Adapter measurements](v18-adapter/README.md) |
+| DagMap and VerMap write submissions | One- and two-write DagMap child creation, and four dependent VerMap updates submitted separately or in a single working edit. [Publication measurements](v18-publication/README.md) |
+| Ordered-tree lookup and scan latency | Warm reads on 32,768 keys, with separate stock-runtime and prototype controls. [Stock tree comparison](v18-tree-v5/stock/README.md) · [Tree implementation decision](v18-tree-v5/README.md#tree-implementation-decision) |
+| End-to-end VecDex queries | Warm searches on an identical 8,192-node graph, including verification of ordered IDs and distances. [Complete query comparison](v18-vecdex-v5/README.md) |
 
 ## Collection measurements on VSDB v18
 

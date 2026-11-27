@@ -110,5 +110,4 @@ leaving inconsistent state or stranded `[0x06]` `STAGE` anchors on aborted build
 Tags distinguish fully qualified Rust types, not field layouts. A schema
 change under the same qualified name requires an application migration.
 **Keep:** unrelated same-named types from different modules restoring as each
-other. The pre-release short-name experiment was removed after reproducing
-silent wrong-type writes; it is no longer an accepted exception.
+other. [Typed-handle policy](compatibility-policy.md#typed-handle-tags-and-wire-decoders)

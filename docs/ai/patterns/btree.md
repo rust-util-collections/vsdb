@@ -54,24 +54,15 @@ child serials. A corrupt row must return an error from the edit callback
 without publishing edits already staged. Test the panic-based standalone
 API against its own contract. [Tree lookup](../../../strata/src/basic/persistent_btree/mod.rs) · [Working-root corruption fixtures](../../../strata/src/versioned/test.rs)
 
-## Bugs
+## Boundary cases
 
-**Split median** — internal sep parent-only; leaf sep stays as right first key. At split `left.max < sep == right.min`, no data key in both leaves (after deletes only `sep ≤ right.min`).
-**In-place mutate** — grep direct storage writes on mut paths.
-**Underflow chain** — after mass delete; order borrow-left → borrow-right → merge (prefer left).
-**Reclaim leak** — replaced nodes never released to ref 0.
-
-## Checklist
-
-- [ ] New NodeIds on all mut paths
-- [ ] Split separator rules (internal vs leaf)
-- [ ] Order after insert/delete/split/merge
-- [ ] Occupancy + root exception
-- [ ] No mutate shared nodes
-- [ ] GC live set = commit roots + dirty roots + live snapshot leases
-- [ ] Codec round-trip
-- [ ] Empty/single-entry edges
-- [ ] Buffer flush on every mut return; bulk root unobservable mid-way
-- [ ] Diff/merge property tests vs full-scan / decision-matrix references; ref counts == recount after merges
-- [ ] Deferred owners never lazy-delete before a sync
-- [ ] Snapshot capture/drop, alias recovery and clone preserve reader ownership
+- Round-trip page encodings and exercise empty and single-entry trees.
+- At a leaf split, the right leaf keeps its first key and the parent copies
+  it as a separator. At an internal split, the promoted separator belongs to
+  the parent. After deletion, the separator may be smaller than the right
+  subtree's minimum.
+- After a sequence of removals, exercise borrowing from each side and merging
+  when neither sibling can lend a key. Check order and occupancy afterward.
+- Compare diffs and merges with a full-scan reference and compare reference
+  counts with a recount. Verify the publication fence before a deferred
+  owner can be reclaimed.

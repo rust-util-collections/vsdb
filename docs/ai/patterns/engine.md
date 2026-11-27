@@ -1,16 +1,19 @@
 # Engine & Storage Review Patterns
 
-[Engine and metadata](../../../core/src/common) · [Raw map](../../../core/src/basic/mapx_raw)
-
-**Arch:** One universe (`{base}/__SYSTEM__/universe_header` `VSUNI018`, advisory `LOCK`, `VSNREG02` `__namespaces__`, `__prefix_ceiling__`). One engine per namespace = N MMDB shards (default pinned 16 behind lazy `OnceLock`; others creation-persisted), bound by `VSENG018` `engine_header` + `.shards_ready == b"18"`. Key = `[prefix_u64][user]`; a native shard WAL fence writes no data key or sequence. Handles own `Namespace` `Arc` — ambient scope is read at create only, never by ops/serde/`from_meta`. Engines in `Arc<NsInner>` (no leak); close under lifecycle locks. One `BlockCachePool` per engine. A raw batch binds one prefix. A checked co-located insert binds two prefixes on one shard.
+[Architecture and routing](../../architecture.md) · [Engine and metadata](../../../core/src/common) · [Raw map](../../../core/src/basic/mapx_raw)
 
 ## Invariants
 
-**E1 Prefix unique** — alloc floors/ceilings/cursors only forward; durable ceiling before issue; recovered reserved; never reuse.
+**E1 Prefix allocation** — Floors, ceilings and cursors advance monotonically.
+Persist the reservation ceiling before issuing a prefix. Reopen with an
+intact ceiling must preserve unused reservations. For a missing ceiling,
+check the recovery inputs in E9.
 
-**E2 Shard routing** — same formula on get/put/delete/iter (`self.dbs.len()`).
+**E2 Shard routing** — Use the same prefix byte order and shard count for
+get, put, delete and iteration.
 
-**E3 Prefix scope** — all ops/iter bounds use structure prefix only.
+**E3 Prefix scope** — Each row operation uses the prefix of its owning map.
+Scans and range deletions must stop at the map boundary.
 
 **E4 Engine uniqueness** — default once; non-default id ≤ one open under REGISTRY_LOCK + OPEN re-check.
 
@@ -83,28 +86,4 @@ pressure or a full immutable queue. Compare WAL bytes, sequence and rows
 before and after rejection, then rebuild the consumed batch and retry. A
 malformed batch keeps its argument error. An empty sync batch does not
 fence earlier writes. The explicit shard fence covers sealed and current WAL
-generations and adds no mutation. [Public batch contract](../../../core/docs/api.md) · [Pressure and fence tests](../../../core/src/common/engine/mmdb/v5_tests.rs)
-
-## Bugs
-
-**Collision** — ceiling/floor regress, unrecovered reserve, cursor outside window.
-**Cross-shard read** — endian/route mismatch.
-**Iter leak** — past prefix / MAX overflow.
-**Double open** — race create two engines.
-**Partial root as complete** — marker/layout wrong but adopted silently.
-
-## Checklist
-
-- [ ] Monotonic alloc; durable ceiling before issue
-- [ ] Identical routing all paths
-- [ ] Prefixed keys + bounded iters (`u64::MAX` OK)
-- [ ] Default once; one engine per non-default id
-- [ ] Ordinary batches stay within their prefix. Co-located writes publish every row set together and reject mismatched placement before writing.
-- [ ] Lifecycle under documented locks
-- [ ] Marker ↔ shards ↔ CURRENT agree
-- [ ] Handle ns independent of ambient create
-- [ ] One pool per engine
-- [ ] clone_in chunk+wipe on error
-- [ ] Late SST read failures surface in both scan directions
-- [ ] Co-location checked on restore before skipping fences
-- [ ] No engine open for path-only needs
+generations and adds no mutation. [Public batch contract](../../storage.md#batch-visibility-and-durability) · [Pressure and fence tests](../../../core/src/common/engine/mmdb/v5_tests.rs)

@@ -74,7 +74,7 @@ Existing v19 stores open in place.
 - VSDB opens native v18 universes in place using the same namespace identities,
   collection layouts and saved handles. The workspace ships the two runtime
   crates, `vsdb_core` and `vsdb`. Format conversion for older universes is
-  maintained on the v18 branch. [Upgrade path](docs/README.md#upgrade-an-existing-universe)
+  maintained on the v18 branch. [Upgrade path](docs/upgrade.md)
 
 ## [v18.0.3]
 

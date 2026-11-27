@@ -1,34 +1,51 @@
 //! # vsdb_core
 //!
-//! `vsdb_core` provides the low-level building blocks for `vsdb`, including the
-//! storage layer, raw data structures, and common utilities. It is not
-//! typically used directly by end-users, but forms the foundation of the `vsdb`
-//! ecosystem.
+//! Use [`MapxRaw`] for persistent byte keys and values, [`VsdbOptions`] to
+//! configure the process, and [`Namespace`] to place and administer maps.
+//! The `vsdb` crate builds typed collections on these APIs.
 //!
 //! ## Storage backend
 //!
-//! The storage engine is MMDB, a pure-Rust LSM-Tree engine.
+//! Each map prefix routes to one MMDB shard in its owning namespace. MMDB is
+//! a Rust LSM-tree engine. Building its bundled Zstd backend requires a C
+//! toolchain.
 //!
 //! ## Read-only mode
 //!
-//! Configure read-only access before any other VSDB API, then restore handles
-//! saved by a writable process:
+//! Configure the base directory before opening collections or requesting
+//! database paths. Pass a token previously saved by a writable process.
 //!
 //! ```no_run
 //! use vsdb_core::{InstanceId, MapxRaw, VsdbOptions, vsdb_configure};
 //!
-//! # fn main() -> vsdb_core::Result<()> {
-//! vsdb_configure(VsdbOptions::read_only("/srv/my-app/vsdb"))?;
-//! let id: InstanceId = "40960000".parse()?;
-//! let map = MapxRaw::from_meta(id)?;
-//! assert!(map.namespace().is_read_only());
-//! # Ok(())
-//! # }
+//! fn open_reader(id: InstanceId) -> vsdb_core::Result<MapxRaw> {
+//!     vsdb_configure(VsdbOptions::read_only("/srv/my-app/vsdb"))?;
+//!     MapxRaw::from_meta(id)
+//! }
 //! ```
 //!
-//! The setting is one-shot and process-wide, including every namespace.
-//! Queries and in-memory WAL recovery do not change the database tree;
-//! creation and mutation are unavailable.
+//! The open mode applies to every namespace in the process. Read-only queries
+//! and in-memory WAL recovery leave the stored files untouched.
+//!
+//! ## Handling write pressure
+//!
+//! A raw batch can request immediate refusal when admission would stall on
+//! the immutable queue or L0 pressure. A [`StorageErrorKind::Busy`] refusal
+//! consumes the batch before it writes any rows or allocates a sequence.
+//! The caller can rebuild it from the original edits and retry.
+//!
+//! ```
+//! use vsdb_core::{MapxRaw, StorageErrorKind, VsdbError};
+//!
+//! fn try_enqueue(map: &mut MapxRaw) -> vsdb_core::Result<bool> {
+//!     let mut batch = map.batch();
+//!     batch.insert(b"job", b"ready");
+//!     match batch.commit_no_slowdown() {
+//!         Err(VsdbError::Storage { kind: StorageErrorKind::Busy, .. }) => Ok(false),
+//!         outcome => outcome.map(|()| true),
+//!     }
+//! }
+//! ```
 
 #![deny(warnings)]
 #![recursion_limit = "512"]

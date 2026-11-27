@@ -15,7 +15,8 @@ entries. `clear` advances the generation even when it empties the index.
 
 **SD2 Cross-tier query** — spans all intersected tiers.
 
-**SD3 Boundaries** — each slot in exactly one bucket per level (insert bumps every level); consistent half-open.
+**SD3 Boundaries** — Each slot belongs to exactly one bucket per level.
+Insertion and queries must use the same alignment for every bucket.
 
 **SD4 Pagination** — offset-based by design (`page*size`); internal consistency per call; cross-call stability under concurrent mut is **not** required (documented). Reverse paging reverses slot groups only, preserving ascending keys within each slot. A page seeks to its slot and skips the local offset. Forward-chunked descending traversals group at most 256 entries and 16 KiB of raw keys at a time; oversized slots stream individually.
 
@@ -26,22 +27,9 @@ entries. `clear` advances the generation even when it empties the index.
 **SD7 Range API** — `page(slots, size, idx, Order)` / `count(slots)` map `RangeBounds` to
 inclusive `Option` bounds: `Excluded` via `checked_succ` / `checked_pred` (overflow ⇒
 empty), `Unbounded` ⇒ `None` (never `MIN`/`MAX`: `swap_order` transforms bounds),
-inverted ⇒ empty. Counts and pages must agree with the logical slot and key order.
-
-## Bugs
-
-**Boundary off-by-one** · empty range / empty index panics · bulk never promotes (gate only committed).
-
-## Checklist
-
-- [ ] Pure `SlotType::tier_stride` / `floor_align`, applied through `aligned`
-- [ ] Ranges cover all tiers
-- [ ] No gap/overlap at bounds
-- [ ] Page internal consistency (offset design OK); bounded boundary scans and ascending within-slot keys
-- [ ] Empty handled
-- [ ] Insert = query floor formula
-- [ ] swap_order parity
-- [ ] slot_rows rules + bulk promote cadence
+inverted ⇒ empty. Check the empty index, an empty range and a range crossing
+multiple tier boundaries. Counts and pages must agree with the logical slot
+and key order. [Pagination examples](../../../strata/docs/slotdex.md)
 
 ## Restored-handle ownership
 

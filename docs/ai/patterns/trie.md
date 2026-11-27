@@ -6,13 +6,16 @@
 
 ## Invariants
 
-**T1 Proof sound** — prove/verify same encode, hash, path (MPT nibble / SMT bit); wrong key/root fails.
+**T1 Proof verification** — Generation and verification use the same key
+encoding, Keccak hash and path (MPT nibbles or SMT bits). Exercise a wrong
+key and a wrong root as well as a valid proof. [Proof APIs and transport](../../../strata/docs/proofs.md)
 
 **T2 MPT nibbles** — high `>>4`, low `&0x0F`; path len 2×bytes; consistent all ops.
 
 **T3 SMT defaults** — JMT-style compressed tree: every empty subtree is `EMPTY_HASH = [0; 32]`, at every depth; `hash_internal(EMPTY_HASH, EMPTY_HASH)` returns `EMPTY_HASH`. Construction and proof folding must use the same rule.
 
-**T4 Hash det** — same logical state → same root; extensions max-compressed.
+**T4 Canonical roots** — The same logical state produces the same root.
+Compress extension paths fully, including consecutive bare extensions.
 
 **T5 Cache binding** — check universe, map identity, commit and B+ tree root.
 Keep independent committed and working candidate roots. Changing map identity
@@ -30,19 +33,5 @@ to the version store.
 value, decoded memory and pending-subtree limits. Check canonical shapes,
 including the side of each SMT branch against its descendant key hashes.
 Recompute the commitment and verify the checksum before returning the tree.
-Failed mutations preserve the original root.
-
-## Bugs
-
-**Nibble swap** · prove/verify serialize order drift · cache root for wrong commit.
-
-## Checklist
-
-- [ ] Prove/verify same hash/encode paths
-- [ ] Nibble order consistent
-- [ ] SMT single `EMPTY_HASH`; empty⊕empty = EMPTY in build and proof fold
-- [ ] Deterministic canonical roots
-- [ ] Cache stamp = synced commit; mismatch rebuilds
-- [ ] Non-exist: every MPT/SMT absence shape
-- [ ] Consistent keccak (no accidental sha256 mix)
-- [ ] No consecutive bare extensions
+Failed mutations preserve the original root. Rebuild a stale checkpoint
+from the selected map state.

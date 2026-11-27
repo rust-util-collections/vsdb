@@ -1,65 +1,36 @@
 //! # vsdb
 //!
-//! `vsdb` is a high-performance, embedded database designed to feel like using
-//! Rust's standard collections. It provides persistent, disk-backed data
-//! structures including [`Mapx`] for exact lookups, [`MapxOrd`] for ordered
-//! ranges, [`MapxOrdRawKey`] for byte keys and [`Orphan`] for single values.
-//! [`VerMap`] adds branch history and snapshots, while [`DagMap`] provides
-//! single-parent overlays. [`MptCalc`] and [`SmtCalc`] compute in-memory
-//! Merkle commitments and proofs. [`VerMapWithProof`] connects either trie to
-//! versioned storage. [`SlotDex`] indexes keys by slot for pagination and
-//! counts, and [`VecDex`] provides nearest-neighbor vector search.
+//! `vsdb` provides persistent collections for embedded Rust applications.
 //!
-//! This crate is the primary entry point for most users.
+//! - Use [`Mapx`] for exact lookups, [`MapxOrd`] for ordered ranges,
+//!   [`MapxOrdRawKey`] for byte keys and [`Orphan`] for a single value.
+//! - Use [`VerMap`] for branch history and snapshots. [`PersistentBTree`]
+//!   exposes a copy-on-write tree with application-managed roots.
+//! - [`MptCalc`] and [`SmtCalc`] compute Merkle roots and proofs in memory.
+//!   [`VerMapWithProof`] connects either calculator to a versioned map.
+//! - [`SlotDex`] pages and counts keys by slot. [`DagMap`] overlays local
+//!   changes on a parent. [`VecDex`] searches vectors by distance.
 //!
-//! # Read-only mode
+//! ## Read-only mode
 //!
-//! Configure read-only access before any other VSDB API, then restore handles
-//! saved by a writable process:
+//! Set the process-wide open mode before opening a collection or requesting a
+//! database directory. Restore a handle saved by a writable process.
 //!
 //! ```no_run
 //! use vsdb::{InstanceId, Mapx, VsdbOptions, vsdb_configure};
 //!
-//! # fn main() -> vsdb::Result<()> {
-//! vsdb_configure(VsdbOptions::read_only("/srv/my-app/vsdb"))?;
-//! let id: InstanceId = "40960000".parse()?;
-//! let map = Mapx::<String, String>::from_meta(id)?;
-//! assert!(map.namespace().is_read_only());
-//! # Ok(())
-//! # }
+//! fn open_counts(id: InstanceId) -> vsdb::Result<Mapx<String, u64>> {
+//!     vsdb_configure(VsdbOptions::read_only("/srv/my-app/vsdb"))?;
+//!     Mapx::from_meta(id)
+//! }
 //! ```
 //!
-//! The setting is one-shot and process-wide, including every namespace.
-//! Query APIs and in-memory WAL recovery leave the database tree unchanged;
-//! creation and mutation are unavailable.
-//!
-//! # Counting entries
+//! ## Counting entries
 //!
 //! The basic maps expose `iter().count()`, which scans their entries.
 //! [`SlotDex::total`] and [`VecDex::len`] read stored counts. Each index
-//! updates its count and data rows in the same shard write batch.
-
-//!
-//! A raw batch can opt into retryable admission when a shard is under write
-//! pressure. A `Busy` result consumes no sequence and stores no rows.
-//!
-//! ```no_run
-//! use vsdb::{MapxRaw, NamespaceMemoryUsage, StorageErrorKind, VsdbError};
-//!
-//! # fn send(map: &mut MapxRaw) -> vsdb::Result<bool> {
-//! let usage: NamespaceMemoryUsage = map.namespace().memory_usage();
-//! let _evictable_bytes = usage.pool.segmented_weighted_bytes + usage.pool.overflow_weighted_bytes;
-//! let mut batch = map.batch();
-//! batch.insert(b"job", b"ready");
-//! match batch.commit_no_slowdown() {
-//!     Err(VsdbError::Storage { kind: StorageErrorKind::Busy, .. }) => {
-//!         // The caller can reschedule the original logical operation.
-//!         Ok(false)
-//!     }
-//!     outcome => outcome.map(|()| true),
-//! }
-//! # }
-//! ```
+//! updates its count and data rows in the same shard write batch. For raw
+//! batches, write pressure and namespace telemetry, see [`vsdb_core`].
 
 #![deny(warnings)]
 #![recursion_limit = "512"]

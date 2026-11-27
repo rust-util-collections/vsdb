@@ -34,10 +34,6 @@ on the same captured view, including after the writer changes the live index.
 
 **VD6 Schema** — persisted configuration (`[0x06]` `META_KEY`, bound into `VSTYPE04` via 8-byte Keccak256) includes dimension, scalar width, nominal `type_tag`, `HnswConfig`, and metric parameters. `VecDexDyn` selects runtime metrics via `VecDexDyn::new_with_metric`; keep `MetricKind` discriminants (`0 = L2, 1 = Cosine, 2 = InnerProduct`, pinned in `dyn_wire_tags_are_frozen`) frozen/append-only and reject unknown tags or trailing schema bytes.
 
-## Bugs
-
-**Entry downgrade on remove** · wire-tag drift (derive/reorder) · missing prune after bi-edge · compact torn write outside one wiped staged commit.
-
 ## MMDB query boundary
 
 Production search uses scalar pinned decoding on a single read view.
@@ -58,20 +54,16 @@ reciprocal-edge append paths. An invalid ID or partial ID encoding must
 return a typed error before the chunk publishes any row. Keep earlier
 successful chunks visible if a later chunk fails. [Mutation fixtures](../../../strata/src/vecdex/test.rs)
 
-## Checklist
+## Graph-wide checks
 
-- [ ] Entry at global max_layer
-- [ ] Bidirectional edges + prune after insert
-- [ ] Exhaustive search reaches all components after insert, delete, replacement,
-      batch, restore and compact; filtered restarts respect the visit cap
-- [ ] Map triple consistency
-- [ ] Dim checks
-- [ ] Filter doesn’t block traversal; low-selectivity recall test still passes
-- [ ] Dimension checks and finite inputs: reject `NaN`/infinities for vectors and queries, including dynamic-metric dispatch; preserve prior rows on rejection
-- [ ] A nonfinite stored row fails cold `compact()` as `Corrupt` without rewrite
-- [ ] Wire tags frozen/append-only + round-trip pins
-- [ ] Compact single wiped staged commit
-- [ ] Send+Sync; Scalar ops cover metrics
+- Exercise exhaustive search after insert, delete, replacement, batch
+  insertion, restore and compaction. Use a disconnected graph and a filter
+  that forces a restart.
+- Check dimension and finiteness errors with dynamic metrics and both scalar
+  widths. Preserve prior rows on rejection and keep the documented
+  `Send + Sync` bounds.
+- Compaction publishes the replacement graph and the wipe together. Restore
+  saved handles and compare the resulting vectors and key mappings.
 
 ## Restored-handle ownership
 

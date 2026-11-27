@@ -91,12 +91,9 @@ partial I/O.
 Check alias life, write exclusion, process-global env, allocator, lifecycle serialize.
 
 **Crash recovery.** Trace publication, synchronization and reopen across the
-affected rows. VerMap uses one prefix with retirement and staging anchors.
-SlotDex commits a batch of entries and tier counts together. VecDex can publish
-several mutation chunks during one call. Check the complete stream for a
-rejected chunk and the visibility of earlier successful chunks. DagMap creates a
-child with one checked two-prefix batch. Prune and reparent have ordered
-recovery phases.
+affected rows. Check which edits become visible together and which earlier
+chunks can survive a later failure. Use the subsystem guide for each
+collection's publication boundary and recovery markers.
 
 **Compatibility:** `compatibility-policy.md`. Old data preserve/reject/migrate
 intentionally. A break needs explicit user acceptance before any major bump.

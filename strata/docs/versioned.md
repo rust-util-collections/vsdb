@@ -1,10 +1,30 @@
-# VerMap architecture and recovery
+# VerMap branches, snapshots and recovery
 
 `VerMap<K, V>` stores ordered keys in a copy-on-write B+ tree. A branch owns a
 working root and points to its latest commit. Each commit records a tree root
 and up to two parents. The working tree, commit graph and their metadata live
-in one `MapxRaw` prefix on one shard. For a runnable branch-and-merge example,
-see the [collection guide](api.md#vermap).
+in one `MapxRaw` prefix on one shard.
+
+## Branch and merge example
+
+```rust
+use vsdb::VerMap;
+
+let mut messages = VerMap::<u32, String>::new();
+let main = messages.main_branch();
+messages.insert(main, &1, &"hello".into()).unwrap();
+let first = messages.commit(main).unwrap();
+
+let feature = messages.create_branch("feature", main).unwrap();
+messages.insert(feature, &1, &"updated".into()).unwrap();
+messages.commit(feature).unwrap();
+assert_eq!(messages.get(main, &1).unwrap().as_deref(), Some("hello"));
+
+messages.merge(feature, main).unwrap();
+assert_eq!(messages.get(main, &1).unwrap().as_deref(), Some("updated"));
+assert_eq!(messages.at(first).unwrap().get(&1).as_deref(), Some("hello"));
+messages.delete_branch(feature).unwrap();
+```
 
 ## Branches, commits and snapshots
 
@@ -12,6 +32,7 @@ see the [collection guide](api.md#vermap).
 |---|---|
 | `new()` | Creates an empty `main` branch. Zero denotes an empty tree root or an absent head in the corresponding field. |
 | `insert`, `remove`, `write_batch` | Edits the branch's working tree. A batch sorts edits by encoded key and the last edit for each key wins. |
+| `edit_working` | Runs a callback that can read its own staged changes and publishes the resulting working root once. |
 | `bulk_load` | Replaces the working tree from ascending encoded keys. Duplicate keys keep their final value. |
 | `commit` | Records the working root, advances the branch head and links to the prior head when one exists. |
 | `create_branch` | Inherits the source head and working root, including pending changes. The metadata update retains the shared roots. |
@@ -21,29 +42,17 @@ see the [collection guide](api.md#vermap).
 
 Updating a leaf allocates new pages along its path and keeps unaffected
 subtrees shared. Splits and underflow repair can also touch neighboring pages.
-A single-key insertion or removal that encounters an unreadable page returns the storage
-error and preserves the branch's working root. A missing or malformed
-referenced page returns `VsdbError::Corrupt`. `has_uncommitted`, `rollback_to`,
-`merge` and the commit and working-state diffs return the same errors, and a
-failed merge publishes nothing.
+A single-key insertion or removal that encounters an unreadable page returns
+the storage error and preserves the working root. A missing or malformed
+referenced page returns `VsdbError::Corrupt`. The same distinction applies to
+`has_uncommitted`, `rollback_to`, `merge` and the commit and working-state
+diffs. A merge that encounters such a read error leaves the target head in place.
+
 A branch is clean when its stored keys and values match its head. Editing a
 value and then restoring its original bytes makes the branch clean again.
 `BranchId` and `CommitId` are distinct serde-transparent `u64` types with
 ordered key encodings. Commit IDs increase with allocation. The wall-clock
 timestamp is informational.
-
-```mermaid
-gitGraph
-    commit id: "c1"
-    commit id: "c2"
-    branch feature
-    commit id: "c3"
-    commit id: "c4"
-    checkout main
-    commit id: "c5"
-    merge feature id: "c6 (merge)"
-    commit id: "c7"
-```
 
 Use `snapshot(branch)` for the working state, including pending changes, and
 `at(commit)` for a retained commit. Either returns an owned, cloneable
@@ -62,10 +71,48 @@ writers and writable restores through aliases of the same store. Mutable
 `clone()` and `clone_in(&namespace)` deep-copy branches, retained commits and
 working trees into an independent store.
 
+## Dependent working edits
+
+Use `VerMap::edit_working(branch, max_bytes, |edit| ...)` when a later edit
+reads an earlier one in the same operation. The callback starts from a
+retained working root. Its `get`, `insert` and `remove` see the overlay in
+call order. Returning an error or unwinding discards the overlay. A successful
+callback publishes the resulting working root once if it changed. Call
+`commit` separately to create a durable history entry. Serialize writers to
+aliases as for other structural operations. If a callback changes the
+working root through another alias, publishing the original overlay reports
+`VsdbError::WorkingRootChanged`. A budget violation reports `InvalidConfig`.
+
+When the key has no staged edit, the callback checks its path from the captured
+root. An absent key returns `None`; a missing referenced page or blob and a
+malformed page return `Corrupt`. An underlying read failure preserves its
+storage error. Returning such an error from the callback discards earlier edits.
+
+The limit charges the encoded key and current value plus 64 bytes per
+distinct staged key, including a deleted key. Replacing an entry releases
+its old value's charge. Caller allocations, transient encoding and tree
+publication buffers lie outside this overlay budget. Use `write_batch` when
+all values are known before the operation.
+
+```rust
+use vsdb::VerMap;
+
+let mut counts = VerMap::<u32, u64>::new();
+let main = counts.main_branch();
+counts.edit_working(main, 1024, |edit| {
+    edit.insert(&1, &10)?;
+    let subtotal = edit.get(&1)?.unwrap();
+    edit.insert(&2, &(subtotal + 5))
+}).unwrap();
+assert_eq!(counts.get(main, &2).unwrap(), Some(15));
+let commit = counts.commit(main).unwrap();
+assert_eq!(counts.at(commit).unwrap().get(&2), Some(15));
+```
+
 ## Three-way merge algorithm
 
 `merge(source, target)` requires different, clean branches and a source with
-a commit. Equal heads return that commit. An empty target advances to the
+a commit. Equal heads return that commit. A target with no head advances to the
 source head. For other successful merges, the target receives a new commit
 with parents `[target_head, source_head]`, even when it can reuse a tree root.
 
@@ -73,22 +120,12 @@ The merge walks parent links to find all lowest common ancestors. With one
 base, a key takes the source value (or deletion) when the source changed
 relative to the base. Other keys keep the target state.
 
-| Ancestor | Source | Target | Result | Type |
-|:---------|:-------|:-------|:-------|:-----|
-| A | A | A | A | no change |
-| A | **S** | A | **S** | source-only |
-| A | A | **T** | **T** | target-only |
-| A | **S** | **S** | **S** | both same |
-| A | **S** | **T** | **S** | conflict → source wins |
-| A | _deleted_ | A | _deleted_ | source-only delete |
-| A | A | _deleted_ | _deleted_ | target-only delete |
-| A | _deleted_ | **T** | _deleted_ | conflict → source wins |
-| A | **S** | _deleted_ | **S** | conflict → source wins |
-| A | _deleted_ | _deleted_ | _deleted_ | both deleted |
-| _absent_ | **S** | _absent_ | **S** | source-only add |
-| _absent_ | _absent_ | **T** | **T** | target-only add |
-| _absent_ | **S** | **S** | **S** | both added same |
-| _absent_ | **S** | **T** | **S** | conflict → source wins |
+| Change to a key since the base | Merged value |
+| --- | --- |
+| Only the target changes the key | Target value, including deletion |
+| Only the source changes the key | Source value, including deletion |
+| Both change the key | Source value, including when the source deletes a key the target edited |
+| Neither changes the key | Original value or absence |
 
 With several merge bases, a source change relative to *any* base counts.
 With no common ancestor the merge uses the empty tree as its base. A
@@ -96,6 +133,19 @@ comparison can reuse identical roots and skip subtrees with equal node IDs.
 Independently built trees can require a full diff. Sorted source changes
 for the same target leaf are applied together, and copy-on-write retains
 unaffected target subtrees.
+
+```mermaid
+gitGraph
+    commit id: "c1"
+    commit id: "c2"
+    branch feature
+    commit id: "c3"
+    commit id: "c4"
+    checkout main
+    commit id: "c5"
+    merge feature id: "c6 (merge)"
+    commit id: "c7"
+```
 
 `fork_point(a, b)` returns the greatest commit ID among the lowest common
 ancestors, or `None` if there is none. `commit_distance(from, ancestor)`
@@ -119,13 +169,22 @@ values over 1 KiB of encoded data use separate blobs. A point lookup
 binary-searches borrowed keys inside each fetched page. Forward iteration
 retains the current leaf page and reads selected values.
 
-Standalone `PersistentBTree` uses the same page and blob layouts. It stores
-its allocator ceiling at tag `09` alongside each allocation batch. Both the
-standalone and version-store handles carry a 36-byte `VSTYPE04` frame.
+### Standalone tree roots
+
+`PersistentBTree` exposes the same page and blob layouts to callers that
+manage their own root IDs. It stores its allocator ceiling at tag `09`
+alongside each allocation batch. Both tree and VerMap handles carry a
+36-byte `VSTYPE04` frame.
+
+For a standalone tree, persist the tree handle and every root ID the
+application needs. On reopen, pass all live roots to `rebuild_ref_counts`.
+Pass the same complete set to `gc` for a full sweep. Pages reachable only
+from omitted roots can be reclaimed. VerMap tracks its own branch and commit
+roots. [Standalone B+ tree API](../src/basic/persistent_btree/mod.rs)
 
 ## Durability and recovery
 
-`insert`, `remove`, `write_batch` and `discard` publish working-root changes
+`insert`, `remove`, `write_batch`, `edit_working` and `discard` publish working-root changes
 in one ordinary shard batch. This includes the new pages and allocator
 ceiling. A successful edit is visible immediately and needs a WAL fence for
 power-loss durability. Commits, branch administration, rollback, merge and
@@ -167,28 +226,5 @@ Tree objects count incoming edges and roots. A writer with exclusive runtime
 ownership can include newly dead object keys in its publication batch. When a
 reader, lease or restored alias shares the runtime, publication records retired
 roots at tag `05`. Runtime pins retain objects for existing snapshots. Unpinned
-dead objects are queued for a later publication or checkpoint. mmdb can
+dead objects are queued for a later publication or checkpoint. MMDB can
 reclaim physical disk space during compaction.
-
-### Dependent working edits
-
-Use `VerMap::edit_working(branch, max_bytes, |edit| ...)` when a later edit
-reads an earlier one in the same operation. The callback starts from a
-retained working root. Its `get`, `insert` and `remove` see the overlay in
-call order. Returning an error or unwinding discards the overlay. A successful
-callback publishes the resulting working root once if it changed. Call
-`commit` separately to create a durable history entry. Serialize writers to
-aliases as for other structural operations. If a callback changes the
-working root through another alias, publishing the original overlay reports
-`VsdbError::WorkingRootChanged`. A budget violation reports `InvalidConfig`.
-
-When the key has no staged edit, the callback checks its path from the captured
-root. An absent key returns `None`; a missing referenced page or blob and a
-malformed page return `Corrupt`. An underlying read failure preserves its
-storage error. Returning such an error from the callback discards earlier edits.
-
-The limit charges the encoded key and current value plus 64 bytes per
-distinct staged key, including a deleted key. Replacing an entry releases
-its old value's charge. Caller allocations, transient encoding and tree
-publication buffers lie outside this overlay budget. Use `write_batch` when
-all values are known before the operation.

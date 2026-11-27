@@ -1,155 +1,100 @@
-# VecDex — Approximate Nearest-Neighbor Vector Index
+# VecDex vector search
 
-VecDex is a persistent, disk-backed vector index using the HNSW (Hierarchical
-Navigable Small World) algorithm. Each index stores vectors, the search graph and its
-configuration in one shard. Choose a compile-time metric with `VecDex` or a
-runtime metric with `VecDexDyn`.
-
-A successful public search evaluates distance and filter callbacks in graph
-traversal order at a single snapshot. Stored-row or engine errors return
-`Err`. On a failed search a filter may already have run on some candidates;
-discard any partial result collected by a callback. A scored live vector
-must have its reverse-key row. Filtered traversal stops before reading
-another adjacency row once it exhausts its visit limit. During mutations, a
-stored adjacency row with a truncated ID or an ID outside the range
-allocated before the current chunk aborts that chunk before publication.
-Edges created within a chunk may refer to its freshly allocated nodes.
-Earlier completed chunks of `insert_batch` remain visible.
-
+VecDex stores vectors, their keys and a hierarchical navigable small world
+(HNSW) search graph in one shard. Search returns up to `k` key-distance
+pairs, ordered by increasing distance. Choose `VecDex<K, D, S>` for a
+compile-time metric or `VecDexDyn<K, S>` for a runtime-selected metric.
+The scalar type `S` defaults to `f32`.
 
 ## Quick start
 
 ```rust
-use vsdb::vecdex::{VecDex, HnswConfig, distance::Cosine};
+use vsdb::{Cosine, HnswConfig, VecDex};
 
-let cfg = HnswConfig { dim: 4, ..Default::default() };
-let embedding_a = [0.1, 0.2, 0.3, 0.4];
-let embedding_b = [0.4, 0.3, 0.2, 0.1];
-let query_vec = [0.1, 0.2, 0.3, 0.5];
-let mut idx: VecDex<String, Cosine> = VecDex::new(cfg).unwrap();
+let config = HnswConfig { dim: 2, ..Default::default() };
+let mut index = VecDex::<String, Cosine>::new(config).unwrap();
+index.insert(&"east".into(), &[1.0, 0.0]).unwrap();
+index.insert(&"north".into(), &[0.0, 1.0]).unwrap();
 
-idx.insert(&"doc-a".into(), &embedding_a).unwrap();
-idx.insert(&"doc-b".into(), &embedding_b).unwrap();
-
-// k-NN search
-let results = idx.search(&query_vec, 10).unwrap();
-for (key, distance) in &results {
-    println!("{key}: {distance}");
-}
-
-// Filtered search — only consider keys matching a predicate
-let results = idx.search_with_filter(&query_vec, 10, |k| k.starts_with("doc-"))
-    .unwrap();
-
-// Persist and reload
-let id = idx.save_meta().unwrap();
-drop(idx);
-let restored: VecDex<String, Cosine> = VecDex::from_meta(id).unwrap();
+let results = index.search(&[1.0, 0.0], 1).unwrap();
+assert_eq!(results[0].0, "east");
+let id = index.save_meta().unwrap();
+drop(index);
+let restored = VecDex::<String, Cosine>::from_meta(id).unwrap();
+assert_eq!(restored.len(), 2);
 ```
-
-Recovery through serde or `from_meta` verifies the stored schema and returns a
-handle onto the same graph. Serialize writers, including writers using
-separately restored handles. Sequential writers reload the committed state
-for every mutation or batch chunk. Concurrent readers can use `reader()`
-to share the graph. A reader's `read_view()` captures a snapshot for several
-queries. Cloning the mutable index deep-copies the graph into a fresh prefix.
 
 ## API reference
 
-Vectors and queries must match the configured dimension and contain only
-finite components. `insert_batch` checks every vector before it writes the
-first chunk.
+| Task | Methods |
+| --- | --- |
+| Create an index | `new(config)` uses the ambient namespace. `new_in(ns, config)` selects a namespace. Use `new_with_metric` or `new_with_metric_in` to supply a metric value. |
+| Modify vectors | `insert` adds or replaces a key, `insert_batch` groups writes, and `remove` returns whether it removed a key. `clear` empties the index. |
+| Look up or count | `get` returns an optional vector. Use `contains_key`, `keys`, `iter`, `len` and `is_empty` for membership, scans and counts. |
+| Search | `search(query, k)` uses the stored beam width. `search_ef(query, k, ef)` overrides it for one call. Both have typed and raw-key filter variants. |
+| Capture a read sequence | `reader()` shares the graph. Call `read_view()` on the index or a reader to reuse one snapshot across queries. |
+| Retain or copy the graph | `save_meta` saves the handle and returns its `InstanceId`. `from_meta` reopens it in the owning namespace. `clone_in` deep-copies it into a selected namespace. |
+| Tune or rebuild | `set_ef_search` persists the default search width. `compact` rebuilds the graph from live vectors. |
 
-Before replacing a graph, `compact()` checks vector dimensions and finiteness,
-the live count, and the correspondence between vectors and both key mappings.
-If an index is missing a reverse mapping, it returns `VsdbError::Corrupt` and
-preserves the previously readable vectors.
+### Batch writes and recovery
 
-| Method | Signature | Description |
-|--------|-----------|-------------|
-| `new` | `(config: HnswConfig) -> Result<Self>` | Create empty index (in the current ambient namespace); `InvalidConfig` on a bad config; `ReadOnly` in read-only mode |
-| `new_with_metric` / `new_with_metric_in` | `(metric, config)` / `(ns, metric, config) -> Result<Self>` | Create an index using the supplied metric value |
-| `new_in` | `(ns: &Namespace, config: HnswConfig) -> Result<Self>` | Create empty index placed in `ns` |
-| `namespace` | `(&self) -> Namespace` | The namespace this index lives in |
-| `instance_id` | `(&self) -> InstanceId` | Complete persistent identity (`map_id` + owning namespace) |
-| `insert` | `(&mut self, key: &K, vector: &[S]) -> Result<()>` | Add or update a vector |
-| `insert_batch` | `(&mut self, items: &[(K, Vec<S>)]) -> Result<()>` | Chunked bulk insert (one atomic batch per chunk) |
-| `search` | `(&self, query: &[S], k: usize) -> Result<Vec<(K, S)>>` | k-NN search |
-| `search_ef` | `(&self, query: &[S], k: usize, ef: usize) -> Result<Vec<(K, S)>>` | Search with custom beam width |
-| `search_with_filter` | `(&self, query: &[S], k: usize, predicate: impl Fn(&K) -> bool) -> Result<Vec<(K, S)>>` | k-NN search with key predicate |
-| `search_ef_with_filter` | `(&self, query: &[S], k: usize, ef: usize, predicate: impl Fn(&K) -> bool) -> Result<Vec<(K, S)>>` | Filtered search with custom beam width |
-| `search_with_raw_filter` / `search_ef_with_raw_filter` | Same arguments as typed filters with `predicate: impl Fn(&[u8]) -> bool` | Test encoded keys during traversal |
-| `remove` | `(&mut self, key: &K) -> Result<bool>` | Delete by key |
-| `get` | `(&self, key: &K) -> Option<Vec<S>>` | Fetch vector by key |
-| `contains_key` | `(&self, key: &K) -> bool` | Whether a key exists |
-| `keys` | `(&self) -> impl Iterator<Item = K> + '_` | Iterate keys |
-| `iter` | `(&self) -> impl Iterator<Item = (K, Vec<S>)> + '_` | Iterate key/vector pairs |
-| `len` | `(&self) -> u64` | Number of indexed vectors |
-| `is_empty` | `(&self) -> bool` | Whether index is empty |
-| `set_ef_search` | `(&mut self, ef: usize) -> Result<()>` | Update the default search beam width |
-| `reader` / `read_view` | `(&self)` | Share the same index, or capture one engine sequence for several queries |
-| `clone_in` | `(&self, ns: &Namespace) -> Result<Self>` | Deep-copy the graph into the selected namespace |
-| `clear` | `(&mut self) -> Result<()>` | Remove all data |
-| `compact` | `(&mut self) -> Result<()>` | Rebuild graph from existing vectors |
-| `save_meta` | `(&self) -> Result<InstanceId>` | Persist metadata for later recovery (create-time constant; saving once after creation suffices) |
-| `from_meta` | `(instance_id: impl Into<InstanceId>) -> Result<Self>` | Recover from saved metadata (a bare `u64` works for default-namespace instances) |
+Vectors and queries must have the configured dimension and contain only
+finite components. `insert_batch` validates all input vectors first, keeps
+the last occurrence of each key and publishes up to 64 surviving keys per
+shard batch. If a later chunk fails, earlier successful chunks remain
+committed. For power-loss durability after successful writes, call
+`index.namespace().try_sync_wal()`. [WAL fences and error outcomes](../../docs/storage.md#batch-visibility-and-durability)
 
-Rows, counters and graph state for each mutation commit in one shard batch.
-`insert_batch` keeps the last occurrence of each key and commits up to 64
-surviving items per chunk. A later storage failure can leave earlier chunks
-committed. An I/O error during a commit can leave recoverable WAL data, so
-inspect the recovered state before retrying. For power-loss durability after
-a successful mutation, fence the namespace with `idx.namespace().try_sync_wal()?`.
+If a stored adjacency row contains a truncated ID or an ID beyond the
+previously allocated range, the mutation returns an error before publishing
+that chunk. New edges in the chunk may refer to its newly allocated nodes.
+Before replacing a graph, `compact()` validates the vectors, live count and
+both key mappings. A missing reverse mapping returns `VsdbError::Corrupt`
+and preserves the previously readable vectors.
 
 ## Configuration
 
-```rust
-pub struct HnswConfig {
-    pub m: usize,              // max neighbors per layer (default 16)
-    pub m_max0: usize,         // max neighbors at base layer (default 32)
-    pub ef_construction: usize, // build beam width (default 200)
-    pub ef_search: usize,      // default search beam width (default 50)
-    pub dim: usize,            // vector dimensionality (required)
-}
-```
+| Field | Default | Meaning and limits |
+| --- | ---: | --- |
+| `dim` | 0 | Set to the vector length before creating the index. Valid dimensions are 1 through `u32::MAX`. |
+| `m` | 16 | Maximum neighbors per node on upper layers. Must be at least 2. |
+| `m_max0` | 32 | Maximum neighbors at the base layer. Must be at least `m`. |
+| `ef_construction` | 200 | Beam width when adding a node. Must be positive. |
+| `ef_search` | 50 | Default query beam width. A search uses at least `k` slots in the beam. |
 
 ### Tuning guide
 
-| Parameter | Higher value | Lower value | Typical range |
-|-----------|-------------|-------------|---------------|
-| `m` | Better recall, slower insert, more disk | Faster insert, lower recall | 8-48 |
-| `ef_construction` | Better graph quality, slower build | Faster build | 100-500 |
-| `ef_search` | Better recall, slower search | Faster search | m .. 10*m |
-| `dim` | — | — | Set to match your embedding model |
+Measure recall against an exact search on representative vectors. A wider
+search beam can improve recall at the cost of more distance evaluations.
+Larger neighbor limits can increase graph size, and a wider construction
+beam increases build work.
 
-Use the defaults as a starting point and measure recall against an exact
-search on representative vectors. Increasing `ef_search` trades query work
-for recall; `m` and `ef_construction` also affect build cost and graph size.
-
-If traversal exhausts a graph component before filling the beam, search
-lazily scans node-info rows and resumes from unvisited live nodes. An
-unfiltered beam at least as large as `len()` visits every vector, including
-disconnected graphs written by earlier versions. This needs no rebuild or
-stored-data rewrite. Smaller beams remain approximate; a restart scan adds
-work only when ordinary graph traversal cannot fill the beam.
+If traversal exhausts a component before filling the beam, search resumes
+from unvisited live nodes. An unfiltered beam at least as large as `len()`
+visits every vector, including in disconnected graphs written by earlier
+versions. Smaller beams can return approximate results.
 
 ## Distance metrics
 
 | Metric | Formula | When to use |
 |--------|---------|-------------|
-| `L2` | `sum((a-b)^2)` | General-purpose, geometric distance |
+| `L2` | `sum((a-b)^2)` | Squared Euclidean distance |
 | `Cosine` | `1 - cos(a,b)` | Angular similarity (a zero vector has distance 1) |
 | `InnerProduct` | `-(a . b)` | Maximum inner product search |
 
-Custom metrics can be implemented via the `DistanceMetric<S>` trait.
+### Type aliases
+
+The crate exports `VecDexL2<K>` and `VecDexCosine<K>` for `f32` vectors.
+`VecDexL2F64<K>` and `VecDexCosineF64<K>` select `f64`. Implement
+`DistanceMetric<S>` to supply a custom metric.
 
 ### Runtime metric selection
 
-When the metric is decided from configuration or user input instead of
-at compile time, use `VecDexDyn<K, S>` with `MetricKind`:
+Use `VecDexDyn<K, S>` with `MetricKind` when the application selects a
+metric at runtime.
 
 ```rust
-use vsdb::vecdex::{VecDexDyn, HnswConfig, distance::MetricKind};
+use vsdb::{HnswConfig, MetricKind, VecDexDyn};
 
 let cfg = HnswConfig { dim: 4, ..Default::default() };
 let mut idx: VecDexDyn<String> = VecDexDyn::new_with_metric(MetricKind::Cosine, cfg).unwrap();
@@ -164,34 +109,35 @@ provide a deterministic serde encoding for their parameters.
 
 ## Filtered search
 
-`search_with_filter` evaluates a predicate on each candidate's key *during*
-the HNSW beam search, not as a post-filter.  Non-matching nodes still
-participate in graph traversal (maintaining connectivity) but are excluded
-from the final result set. This can improve recall over over-fetching and
-post-filtering; recall still depends on the graph, predicate, and search budget.
+`search_with_filter` evaluates the predicate during traversal. Nodes whose
+keys fail the predicate can lead to other nodes. Only matching keys enter
+the result set. Each search uses one snapshot. If a stored row or engine
+read fails, search returns an error. A predicate with side effects may
+already have run on some candidates.
 
 ```rust
-use vsdb::vecdex::{VecDex, HnswConfig, distance::Cosine};
+use vsdb::{Cosine, HnswConfig, VecDex};
 
 let mut idx: VecDex<String, Cosine> =
     VecDex::new(HnswConfig { dim: 4, ..Default::default() }).unwrap();
 idx.insert(&"session-42/doc-a".into(), &[0.1, 0.2, 0.3, 0.4]).unwrap();
 let query = [0.1, 0.2, 0.3, 0.5];
 
-// Find 10 nearest vectors whose key starts with "session-42"
-let results = idx.search_with_filter(&query, 10, |k: &String| {
-    k.starts_with("session-42")
+let results = idx.search_with_filter(&query, 10, |key| {
+    key.starts_with("session-42/")
 }).unwrap();
+assert_eq!(results.len(), 1);
 ```
 
 The search keeps expanding until it holds `max(ef, k)` passing candidates
 and every remaining frontier node is farther than the worst of them, so a
 selective predicate can require visiting more nodes. An exhausted component
 resumes from unvisited live nodes, with restart candidates counting toward
-the same visit cap. A predicate that almost nothing satisfies is bounded by
-`max(64 × max(ef, k), 4096)` evaluated nodes;
-beyond it, results can be incomplete — scan the matching keys directly for
-such filters.
+the same visit cap. The filtered base-layer traversal visits at most
+`max(64 × max(ef, k), 4096)` distinct node IDs. The unfiltered descent
+through upper layers happens first. The search can return fewer than
+`k` matches even if more matching keys exist. Use an exact scan when every
+matching vector must be considered.
 
 For predicates over the stored representation, `search_with_raw_filter` and
 `search_ef_with_raw_filter` receive the bytes produced by `K::encode_key`.
@@ -201,8 +147,8 @@ before its contents and integers use varints. For a string prefix such as
 
 ## Storage architecture
 
-All persistent state lives in **one** `MapxRaw` handle, namespaced by a
-leading tag byte:
+The graph and its configuration occupy one `MapxRaw` prefix. The first byte
+of each local key identifies the row type.
 
 ```text
 VecDex<K, D, S = f32>
@@ -215,7 +161,7 @@ VecDex<K, D, S = f32>
   [0x06]                       -> immutable creation config, scalar and metric
 ```
 
-A VSTYPE04 handle carries a nine-byte extension containing layout version 2
+A `VSTYPE04` handle carries a nine-byte extension containing layout version 2
 and the first eight bytes of Keccak256 of the schema row. Opening the handle
 checks this binding, then decodes the dimension, construction settings, scalar
 type and metric parameters from the stored schema.
@@ -227,23 +173,10 @@ ordinary reads. Traversals capture the graph at one engine sequence number.
 Construction caches at most 32 MiB of decoded vectors per transaction.
 Compaction still stages the full replacement graph in memory.
 
-## Type aliases
-
-```rust
-use vsdb::vecdex::{VecDex, distance::{L2, Cosine}};
-
-// f32 (default)
-pub type VecDexL2<K> = VecDex<K, L2>;
-pub type VecDexCosine<K> = VecDex<K, Cosine>;
-
-// f64
-pub type VecDexL2F64<K> = VecDex<K, L2, f64>;
-pub type VecDexCosineF64<K> = VecDex<K, Cosine, f64>;
-```
-
 ## Thread safety
 
-A `VecDex` is `Send + Sync` when its generic parameters permit it. One writer
-can own the mutable index while other threads clone its `reader()` and acquire
-read views. Multiple writers, including writers restored from the same saved
-handle, require external serialization.
+A `VecDex` is `Send + Sync` when its generic parameters permit it. To keep
+writing while a snapshot is in use, capture the view through an independent
+`reader()`. Serialize writes through all handles to the same index, including
+separately restored handles. Each mutation or batch chunk reloads the committed
+graph state. Cloning a mutable index deep-copies the graph to a fresh prefix.

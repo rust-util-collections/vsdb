@@ -1,58 +1,14 @@
+//! Three-way merge for copy-on-write B+ trees.
 //!
-//! Three-way merge for persistent B+ trees.
+//! A merge replays changes from each base to the source onto the target. If
+//! the source state of a key differs from any base, the result takes the
+//! source value or deletion. All other keys retain their target state. A
+//! present key can have a zero-length value. Deletion makes the key absent.
 //!
-//! # Merge semantics: source wins on conflicts
-//!
-//! Given an **ancestor** (common base), a **source** branch, and a
-//! **target** branch, the merge compares each key across all three
-//! snapshots and applies these rules:
-//!
-//! 1. **Non-conflict (single-sided change):** if only one side differs
-//!    from the ancestor, keep that side's change.
-//! 2. **Conflict (both sides changed the same key differently):**
-//!    **source wins**.
-//!
-//! A deletion is treated as "assigning the empty value ∅".  This means
-//! delete-vs-modify is also a regular conflict, so source-side delete
-//! wins over target-side modify.
-//!
-//! ## Complete decision matrix
-//!
-//! | ancestor | source | target | result          | rationale                     |
-//! |----------|--------|--------|-----------------|-------------------------------|
-//! | A        | A      | A      | A (keep)        | no change on either side      |
-//! | A        | **S**  | A      | **S**           | only source changed           |
-//! | A        | A      | **T**  | **T**           | only target changed           |
-//! | A        | **S**  | **S**  | **S**           | both changed to same value    |
-//! | A        | **S**  | **T**  | **S** ⚠         | conflict → source wins        |
-//! | A        | ∅      | A      | ∅ (delete)      | source deleted, target unchanged → source wins |
-//! | A        | A      | ∅      | ∅ (delete)      | target deleted, source unchanged → target wins (no conflict) |
-//! | A        | ∅      | **T**  | ∅ (delete) ⚠    | conflict → source wins (delete beats modify)  |
-//! | A        | **S**  | ∅      | **S** ⚠         | conflict → source wins (modify beats delete)  |
-//! | A        | ∅      | ∅      | ∅ (delete)      | both deleted                  |
-//! | ∅        | **S**  | ∅      | **S**           | only source added             |
-//! | ∅        | ∅      | **T**  | **T**           | only target added             |
-//! | ∅        | **S**  | **S**  | **S**           | both added same value         |
-//! | ∅        | **S**  | **T**  | **S** ⚠         | conflict → source wins        |
-//!
-//! Rows marked ⚠ are conflict cases (source wins). Non-⚠ rows are
-//! single-sided or non-conflicting updates determined by ancestor
-//! comparison. The caller controls priority by choosing which branch
-//! to pass as `source` vs `target` in
-//! [`VerMap::merge(source, target)`](crate::versioned::map::VerMap::merge).
-//!
-
-//! ## Implementation: replay the source delta onto the target
-//!
-//! Every row of the matrix reduces to one rule: a key whose source state
-//! differs from the ancestor takes the source state (added, modified, or
-//! deleted); every other key keeps the target state. The merge therefore
-//! computes `diff(ancestor → source)` — which skips shared subtrees — and
-//! applies exactly those keys to the target tree by copy-on-write. Replay
-//! work and buffering follow the changed paths. Diff traversal depends on
-//! structural sharing and can scan an entire unshared tree; untouched
-//! subtrees of the target remain shared where the COW paths permit it.
-//!
+//! Diff traversal skips shared subtrees and can scan an entire unshared tree.
+//! Replay copies the changed target paths and shares unaffected subtrees.
+//! [`VerMap::merge`](crate::VerMap::merge) selects the roots and records the
+//! result in branch history.
 
 use super::{
     BTreeDiffIter, EMPTY_ROOT, InsertResult, MAX_KEYS, MIN_KEYS, Node, NodeId,
@@ -64,17 +20,8 @@ use std::iter::Peekable;
 /// A key and its new state (`None` = absent).
 type Change = (Vec<u8>, Option<Vec<u8>>);
 
-/// Performs a three-way merge.
-///
-/// Deletion is treated as "assigning ∅", so all conflicts — including
-/// delete-vs-modify — are resolved uniformly: **source wins**.
-///
-/// See the [module-level documentation](self) for the full decision
-/// matrix.
-///
-/// Like [`PersistentBTree::bulk_load`], a newly built result root is
-/// returned **unowned**: the caller adopts it with
-/// [`PersistentBTree::acquire_node`].
+/// Merges against a single base. A newly built result root is unowned.
+/// Its caller adopts it with [`PersistentBTree::acquire_node`].
 fn three_way_merge(
     tree: &mut PersistentBTree,
     ancestor_root: NodeId,
@@ -103,7 +50,7 @@ fn three_way_merge(
 ///
 /// When multiple lowest common ancestors exist, keys whose base values differ
 /// are treated as criss-cross conflicts; if source and target differ, source
-/// wins.  Keys whose base values agree use the normal decision matrix.
+/// wins.  Keys whose base values agree use the single-base merge rule.
 ///
 /// A key whose bases disagree necessarily differs from at least one base
 /// on the source side, so replaying the union of the per-base source

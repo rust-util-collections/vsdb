@@ -14,11 +14,10 @@ instructions.
 | [vsdb](strata/README.md) | Typed maps and values, persistent B+ trees, VerMap, Merkle tries, SlotDex, DagMap and VecDex |
 | [vsdb_core](core/README.md) | MMDB 6 (format 5) integration, namespace memory, raw maps, prefix batches and co-located publication |
 
-Start at the [documentation index](docs/README.md) for public guides, design
-records and historical measurements. For a code change, the [subsystem
-map](docs/ai/review-core.md#subsystem-map) links each part of the workspace to
-its implementation and review guide. MMDB's bundled Zstd backend requires a C
-toolchain.
+The [documentation index](docs/README.md) links the application guides,
+database operations, storage design and historical measurements. For a code
+change, use the [subsystem map](docs/ai/review-core.md#subsystem-map) to find
+the implementation, tests and review guide.
 
 ## Supported architectures
 
@@ -29,22 +28,31 @@ these architectures. Other targets carry no testing or correctness guarantee.
 
 ## Build & Test
 
+Use the official latest stable Rust for edits, dependency updates, CI and
+releases. Update and select stable before validation. Define no compatible
+compiler range or minimum version. Keep `rust-version`, numeric toolchain
+pins and older-compiler compatibility shims out of the workspace. Building
+MMDB's bundled Zstd backend also requires a C toolchain.
+[Rust toolchain policy](docs/ai/compatibility-policy.md#rust-toolchain)
+
 ```bash
 make all          # fmt + lint + test
-make test         # cargo test --workspace (release + debug + doc tests, parallel)
+make test         # workspace tests in release, then debug, then doctests
 make lint         # cargo clippy --workspace + check tests/benches
 make bench        # criterion benches (core: basic + cache_pool; strata: basic, versioned, slotdex, slotdex_batch, dagmap, trie_bench, vecdex)
 ```
 
-Tests run in parallel. Use globally unique prefixes for collection isolation and race-tolerant assertions about shared state. If tests configure a base directory, do so once per binary with `parking_lot::Once`.
+The agent uses bare Cargo unless the user explicitly asks for a make target.
+For an isolated Cargo test run, set `VSDB_BASE_DIR` in the parent shell to a
+fresh directory created with `mktemp -d /tmp/vsdb-test.XXXXXX`. Remove only
+that directory afterward. The manual and CI targets `make test`, `make all`
+and `make bench` provide their own scratch root for the database and
+temporary files.
 
-`make test` / `make all` / `make bench` are manual/CI convenience targets. They
-keep the database and temporary files in separate directories under one
-per-invocation scratch root and remove only that root; they do not touch `$HOME/.vsdb` or caller-provided data. The agent
-still uses bare Cargo unless you explicitly ask for a make target. For an
-isolated bare-Cargo run, set
-`VSDB_BASE_DIR="$(mktemp -d /tmp/vsdb-test.XXXXXX)"` in the parent shell when
-launching Cargo; do not mutate environment variables inside parallel tests.
+Tests run in parallel. Use globally unique prefixes for collection isolation
+and race-tolerant assertions about shared state. If tests configure a base
+directory, do so once per binary with `parking_lot::Once`. Do not mutate
+environment variables inside parallel tests.
 
 ## Skills
 
@@ -72,11 +80,6 @@ selection with `allow_implicit_invocation: false`.
 
 ## Conventions
 
-- **Rust toolchains** — use the official latest stable Rust for edits,
-  dependency updates, CI and releases. Update/select stable before validation.
-  Define no compatible Rust version range or minimum compiler; do not add
-  `rust-version`, numeric toolchain pins or older-compiler compatibility shims.
-  [compatibility-policy.md](docs/ai/compatibility-policy.md) §Rust toolchain is the rule's source of truth.
 - All clippy warnings are errors (`#![deny(warnings)]` in lib.rs)
 - **No `#[allow(...)]`** — fix warnings at the source, never suppress them
 - **Prefer imports over inline paths** — avoid `std::foo::Bar::new()` inline in function bodies when the same path appears 3+ times in a file; add `use std::foo;` at file top (or `use std::foo::Bar;`) instead. Function-body `use` statements (scoped imports) are fine and don't count as inline paths. 1-2 inline uses of common `std::` items are acceptable.
@@ -86,6 +89,5 @@ selection with `allow_implicit_invocation: false`.
 - Fallible storage APIs use `VsdbError`. Engine errors retain their source and a stable classification. Preserve documented panic behavior on infallible convenience APIs.
 - Use postcard for handle and application serialization.
 - Serialize writes through aliases of one composite index. SlotDex detects stale writer generations. VecDex reads graph state per operation and uses snapshots for graph queries.
-- Tests run in parallel; isolation comes from globally unique prefixes and per-invocation directories for file-level scratch; global-state assertions must be race-tolerant
 - Derive the live unsafe inventory during review. A raw or typed map `shadow()` requires exclusion of concurrent writes to the same key. Structural multi-key edits require the collection's documented writer exclusion. Mutable collection `Clone` performs a deep copy.
 - **No Co-Authored-By in commits** — never add `Co-Authored-By:` or similar trailers to commit messages; project commits are authored only by the human contributor

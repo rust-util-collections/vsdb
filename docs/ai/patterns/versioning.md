@@ -1,19 +1,27 @@
 # Versioning Review Patterns
 
-[Version store](../../../strata/src/versioned) · [B+ tree](btree.md)
-
-**Arch:** `#![forbid(unsafe_code)]`; Git-model branches→commits DAG; commits immutable; source-wins 3-way
-merge replays sorted source deltas onto target via range-grouped `apply_leaf_run`. Single `MapxRaw` prefix (`0x00` `Header`, `0x01` `HEAD`, `0x02` `NAME`, `0x03` `BY_NAME`, `0x04` `COMMIT`, `0x05` `RETIRED`, `0x06` `STAGE`, `0x07` `REFS`, `0x10` pages, `0x12` blobs). Owned `'static` snapshots pin immutable roots via `TreeRuntime`.
+[VerMap storage layout](../../../strata/docs/versioned.md#storage-layout) · [Version store](../../../strata/src/versioned) · [B+ tree](btree.md)
 
 ## Invariants
 
-**V1 Ref balance** — `ref = branch_ptrs + child_commits_naming_as_parent`.
+**V1 Commit references** — Count branches pointing to the commit and child
+commits naming it as a parent. A new commit moves its branch reference off
+the previous head and adds a parent reference to that head. Branch deletion
+and rollback release the old head. Cascade to parents when the count reaches
+zero after decrement. Compare counts with a full recount.
 
 **V2 Acyclic** — parents earlier existing commits.
 
-**V3 Source-wins** — both modified since **every merge base** (all LCAs) → source value; bases disagree on a key → source.
+**V3 Merge bases** — Apply the union of source changes relative to all lowest
+common ancestors. A source value or deletion that differs from **any** base
+wins for that key. If it matches every base, keep the target state. Equal
+heads return the existing commit. Only a target without a head adopts the
+source head directly. Other successful merges create a two-parent commit.
+[Merge algorithm](../../../strata/docs/versioned.md#three-way-merge-algorithm)
 
-**V4 Rollback** — only this branch’s ref contributions; other branches untouched. Inc target **before** dec old HEAD.
+**V4 Rollback** — Require a clean branch even when the requested target is
+its current head. Acquire the target before releasing the old head. Preserve
+every other branch's references.
 
 **V5 Publication & staging** — history changes and `bulk_load` publish metadata and remaining pages with `commit_sync()`. Shared runtimes record `[0x05]` retirements in that publication; a changed working root (`insert`, `remove`, `write_batch`, `edit_working`, `discard`) is published with an unsynced batch. An unchanged root can skip publication. Large `bulk_load` and `merge` builds flush pending data at 16 MiB and anchor unpublished roots at `[0x06]` `STAGE`; if a build errors or unwinds after `flush_stage`, cleanup must remove/defer those `[0x06]` anchors and private chunks so they do not leak or poison `[0x07]` `REFS` checkpoints (`has_anchors`).
 
@@ -45,29 +53,14 @@ Drop the private lease before publishing a changed root. Check that a real
 external snapshot can still read the previous values after publication.
 [Working-edit tests](../../../strata/src/versioned/test.rs) · [Leased page checks](btree.md) · [Write-submission measurements](../../evaluations/v18-publication/README.md)
 
-## Bugs
+## Publication and repair checks
 
-**Ref leak** — delete branch without dec. Check zero **after** dec.
-**Merge drop** — keyed on source only keeps base; conflict resolved to base/target instead of source (`persistent_btree/merge.rs`).
-**Result ownership** — `tree.merge` returns an **unowned** fresh root (or an existing one); the caller acquires it for every reference (commit root + dirty root) **before**
-publishing either row, so a reader lease cannot drop an otherwise unowned result.
-**Live GC** — zero refs while still parent-linked.
-**Rollback/merge guard asymmetry** — uncommitted changes must reject on **all** arms (`target==head` and strict-ancestor), like merge.
-
-## Checklist
-
-- [ ] Inc: branch create, rollback/FF target, merge source parent; `commit()` old HEAD is net 0 by design
-- [ ] Dec: branch delete, rollback old HEAD; zero cascades to parents; gc recounts, never decs
-- [ ] Merge diffs from every merge base
-- [ ] Source-wins on conflicts
-- [ ] Rollback multi-path uncommitted guard
-- [ ] Atomic publication and idempotent GC
-- [ ] Incomplete reachable history fails before destructive repair, even when clean
-- [ ] Publication/reclamation fences include construction, deep clone and restore
-- [ ] Publication and retired-root markers share the node prefix
-- [ ] No post-create commit mutate except `ref_count`
-- [ ] Restoring a typed frame preserves instance identity (V8)
-- [ ] Merge, rollback and historical lookups return the documented branch or commit errors. Writable `gc()` propagates verification errors from the reachable graph.
-- [ ] Merge shapes: same head → no-op; FF only into empty target; target-ancestor → 2-parent commit
-- [ ] Snapshot and iterator roots survive alias writes/GC/restore; final drop releases once
-- [ ] Recount preserves all live pins; clone owns only its copied persistent graph
+- A merge can reuse a root or return a newly allocated, unowned root. Trace
+  the acquisitions for both the commit and working-root references through
+  publication, including when a reader drops its lease.
+- Check durability and reclamation during construction, deep clone and
+  restore. Retired markers and the roots they retire use the same prefix.
+- Exercise a missing ancestor on an otherwise clean branch. Merge, rollback
+  and historical lookups must surface the read or commit error. Writable
+  verification must fail before sweeping an incomplete reachable graph.
+  Repeating a successful collection must preserve the same live graph.

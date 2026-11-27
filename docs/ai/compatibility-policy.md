@@ -39,7 +39,7 @@ persisted-format breaks or automatic major bumps.
 Check the physical engine format and the logical VSDB format independently.
 VSDB v19 opens v18 universes in MMDB format 5. Verify namespace placement, saved
 handles, collection contents and writable reopen across the upgrade.
-[Upgrade an existing universe](../README.md#upgrade-an-existing-universe)
+[Upgrade an existing universe](../upgrade.md)
 
 ## Typed-handle tags and wire decoders
 

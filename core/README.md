@@ -11,7 +11,7 @@ collections, indexes, tries and version history, see the [vsdb crate](../strata/
 
 ## Installation
 
-From an application using a local checkout:
+To use this checkout from a Rust application, add the crate by path.
 
 ```bash
 cargo add vsdb_core --path /path/to/vsdb/core
@@ -22,24 +22,21 @@ compression library requires a C toolchain.
 
 ## Storage model
 
-One process selects one **universe** (base directory and open mode). Its default
-namespace uses 16 shards. Each additional namespace has its own root, MMDB
-shards, WALs and memory sizing. The universe owns the namespace registry
-and allocates collection prefixes across all its namespaces.
-
-A namespace uses MMDB 6 (format 5) with seven levels and an eight-byte prefix.
-Each raw map stores byte keys and values under one prefix on one shard.
-A native shard fence makes earlier WAL-backed writes durable. Checked
-co-located inserts can publish rows under two map prefixes in one batch.
-`Namespace::memory_usage()` reports its shared pool and individual shards.
-`InstanceId` identifies the map within the universe. Persist it with
-`save_meta` and use `from_meta` to reopen the same rows.
+One process selects one **universe** (base directory and open mode).
+Its registry tracks additional namespaces, each with its own storage root.
+Each raw map has an eight-byte prefix and stores all of its rows on one
+MMDB shard in its namespace. The shard is the unit of atomic write
+publication and WAL synchronization. [Storage architecture](../docs/architecture.md)
 
 ## Guides
 
-- [Raw map examples](docs/api.md) cover configuration, handle restoration, batch writes and snapshot reads. See [namespace administration](../docs/namespaces.md) for placement and relocation.
-- [Read-only mode](../docs/read-only.md) covers immutable snapshots, process locking and recovery.
-- [Upgrade an existing universe](../docs/README.md#upgrade-an-existing-universe) covers reopening native v18 data.
+| Task | Guide |
+| --- | --- |
+| Configure the universe, save a raw map or restore its `InstanceId` | [Core API examples](docs/api.md) |
+| Write an atomic batch or query a captured state | [Batch and reader examples](docs/api.md#atomic-batches-and-durability) · [Visibility and durability](../docs/storage.md) |
+| Create, close or relocate a namespace | [Namespace administration](../docs/namespaces.md) |
+| Set a memory budget or inspect cache and shard usage | [Sizing and telemetry](../docs/storage.md#memory-sizing) |
+| Open an existing database | [Read-only deployment](../docs/read-only.md) · [Upgrade paths](../docs/upgrade.md) |
 
 ## License
 

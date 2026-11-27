@@ -1,9 +1,10 @@
 # Open a VSDB universe read-only
 
-Use `VsdbOptions::read_only(path)` to query an existing VSDB universe.
-The setting applies to every namespace opened by the process. Configure it
-once, before opening a collection or requesting a VSDB directory.
-`vsdb_configure` leaves the process environment intact.
+Use `VsdbOptions::read_only(path)` to query an existing universe after the
+writer exits, or from a consistent immutable filesystem snapshot. The open
+mode applies to every namespace in the reader process. To read alongside a
+writer **in the same process**, use a reader handle and a captured view.
+[Captured reads](storage.md#captured-reads)
 
 ## Save the handle in the writer
 
@@ -30,10 +31,11 @@ fn main() -> vsdb::Result<()> {
 
 ## Restore the handle in the reader
 
-After the writer exits, start a separate reader process, or give the reader a
-consistent immutable filesystem snapshot. Include the base directory and each
-explicitly placed namespace used by the application. Registered absolute
-paths must resolve to the snapshot data in the reader's filesystem.
+Start a separate reader process. Configure its base and open mode before
+opening a collection or requesting a VSDB directory. For a filesystem
+snapshot, include the base and its registered explicit namespace roots.
+Registered absolute paths must resolve to the snapshot data in the reader's
+filesystem. Pass the token printed by the writer as the first argument.
 
 ```rust,no_run
 use vsdb::{
@@ -60,8 +62,7 @@ A raw-map application uses `vsdb_core::{MapxRaw, VsdbOptions, vsdb_configure}`
 with the same writer and reader configuration. Save a raw map with
 `map.save_meta()?` and restore its token with `MapxRaw::from_meta(id)?`.
 Both `from_meta` and serde handle deserialization open the owning namespace.
-For reads alongside a live writer in one process, use a reader handle in
-read-write mode. [Raw map examples](../core/docs/api.md#mapxraw) · [Captured reads](storage.md#captured-reads)
+[Raw map examples](../core/docs/api.md#mapxraw)
 
 ## Operation behavior
 
@@ -81,14 +82,18 @@ dispatching requests to infallible mutation APIs.
 
 VSDB takes a shared, non-blocking lock on an existing `__SYSTEM__/LOCK`
 for the process lifetime. Several readers can hold it together. A writer
-requires exclusive access, including for namespace administration. A reader
-that initially finds no lock file checks again after reading the header.
-If a writer holds the new lock, the reader gets `Io(WouldBlock)` even before
-the writer publishes the header. If the reader acquires the new lock, it rereads
-the header under that lock. On Unix,
+requires exclusive access, including for namespace administration. On Unix,
 MMDB also takes a shared lock on each existing shard `LOCK` as it opens
 that shard. An immutable copy may omit lock files. Keep such a copy
 byte-stable until all readers exit.
+
+A reader that initially finds no universe lock file checks again after
+attempting to read the header.
+If a writer holds the new lock, the reader gets `Io(WouldBlock)` even before
+the writer publishes the header. If the reader acquires the new lock, it
+rereads the header under that lock.
+
+## Open checks and recovery
 
 Read-only engine open checks the universe and engine identities, shard-ready
 marker and per-shard layout. A completed dataset may retain a stale
@@ -105,7 +110,6 @@ required record's path. A matching initializer can allow writable
 initialization to resume. Once the ready marker is durable and its engine
 layout is valid, the initializer is optional.
 
-VSDB preflights every existing anchored shard's v5 header for seven levels
-and an eight-byte prefix. VerMap can validate its reference graph in memory
+Both open modes check the shard layout. VerMap can validate its reference graph in memory
 with `verify_and_gc()`. Restoring a branch-name index that needs writable
-repair returns `VsdbError::Corrupt`.
+repair returns `VsdbError::Corrupt`. [Initialization and format checks](namespaces.md#initialization-and-format-checks) · [VerMap recovery](../strata/docs/versioned.md#durability-and-recovery)

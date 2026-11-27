@@ -1,32 +1,22 @@
 # Namespace placement and lifecycle
 
-A VSDB process selects one universe. Its registry and prefix allocator
-are shared across all namespaces. Each namespace has its own root directory,
-MMDB engine, WALs, workers and memory sizing. Placing a collection with
-`new_in(&ns)` selects the engine. Its prefix selects one shard within that
-engine by `prefix % shard_count`. VerMap, VecDex and SlotDex publish each
-mutation chunk under a single prefix. DagMap co-locates parent and child
-prefixes on one shard for atomic child creation. [Sharded storage operations](storage.md) · [Namespace implementation](../core/src/common/namespace.rs)
+Use a namespace to place collections on a particular volume or give them a
+separate memory budget. Each namespace belongs to one universe and owns
+its root directory, MMDB shards, WALs and workers. The universe allocates
+map prefixes across all namespaces. [Storage architecture](architecture.md)
 
 ## Create, capture and restore
 
-`Namespace::create()` creates an anonymous namespace with a derived path.
-`create_with(NamespaceOpts { path, shards, mem_budget_mb })` accepts an
-explicit absolute root, shard count and budget. A namespace ID is a
-universe-wide, monotonically allocated `u64`. The default namespace has
-ID zero and 16 shards. Named namespaces default to four shards. Creation
-clamps the chosen shard count to 1–64 and persists it for subsequent opens.
+The default namespace has ID zero and 16 shards. `Namespace::create()`
+allocates a new numeric ID and creates a four-shard namespace under the
+base directory. Use `create_with` to choose an absolute root, shard count
+or memory budget. Creation clamps the requested shard count to 1–64 and
+persists it for subsequent opens.
 
-`ns.scope(|| ...)` changes the ambient namespace for new handles on the
-current thread. Scopes nest and restore the previous scope on unwind.
-Explicit placement selects the namespace for a new root. A DagMap child
-always inherits its parent's namespace and shard. Reads, writes and
-restores use the namespace recorded in the handle.
-
-In-memory `MptCalc` and `SmtCalc` can be used without a namespace.
-`VerMapWithProof` inherits placement from its wrapped map. To place a
-persistent collection on an explicit volume, create the namespace there
-and use its handle when constructing the collection.
+`new_in(&ns)` places a new collection in the supplied namespace.
+`ns.scope(|| ...)` selects it for new handles on the current thread for the
+duration of the closure. Scopes nest and restore the previous scope on
+unwind. Reads, writes and restores use the namespace recorded in the handle.
 
 ```rust,no_run
 use vsdb::{Mapx, Namespace, NamespaceOpts};
@@ -36,7 +26,7 @@ let archive = Namespace::create_with(NamespaceOpts {
     shards: 8,
     mem_budget_mb: Some(1024),
 }).unwrap();
-let map = archive.scope(Mapx::<u64, String>::new);
+let map = Mapx::<u64, String>::new_in(&archive);
 let id = map.save_meta().unwrap();
 drop(map);
 let restored = Mapx::<u64, String>::from_meta(id).unwrap();
@@ -49,9 +39,13 @@ namespace 7, while `42@0` canonicalizes to the default-namespace token.
 A raw `VSMAPX02` handle stores the prefix and namespace in 24 bytes.
 Typed handles use `VSTYPE04` and check the fully qualified Rust type name,
 including generic arguments. A type alias preserves the original type's
-identity. Moving or renaming the persisted type needs a migration.
-Applications version their own value schemas.
+identity. A changed type name can change the tag even if the value encodes
+to the same bytes. Applications version their own value schemas.
 [Type frames](../strata/src/common/frame.rs)
+
+DagMap children inherit the parent's namespace and shard. `VerMapWithProof`
+uses the namespace of its wrapped map. Standalone `MptCalc` and `SmtCalc`
+hold their nodes in memory.
 
 ### Place raw maps on the same shard
 
@@ -80,6 +74,7 @@ assert_eq!(copy.namespace().id(), target.id());
 <base>/
   __SYSTEM__/
     LOCK                        universe lock
+    format_version              VSDB format marker (ASCII 18)
     universe_header             VSUNI018, format version and universe ID
     __namespaces__              VSNREG02, next ID and registry records
     __prefix_ceiling__          exclusive prefix reservation ceiling
@@ -89,7 +84,9 @@ assert_eq!(copy.namespace().id(), target.id());
   mmdb/shard_00/ ...            default shards, created on first use
   __NAMESPACES__/<hex id>/      derived namespace root
     __SYSTEM__/engine_header    universe ID, namespace ID and shard count
+    __SYSTEM__/format_version   VSDB format marker (ASCII 18)
     __SYSTEM__/.shards_ready    ready marker
+    __SYSTEM__/__instance_meta__/  saved handles for this namespace
     mmdb/shard_00/ ...          namespace shards
 ```
 
@@ -98,7 +95,10 @@ empty at creation. Its resolved path must be disjoint from the base and
 every other registered root. The registry persists the ID, optional path
 and budget, shard count, creation time and pending or established state.
 Back up the base, all explicit roots, and application-owned files from
-the same quiesced generation.
+the same quiesced generation. Copying the base preserves the registered
+absolute paths to explicit roots. [Upgrade an existing universe](upgrade.md)
+
+### Initialization and format checks
 
 Configure the base and open mode before using directory, database or
 namespace APIs. Writable processes take an exclusive universe lock. Each
@@ -112,9 +112,16 @@ If creation rolls back after populating an explicit root, VSDB retains its
 ownership record until cleanup is durable. After a filesystem error clears,
 retry `Namespace::create_with` at the same path to finish cleanup and create
 the namespace.
-An established root must contain its registered shards. Both open modes
-check the anchored v5 MANIFEST geometry before opening the shards.
+An established root must contain its registered shards. Writable open
+creates a missing `format_version` marker. Read-only open leaves it untouched.
+Either mode rejects a conflicting marker as `VsdbError::Corrupt`. Before
+opening shards, VSDB checks each existing anchored shard's `CURRENT` and
+format 5 MANIFEST header for seven levels and an eight-byte prefix. MMDB
+checks the remaining manifest records, WALs and table files as it opens
+each shard.
 [Universe and engine validation](../core/src/common/universe.rs) · [Read-only operation](read-only.md)
+
+### Prefix recovery
 
 Prefixes are unique across the universe. The allocator persists the
 exclusive ceiling before issuing a new window of 8,192 IDs to a thread.
@@ -126,7 +133,7 @@ metadata and regular files under `__CUSTOM__` for issued IDs.
 ## Close, reopen, relocate and destroy
 
 `Namespace::list()` lists registered non-default namespaces. The open
-namespace table retains one strong reference to a named engine.
+namespace table retains one strong reference to each open non-default engine.
 Namespace clones, collection handles, independent readers and owned VerMap
 snapshots can keep it open. Ordinary iterators borrow their source handle.
 A detached MMDB range retains its captured data sources independently and
@@ -136,28 +143,11 @@ the process lifetime once initialized. [Close implementation](../core/src/common
 
 | Operation | Effect |
 | --- | --- |
-| `Namespace::close_by_id(id)` | Refuses while clients retain the named engine. On success closes its shards and leaves the registry entry available to reopen. |
+| `Namespace::close_by_id(id)` | Refuses while clients retain the engine. On success closes its shards and leaves the registry entry available to reopen. |
 | `ns.close()` | Consumes the caller's handle. A refusal returns `Err((Some(ns), error))` and preserves that handle. A teardown error returns `Err((None, error))` after taking the engine out of the open table. |
 | `Namespace::open(id)` | Reuses the cached engine if open, or verifies the registered root and opens its shards. |
 | `Namespace::relocate(id, path)` | Updates the closed namespace's registration after the caller moves its files. The destination must match its recorded identity, shard count and complete data set. |
-| `Namespace::destroy(id)` | Requires a closed, non-default namespace. Registry removal is made durable before recursive directory removal. The operation checks ownership, empties the directory and synchronizes it through the same handle. A root that cannot itself be removed, such as an adopted mount point, is emptied and kept. A later I/O error can leave an unregistered directory for the caller to clean up. |
-
-Destroy synchronizes the parent after removing a registered name. If the
-root was already absent, it synchronizes the nearest surviving parent before
-unregistering the namespace. A symlink at the registered path must resolve
-to a verified namespace directory; a dangling symlink is refused. For final
-removal it moves the name into a
-private sibling directory and checks the identity there. If a replacement
-was moved, destroy restores it without overwriting an occupied name. If
-restoration fails, the error gives the path to the retained entry under
-`.vsdb-destroy-*/entry`. A process interruption can also leave an entry
-at that location.
-
-Close proves exclusivity under the registry and open-table locks. It
-releases the table lock before I/O and holds the registry lock through
-teardown to serialize reopen against close. In writable mode it attempts
-all shard closes and returns the first error. Read-only teardown releases
-resources without flushing.
+| `Namespace::destroy(id)` | Requires a closed, non-default namespace. Verifies ownership, durably removes the registry entry, then removes the contents. An adopted mount point that cannot be removed is emptied and kept. A later I/O error can leave an unregistered directory. |
 
 ```rust
 use vsdb_core::Namespace;
@@ -173,3 +163,25 @@ match ns.close() {
     Err((None, error)) => eprintln!("namespace closed with a teardown error: {error}"),
 }
 ```
+
+Close checks for other owners under the registry and open-table locks. It
+releases the table lock before I/O and holds the registry lock through
+teardown so an opener waits for close to finish. Writable close attempts all
+shard closes and returns the first error. Read-only close releases resources
+without flushing.
+
+### Destruction and interrupted cleanup
+
+Destroy empties and synchronizes the directory through the same handle it
+used to verify ownership. After removing the registered name, it synchronizes
+the parent. If the root was already absent, destroy tries to synchronize
+the nearest surviving ancestor before unregistering the namespace. An
+inaccessible ancestor or one that cannot be synchronized on a read-only
+filesystem can still permit registry removal. A symlink at the registered
+path must resolve to a verified namespace directory.
+
+For final removal, destroy moves the name into a private sibling directory
+and checks its identity there. If a replacement was moved, destroy restores
+it without overwriting an occupied name. If restoration fails, the error
+identifies the retained entry under `.vsdb-destroy-*/entry`. An interruption
+can also leave an entry there. [Destruction implementation](../core/src/common/namespace/destroy.rs)

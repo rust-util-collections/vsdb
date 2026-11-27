@@ -42,8 +42,10 @@ Skip documented SWMR single-writer paths unless multi-writer convoy is shown.
 
 ## D-STATE
 
-- **1** Multi-step durable transition not atomic (VerMap `[0x05]` `RETIRED` / `[0x06]` `STAGE` anchors; staged
-  batch; DagMap fold-before-`Clearing` & `[0x01]` discovery-edge order; `VSUNI018`/`VSENG018` headers).
+- **1** A reader or recovery process can observe only part of a durable
+  transition. Trace VerMap's staged and retired roots, DagMap's atomic fold
+  and clearing markers, or universe and engine initialization.
+  [DagMap recovery order](patterns/dagmap.md#node-ownership-and-recovery)
 - **2** Dual write without single owner (parent slot vs registry; key↔node maps).
 - **3** Illegal DAG/ref-count/COW transition (cycle, premature free, in-place mutate).
 - **4** TOCTOU outside serializing lock (namespace open, prefix alloc).

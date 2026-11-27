@@ -1,4 +1,8 @@
-# vsdb_core API Examples
+# Raw maps and process configuration
+
+`vsdb_core::MapxRaw` stores byte keys and byte values. Choose a database
+directory once per process, then create maps or restore saved handles in
+that universe.
 
 ## Configure the universe
 
@@ -17,27 +21,15 @@ let mut child = std::process::Command::new("my-worker");
 child.env("VSDB_BASE_DIR", dir);
 ```
 
-The default writable path comes from `VSDB_BASE_DIR`, then `$HOME/.vsdb`.
+Without explicit configuration the process opens for writing. The base path
+comes from `VSDB_BASE_DIR`, then `$HOME/.vsdb`.
 If neither variable is available, VSDB falls back to a per-process temporary
 path. For an existing read-only dataset, use
 `VsdbOptions::read_only(path)`. See the [read-only deployment guide](../../docs/read-only.md).
 
-The universe and its placed engines retain the v18 identities `VSUNI018`
-and `VSENG018`. Both roots use the ASCII value `18` in
-`__SYSTEM__/format_version`. A writable open creates a missing marker,
-including on an early v18 root. A read-only open leaves it untouched.
-A conflicting value returns `VsdbError::Corrupt`.
-[Universe and engine identity](../../docs/namespaces.md)
-
-A namespace verifies each existing shard's `CURRENT` and v5 MANIFEST
-header before it opens any of its shards for writable recovery. Seven
-levels and an eight-byte prefix are required on read-only and writable
-opens. MMDB checks the remaining manifest records, WALs and table files
-as it opens each shard.
-
-For named engines, see [namespace placement and lifecycle](../../docs/namespaces.md).
-For configuration, sizing formulas and per-shard telemetry, see
-[memory sizing](../../docs/storage.md#memory-sizing).
+Use `VsdbOptions::with_mem_budget_mb` on the options for the default
+namespace. Additional namespaces take their own path, shard count and
+budget at creation. [Memory sizing](../../docs/storage.md#memory-sizing) · [Namespace placement](../../docs/namespaces.md#create-capture-and-restore)
 
 ## MapxRaw
 
@@ -60,10 +52,10 @@ let restored = MapxRaw::from_meta(id).unwrap();
 assert_eq!(restored.get(b"key2").as_deref(), Some(&b"value2"[..]));
 ```
 
-Keep the `InstanceId` in application storage for the next process. The
-token selects the namespace and the metadata file. Both `from_meta` and
-serde deserialization restore access to the original rows. Coordinate writes
-through multiple restored handles to exclude simultaneous writes to the same key.
+Keep the `InstanceId` in application storage for the next process. In the
+same universe, it selects the namespace and saved metadata file.
+Deserializing a previously serialized raw handle also reopens the original
+rows. Across restored handles, exclude simultaneous writes to the same key.
 
 A new raw map reserves its prefix on first use. `try_instance_id()` returns
 that identity and reports allocator I/O errors. `save_meta()` also propagates
@@ -87,10 +79,11 @@ batch.commit_sync().unwrap();
 assert_eq!(map.get(b"status").as_deref(), Some(&b"ready"[..]));
 ```
 
-To handle admission pressure, match
-`VsdbError::Storage { kind: StorageErrorKind::Busy, .. }` and rebuild the
-refused batch. The storage guide describes which errors can leave an
-ambiguous recovery outcome and how to fence earlier writes.
+To let the caller retry when the shard would stall on admission, finish the
+batch with `commit_no_slowdown()` or `commit_sync_no_slowdown()`.
+`VsdbError::Storage { kind: StorageErrorKind::Busy, .. }` means this batch
+was refused before WAL append. Rebuild it to retry. An I/O failure after
+WAL append starts can leave a recoverable batch.
 [Batch visibility and durability](../../docs/storage.md#batch-visibility-and-durability)
 
 ## Immutable iteration alongside writes
@@ -99,20 +92,6 @@ Use `MapxRaw::read_view()` for several queries against one committed state of
 a map. It supports `get`, `contains_key`, `iter` and `range`. A fatal engine
 error panics. Each independently captured view may see a different state.
 Release views and iterators when done so compaction can reclaim old versions.
-
-Use `try_get_with(key, decode)` on a map, reader or captured view to decode
-from borrowed bytes while MMDB holds the backing allocation. The decoder
-runs for a stored empty value and is skipped for a missing or deleted key.
-A view's `try_visit_many(keys, visit)` resolves up to 32 keys at the same
-snapshot, then visits every input slot in order, including duplicates and
-misses. All returned backing allocations stay pinned until visiting ends,
-including early return on a visitor error. The limit of 32 counts keys;
-different SST blocks or memtable arenas can keep substantially more memory
-alive than the requested value bytes. A storage failure precedes the first
-callback. A first read of a fresh raw map can reserve its identity and
-return a prefix-allocation error. `try_range` and its cursor's `try_step_next` and
-`try_step_prev` expose typed storage errors at open or during iteration.
-Each step lends the raw key suffix and value until the next cursor operation.
 
 To continue writing while a view is alive, capture it through a reader.
 
@@ -139,6 +118,8 @@ change that view. Separate queries can see different states. The `shadow`
 contract permits these reads while retaining its exclusion of competing
 writers to the same key. Mutable iteration counts as a write.
 
+### Detached ranges
+
 Use `range_detached` on a raw map or its view to keep iterating after the
 borrow ends. The iterator can retain its source files and memory even after
 the owning namespace closes.
@@ -151,3 +132,18 @@ let mut view = map.range_detached(..);
 map.insert(b"key", b"after");
 assert_eq!(view.next().unwrap().1, b"before");
 ```
+
+### Borrowed values and fallible cursors
+
+- `try_get_with(key, decode)` on a map, reader or captured view lends the
+  value bytes to the decoder. The decoder runs for a stored empty value. A
+  missing or deleted key returns `Ok(None)` and skips the callback. The
+  first read of a fresh raw map can return a prefix-allocation error.
+- A view's `try_visit_many(keys, visit)` resolves up to 32 input slots at
+  one sequence before the first callback. It then visits them in input
+  order, including duplicates and misses, until completion or a visitor
+  error. Values can pin whole SST blocks or memtable arenas throughout
+  the visit. A storage error during resolution precedes all callbacks.
+- `try_range` reports errors opening a cursor. Its `try_step_next` and
+  `try_step_prev` methods report errors encountered during iteration. Each
+  successful step lends a key suffix and value until the next cursor operation.
